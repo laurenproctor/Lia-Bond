@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Lia">
+  <rect width="32" height="32" rx="7" fill="#0b1830" />
+  <text
+    x="15"
+    y="22.5"
+    font-family="Inter, ui-sans-serif, system-ui, sans-serif"
+    font-size="17"
+    font-weight="700"
+    letter-spacing="-0.6"
+    fill="#ffffff"
+    text-anchor="middle"
+  >Lia</text>
+  <path d="M25.5 5 26.4 8.1 29.5 9 26.4 9.9 25.5 13 24.6 9.9 21.5 9l3.1-.9z" fill="#8b79f8" />
+</svg>

@@ -1,0 +1,22 @@
+{
+  "product": "Lia",
+  "packageType": "Claude Code starter",
+  "screens": 13,
+  "primaryEntity": "Mention",
+  "workflow": ["Detect", "Understand", "Decide", "Respond", "Escalate", "Learn"],
+  "routes": [
+    "/overview",
+    "/mentions",
+    "/reviews/google/[id]",
+    "/reddit/[id]",
+    "/media/[id]",
+    "/responses",
+    "/escalations",
+    "/insights",
+    "/locations",
+    "/rules",
+    "/integrations",
+    "/brand-voice",
+    "/settings"
+  ]
+}

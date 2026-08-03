@@ -1,0 +1,91 @@
+import { z } from "zod";
+import {
+  membershipRoleSchema,
+  membershipStatusSchema,
+} from "@/domain/enums";
+import {
+  languageTagSchema,
+  organizationOwnedSchema,
+  slugSchema,
+  timestampsSchema,
+  timezoneSchema,
+  uuidSchema,
+} from "@/domain/primitives";
+
+/* -------------------------------------------------------------------------- */
+/* Organization                                                                */
+/* -------------------------------------------------------------------------- */
+
+export const organizationSchema = z
+  .object({
+    id: uuidSchema,
+    name: z.string().min(1).max(160),
+    /** Globally unique. Stable once issued — it appears in shared links. */
+    slug: slugSchema,
+    industry: z.string().min(1).max(120),
+    websiteUrl: z.url().nullable(),
+    defaultTimezone: timezoneSchema,
+    defaultLanguage: languageTagSchema,
+  })
+  .extend(timestampsSchema.shape);
+
+export type Organization = z.infer<typeof organizationSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* User                                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Application-side view of a person.
+ *
+ * `id` matches the auth provider's user id (`auth.users.id` under Supabase), so
+ * a user row is a profile rather than a credential store. Nothing secret lives
+ * here.
+ */
+export const userSchema = z
+  .object({
+    id: uuidSchema,
+    email: z.email(),
+    fullName: z.string().min(1).max(160),
+    avatarUrl: z.url().nullable(),
+  })
+  .extend(timestampsSchema.shape);
+
+export type User = z.infer<typeof userSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Membership                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Join between a user and an organization, carrying the role.
+ *
+ * A user may hold memberships in several organizations; `(organizationId,
+ * userId)` is unique, so they hold exactly one role in each.
+ */
+export const membershipSchema = z
+  .object({
+    userId: uuidSchema,
+    role: membershipRoleSchema,
+    status: membershipStatusSchema,
+  })
+  .extend(organizationOwnedSchema.shape)
+  .extend(timestampsSchema.shape);
+
+export type Membership = z.infer<typeof membershipSchema>;
+
+/** A membership joined to its user, for member lists and assignee pickers. */
+export const membershipWithUserSchema = membershipSchema.extend({
+  user: userSchema,
+});
+
+export type MembershipWithUser = z.infer<typeof membershipWithUserSchema>;
+
+/** An organization joined to the caller's own role in it. */
+export const organizationMembershipSchema = z.object({
+  organization: organizationSchema,
+  role: membershipRoleSchema,
+  status: membershipStatusSchema,
+});
+
+export type OrganizationMembership = z.infer<typeof organizationMembershipSchema>;

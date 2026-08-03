@@ -1,0 +1,462 @@
+import {
+  approvalSchema,
+  auditEventSchema,
+  automationRuleSchema,
+  escalationSchema,
+  locationSchema,
+  membershipSchema,
+  mentionAnalysisSchema,
+  mentionSchema,
+  oauthStateSchema,
+  organizationSchema,
+  platformConnectionSchema,
+  platformProfileSchema,
+  platformSyncRunSchema,
+  responseDraftSchema,
+  userSchema,
+  type Approval,
+  type AuditEvent,
+  type AutomationRule,
+  type Escalation,
+  type Location,
+  type Membership,
+  type Mention,
+  type MentionAnalysis,
+  type OAuthState,
+  type Organization,
+  type PlatformConnection,
+  type PlatformProfile,
+  type PlatformSyncRun,
+  type ResponseDraft,
+  type User,
+} from "@/domain";
+import { DataError } from "@/lib/data/errors";
+
+/**
+ * Row mapping between PostgreSQL and the domain.
+ *
+ * Two jobs. First, snake_case to camelCase. Second — and the reason this is not
+ * a one-line rename helper — every row is re-validated against its domain
+ * schema on the way in. A column that drifts from the migration, a null that
+ * should not be, a numeric that arrives as a string: all of it surfaces here
+ * with a clear message instead of as a strange render three layers up.
+ */
+
+type Row = Record<string, unknown>;
+
+function parseOrThrow<T>(
+  schema: { safeParse: (value: unknown) => { success: boolean; data?: T; error?: unknown } },
+  value: unknown,
+  table: string,
+): T {
+  const result = schema.safeParse(value);
+  if (!result.success || result.data === undefined) {
+    throw new DataError(
+      "unavailable",
+      `A ${table} row from the database did not match the expected shape.`,
+    );
+  }
+  return result.data;
+}
+
+/** Postgres `numeric` arrives as a string over PostgREST. */
+function num(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function iso(value: unknown): string {
+  return new Date(String(value)).toISOString();
+}
+
+function isoOrNull(value: unknown): string | null {
+  return value === null || value === undefined ? null : iso(value);
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+export function toOrganization(row: Row): Organization {
+  return parseOrThrow(
+    organizationSchema,
+    {
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      industry: row.industry,
+      websiteUrl: row.website_url ?? null,
+      defaultTimezone: row.default_timezone,
+      defaultLanguage: row.default_language,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "organization",
+  );
+}
+
+export function toUser(row: Row): User {
+  return parseOrThrow(
+    userSchema,
+    {
+      id: row.id,
+      email: row.email,
+      fullName: row.full_name,
+      avatarUrl: row.avatar_url ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "user",
+  );
+}
+
+export function toMembership(row: Row): Membership {
+  return parseOrThrow(
+    membershipSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      role: row.role,
+      status: row.status,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "membership",
+  );
+}
+
+export function toLocation(row: Row): Location {
+  return parseOrThrow(
+    locationSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      name: row.name,
+      slug: row.slug,
+      addressLine1: row.address_line1,
+      addressLine2: row.address_line2 ?? null,
+      city: row.city,
+      region: row.region,
+      postalCode: row.postal_code,
+      countryCode: row.country_code,
+      timezone: row.timezone,
+      status: row.status,
+      managerUserId: row.manager_user_id ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "location",
+  );
+}
+
+/**
+ * Note what is absent: no credential field is read here.
+ *
+ * Tokens live in `platform_connection_secrets`, and even if a future migration
+ * put one on `platform_connections` by mistake, this mapper names its fields
+ * explicitly and `platformConnectionSchema.parse()` strips everything else — so
+ * a credential could not ride a connection object into a client component.
+ */
+export function toPlatformConnection(row: Row): PlatformConnection {
+  return parseOrThrow(
+    platformConnectionSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      platform: row.platform,
+      externalAccountId: row.external_account_id ?? null,
+      externalAccountName: row.external_account_name ?? null,
+      status: row.status,
+      capabilities: row.capabilities,
+      tokenExpiresAt: isoOrNull(row.token_expires_at),
+      lastSyncedAt: isoOrNull(row.last_synced_at),
+      grantedScopes: stringArray(row.granted_scopes),
+      providerMetadata: row.provider_metadata ?? {},
+      lastHealthCheckAt: isoOrNull(row.last_health_check_at),
+      lastHealthStatus: row.last_health_status ?? null,
+      lastErrorCode: row.last_error_code ?? null,
+      lastErrorMessage: row.last_error_message ?? null,
+      connectedByUserId: row.connected_by_user_id ?? null,
+      connectedAt: isoOrNull(row.connected_at),
+      disconnectedAt: isoOrNull(row.disconnected_at),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "platform connection",
+  );
+}
+
+export function toPlatformProfile(row: Row): PlatformProfile {
+  return parseOrThrow(
+    platformProfileSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      locationId: row.location_id ?? null,
+      platformConnectionId: row.platform_connection_id,
+      externalProfileId: row.external_profile_id,
+      externalProfileName: row.external_profile_name,
+      externalAccountId: row.external_account_id ?? null,
+      profileUrl: row.profile_url ?? null,
+      status: row.status,
+      verificationState: row.verification_state ?? null,
+      providerMetadata: row.provider_metadata ?? {},
+      lastConfirmedAt: isoOrNull(row.last_confirmed_at),
+      syncCursor: row.sync_cursor ?? null,
+      lastSyncedAt: isoOrNull(row.last_synced_at),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "platform profile",
+  );
+}
+
+/**
+ * Note what is absent here too: `state_hash`.
+ *
+ * The hash is a lookup key for a live handshake. It is used inside the
+ * repository and deliberately not carried onto the domain object, so nothing
+ * that logs or serialises an `OAuthState` can reveal one.
+ */
+export function toOAuthState(row: Row): OAuthState {
+  return parseOrThrow(
+    oauthStateSchema,
+    {
+      id: row.id,
+      provider: row.provider,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      redirectPath: row.redirect_path,
+      reauthorization: row.reauthorization ?? false,
+      expiresAt: iso(row.expires_at),
+      consumedAt: isoOrNull(row.consumed_at),
+      createdAt: iso(row.created_at),
+    },
+    "OAuth state",
+  );
+}
+
+export function toMention(row: Row): Mention {
+  return parseOrThrow(
+    mentionSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      locationId: row.location_id ?? null,
+      platformConnectionId: row.platform_connection_id,
+      platformProfileId: row.platform_profile_id ?? null,
+      sourceType: row.source_type,
+      externalId: row.external_id,
+      externalParentId: row.external_parent_id ?? null,
+      sourceUrl: row.source_url ?? null,
+      title: row.title ?? null,
+      content: row.content,
+      authorName: row.author_name ?? null,
+      authorExternalId: row.author_external_id ?? null,
+      rating: num(row.rating),
+      language: row.language ?? null,
+      publishedAt: iso(row.published_at),
+      receivedAt: iso(row.received_at),
+      status: row.status,
+      sentiment: row.sentiment,
+      riskLevel: row.risk_level,
+      relevanceScore: num(row.relevance_score),
+      engagementScore: num(row.engagement_score),
+      rawPayload: row.raw_payload ?? {},
+      externalResourceName: row.external_resource_name ?? null,
+      authorAvatarUrl: row.author_avatar_url ?? null,
+      authorIsAnonymous: row.author_is_anonymous ?? false,
+      sourceUpdatedAt: isoOrNull(row.source_updated_at),
+      sourceReplyText: row.source_reply_text ?? null,
+      sourceReplyUpdatedAt: isoOrNull(row.source_reply_updated_at),
+      sourceMetadata: row.source_metadata ?? {},
+      lastSyncedAt: isoOrNull(row.last_synced_at),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "mention",
+  );
+}
+
+/**
+ * A sync run.
+ *
+ * The counts arrive as five separate columns and are folded into one object,
+ * because five loose integers on a domain type invite reading four of them.
+ */
+export function toPlatformSyncRun(row: Row): PlatformSyncRun {
+  return parseOrThrow(
+    platformSyncRunSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      platformConnectionId: row.platform_connection_id,
+      platformProfileId: row.platform_profile_id,
+      resource: row.resource,
+      trigger: row.trigger,
+      actorUserId: row.actor_user_id ?? null,
+      status: row.status,
+      startedAt: iso(row.started_at),
+      completedAt: isoOrNull(row.completed_at),
+      counts: {
+        fetched: Number(row.fetched_count ?? 0),
+        created: Number(row.created_count ?? 0),
+        updated: Number(row.updated_count ?? 0),
+        unchanged: Number(row.unchanged_count ?? 0),
+        failed: Number(row.failed_count ?? 0),
+      },
+      pagesFetched: Number(row.pages_fetched ?? 0),
+      totalReviewCount:
+        row.total_review_count === null || row.total_review_count === undefined
+          ? null
+          : Number(row.total_review_count),
+      errorCode: row.error_code ?? null,
+      errorMessage: row.error_message ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "sync run",
+  );
+}
+
+export function toMentionAnalysis(row: Row): MentionAnalysis {
+  return parseOrThrow(
+    mentionAnalysisSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      mentionId: row.mention_id,
+      modelProvider: row.model_provider,
+      modelName: row.model_name,
+      promptVersion: row.prompt_version,
+      relevanceScore: num(row.relevance_score) ?? 0,
+      relevanceExplanation: row.relevance_explanation ?? null,
+      sentiment: row.sentiment,
+      sentimentScore: num(row.sentiment_score),
+      riskLevel: row.risk_level,
+      riskCategories: stringArray(row.risk_categories),
+      riskExplanation: row.risk_explanation ?? null,
+      topics: stringArray(row.topics),
+      factsNeedingVerification: stringArray(row.facts_needing_verification),
+      recommendedAction: row.recommended_action,
+      recommendationExplanation: row.recommendation_explanation ?? null,
+      analyzedAt: iso(row.analyzed_at),
+      createdAt: iso(row.created_at),
+    },
+    "mention analysis",
+  );
+}
+
+export function toResponseDraft(row: Row): ResponseDraft {
+  return parseOrThrow(
+    responseDraftSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      mentionId: row.mention_id,
+      responseType: row.response_type,
+      draftText: row.draft_text,
+      finalText: row.final_text ?? null,
+      status: row.status,
+      generatedBy: row.generated_by,
+      generationProvider: row.generation_provider ?? null,
+      generationModel: row.generation_model ?? null,
+      promptVersion: row.prompt_version ?? null,
+      brandVoiceVersion: row.brand_voice_version ?? null,
+      policyVersion: row.policy_version ?? null,
+      assignedUserId: row.assigned_user_id ?? null,
+      approvedByUserId: row.approved_by_user_id ?? null,
+      approvedAt: isoOrNull(row.approved_at),
+      publishedAt: isoOrNull(row.published_at),
+      externalResponseId: row.external_response_id ?? null,
+      publicationError: row.publication_error ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "response draft",
+  );
+}
+
+export function toApproval(row: Row): Approval {
+  return parseOrThrow(
+    approvalSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      responseDraftId: row.response_draft_id,
+      requestedByUserId: row.requested_by_user_id ?? null,
+      assignedToUserId: row.assigned_to_user_id ?? null,
+      status: row.status,
+      decisionNote: row.decision_note ?? null,
+      decidedAt: isoOrNull(row.decided_at),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "approval",
+  );
+}
+
+export function toEscalation(row: Row): Escalation {
+  return parseOrThrow(
+    escalationSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      mentionId: row.mention_id,
+      category: row.category,
+      severity: row.severity,
+      status: row.status,
+      title: row.title,
+      summary: row.summary ?? null,
+      assignedUserId: row.assigned_user_id ?? null,
+      dueAt: isoOrNull(row.due_at),
+      resolvedAt: isoOrNull(row.resolved_at),
+      resolutionNote: row.resolution_note ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "escalation",
+  );
+}
+
+export function toAutomationRule(row: Row): AutomationRule {
+  return parseOrThrow(
+    automationRuleSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      name: row.name,
+      description: row.description ?? null,
+      status: row.status,
+      priority: row.priority,
+      conditions: row.conditions ?? [],
+      actions: row.actions ?? [],
+      lastRunAt: isoOrNull(row.last_run_at),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "automation rule",
+  );
+}
+
+export function toAuditEvent(row: Row): AuditEvent {
+  return parseOrThrow(
+    auditEventSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      actorUserId: row.actor_user_id ?? null,
+      actorType: row.actor_type,
+      eventType: row.event_type,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      previousState: row.previous_state ?? null,
+      newState: row.new_state ?? null,
+      metadata: row.metadata ?? {},
+      occurredAt: iso(row.occurred_at),
+    },
+    "audit event",
+  );
+}
