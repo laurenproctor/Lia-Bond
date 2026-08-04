@@ -2,6 +2,20 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 
+/**
+ * The application-wide default, set here rather than per route group.
+ *
+ * Six routes — /sign-in, /sign-up, /forgot-password, /reset-password, /invite,
+ * and /auth — sit directly under `src/app` with no layout of their own, so this
+ * is the only place that can give them a typeface. Moving Inter down into
+ * `(app)` would silently drop them onto the system stack.
+ *
+ * The marketing site overrides this in `(site)/layout.tsx`, which declares
+ * Geist and re-applies `font-family` via the `font-site` utility. Re-applying
+ * is required, not decorative: `body` resolves `var(--font-sans)` here, and
+ * descendants inherit that computed value rather than re-resolving the
+ * variable.
+ */
 const inter = Inter({
   subsets: ["latin"],
   display: "swap",
