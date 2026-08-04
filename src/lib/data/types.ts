@@ -5,6 +5,7 @@ import type {
   AuditEventFilter,
   AutomationRule,
   AutomationRuleFilter,
+  BrandVoiceProfile,
   ConnectionHealthUpdate,
   CreateEscalationInput,
   CreateLocationInput,
@@ -41,6 +42,7 @@ import type {
   StartAnalysisRunInput,
   StartSyncRunInput,
   SyncResource,
+  UpdateBrandVoiceInput,
   UpsertPlatformConnectionInput,
   UpsertPlatformProfileInput,
   User,
@@ -528,6 +530,25 @@ export interface AutomationRuleRepository {
 }
 
 /**
+ * Brand voice.
+ *
+ * One profile per organization, so there is no id parameter and no list
+ * method — naming the scope names the row. `get` returns null for an
+ * organization that has never saved one; callers substitute
+ * `DEFAULT_BRAND_VOICE` rather than treating absence as an error.
+ */
+export interface BrandVoiceRepository {
+  get(scope: OrganizationScope): Promise<BrandVoiceProfile | null>;
+  /**
+   * Insert or update the organization's profile.
+   *
+   * Returns the stored row unchanged when the input matches it — no version
+   * bump, no `updatedAt` change. See the `version` column comment.
+   */
+  save(scope: OrganizationScope, input: UpdateBrandVoiceInput): Promise<BrandVoiceProfile>;
+}
+
+/**
  * Raised when a sync is already running for the same profile and resource.
  *
  * Its own type rather than a generic conflict because the caller has to be able
@@ -670,6 +691,8 @@ export interface LiaDataSource {
   responseDrafts: ResponseDraftRepository;
   escalations: EscalationRepository;
   automationRules: AutomationRuleRepository;
+  /** How Lia is configured to sound. One row per organization. */
+  brandVoice: BrandVoiceRepository;
   auditEvents: AuditEventRepository;
 }
 
