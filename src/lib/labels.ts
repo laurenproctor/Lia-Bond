@@ -241,6 +241,13 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   // Named for who raised it. An escalation nobody chose to raise is a
   // different thing to explain than one a person opened.
   "escalation.created_from_analysis": "Escalation raised by analysis",
+  "organization.created": "Organization created",
+  "membership.invited": "Member invited",
+  "membership.invitation_revoked": "Invitation revoked",
+  "membership.joined": "Member joined",
+  "membership.role_changed": "Member role changed",
+  "membership.status_changed": "Member status changed",
+  "membership.removed": "Member removed",
 };
 
 /** Sync-run outcomes, as a person would describe them. */

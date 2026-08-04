@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AlertTriangle } from "lucide-react";
 import { Logo } from "@/components/shell/logo";
 
 /**
@@ -44,6 +45,86 @@ export function AuthShell({
   );
 }
 
-/** Shared field styling, so the three forms cannot drift apart. */
+/** Shared field styling, so the forms cannot drift apart. */
 export const AUTH_INPUT_CLASS =
   "h-11 w-full rounded-[10px] border border-gray-300 bg-white px-3.5 text-[14px] text-gray-950 outline-none focus-visible:border-purple-600 focus-visible:ring-2 focus-visible:ring-purple-600/20";
+
+/**
+ * A labelled field.
+ *
+ * `htmlFor` and `id` are bound to the same name rather than passed separately,
+ * because the failure mode of getting that wrong is silent: the label still
+ * renders, still looks correct, and no longer moves focus or reads out to a
+ * screen reader.
+ */
+export function AuthField({
+  name,
+  label,
+  type = "text",
+  autoComplete,
+  hint,
+  defaultValue,
+  readOnly,
+  autoFocus,
+  required = true,
+  minLength,
+}: {
+  name: string;
+  label: string;
+  type?: string;
+  autoComplete?: string;
+  hint?: string;
+  defaultValue?: string;
+  readOnly?: boolean;
+  autoFocus?: boolean;
+  required?: boolean;
+  minLength?: number;
+}) {
+  const hintId = hint ? `${name}-hint` : undefined;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={name} className="text-[13px] font-medium text-gray-950">
+        {label}
+      </label>
+      <input
+        id={name}
+        name={name}
+        type={type}
+        autoComplete={autoComplete}
+        defaultValue={defaultValue}
+        readOnly={readOnly}
+        autoFocus={autoFocus}
+        required={required}
+        minLength={minLength}
+        aria-describedby={hintId}
+        className={
+          readOnly ? `${AUTH_INPUT_CLASS} bg-gray-50 text-gray-500` : AUTH_INPUT_CLASS
+        }
+      />
+      {hint ? (
+        <p id={hintId} className="text-[12px] text-gray-500">
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A failure the person can act on.
+ *
+ * `role="alert"` rather than a styled paragraph: a form error that appears
+ * after submission is announced nowhere unless it is announced deliberately.
+ */
+export function AuthError({ children }: { children: ReactNode }) {
+  return (
+    <p
+      role="alert"
+      className="flex items-start gap-1.5 rounded-lg border border-red-600/20 bg-red-100 px-3 py-2.5 text-[13px] text-gray-950"
+    >
+      <AlertTriangle className="mt-px size-4 shrink-0 text-red-600" aria-hidden />
+      {children}
+    </p>
+  );
+}

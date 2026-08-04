@@ -1,53 +1,34 @@
 import type { Metadata } from "next";
 import { Save } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
-import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import { DetailField } from "@/components/ui/detail-panel";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
-import { MEMBERSHIP_ROLE_LABELS, MEMBERSHIP_STATUS_LABELS } from "@/lib/labels";
+import { TeamPanel } from "@/components/settings/team-panel";
+import { can } from "@/lib/auth/permissions";
+import { MEMBERSHIP_ROLE_LABELS } from "@/lib/labels";
 import { getDataSource } from "@/lib/data";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
-import type { MembershipWithUser } from "@/domain";
 
 export const metadata: Metadata = { title: "Settings" };
-
-const MEMBER_COLUMNS: DataTableColumn<MembershipWithUser>[] = [
-  {
-    id: "name",
-    header: "Member",
-    cell: (member) => (
-      <span>
-        <span className="block font-medium text-gray-950">{member.user.fullName}</span>
-        <span className="block text-[12px] text-gray-500">{member.user.email}</span>
-      </span>
-    ),
-  },
-  {
-    id: "role",
-    header: "Role",
-    cell: (member) => MEMBERSHIP_ROLE_LABELS[member.role],
-  },
-  {
-    id: "status",
-    header: "Status",
-    align: "right",
-    cell: (member) => (
-      <Badge tone={member.status === "active" ? "green" : "neutral"}>
-        {MEMBERSHIP_STATUS_LABELS[member.status]}
-      </Badge>
-    ),
-  },
-];
 
 export default async function SettingsPage() {
   const context = await getOrganizationContext();
   const dataSource = await getDataSource();
-  const members = await dataSource.memberships.listMembers(context.scope);
+  const canManage = can(context.role, "organization.manage_members");
+
+  // Invitations are readable by any member but only listed for people who can
+  // act on them, so a viewer is not shown a roster of addresses they have no
+  // reason to see.
+  const [members, invitations] = await Promise.all([
+    dataSource.memberships.listMembers(context.scope),
+    canManage
+      ? dataSource.invitations.listPending(context.scope)
+      : Promise.resolve([]),
+  ]);
 
   const { organization } = context;
 
@@ -97,20 +78,13 @@ export default async function SettingsPage() {
             </dl>
           </Card>
 
-          <Card flush>
-            <CardHeader
-              className="p-5 pb-3"
-              title="Team"
-              description="Roles decide what each person can do. Owners and admins manage membership."
-            />
-            <DataTable
-              caption="Organization members and their roles"
-              columns={MEMBER_COLUMNS}
-              rows={members}
-              rowKey={(member) => member.id}
-              emptyTitle="No members yet"
-            />
-          </Card>
+          <TeamPanel
+            members={members}
+            invitations={invitations}
+            actingUserId={context.scope.userId}
+            actingRole={context.role}
+            canManage={canManage}
+          />
 
           <SectionPlaceholder
             title="Monitoring aliases"

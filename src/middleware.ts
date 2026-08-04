@@ -31,12 +31,20 @@ import { NextResponse, type NextRequest } from "next/server";
  * is a real session. If middleware bounced an unauthenticated visitor, someone
  * with a dead link would land back on sign-in with no explanation; the page
  * checks for itself and says the link expired.
+ *
+ * `/invite` is public for the same class of reason and one more: an invitee
+ * usually has no account at all, so there is no session to gate on. The token
+ * in the path is what authorises the page, and it is checked there.
  */
 const PUBLIC_PATHS = [
   "/sign-in",
+  "/sign-up",
   "/forgot-password",
   "/reset-password",
   "/auth",
+  // Invitations are opened by people who do not have an account yet. Gating
+  // this would bounce every invitee to sign-in and lose the token on the way.
+  "/invite",
 ];
 
 function isPublic(pathname: string): boolean {
@@ -100,9 +108,13 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(signIn);
   }
 
-  // Already signed in and looking at the sign-in page: send them onward rather
-  // than showing a form that would do nothing.
-  if (user && pathname === "/sign-in") {
+  // Already signed in and looking at a page that exists to create a session:
+  // send them onward rather than showing a form that would do nothing.
+  //
+  // `/invite` is deliberately not in this list. A signed-in person opening an
+  // invitation is the *expected* case, and bouncing them to the overview would
+  // silently discard the invitation they were trying to accept.
+  if (user && (pathname === "/sign-in" || pathname === "/sign-up")) {
     const target = request.nextUrl.clone();
     target.pathname = "/overview";
     target.search = "";

@@ -15,8 +15,13 @@ import type {
   FinishAnalysisRunInput,
   FinishSyncRunInput,
   IngestMentionInput,
+  Invitation,
+  InvitationPreview,
+  InvitationWithInviter,
   Location,
   Membership,
+  MembershipRole,
+  MembershipStatus,
   MembershipWithUser,
   Mention,
   MentionAnalysis,
@@ -130,11 +135,36 @@ export interface LocationMetrics {
   riskMentions: number;
 }
 
+export interface ProvisionOrganizationInput {
+  userId: string;
+  name: string;
+  industry?: string;
+  timezone?: string;
+  language?: string;
+}
+
 export interface OrganizationRepository {
   /** Organizations where this user holds an active membership. */
   listForUser(userId: string): Promise<OrganizationMembership[]>;
   getBySlug(slug: string, userId: string): Promise<OrganizationMembership | null>;
   getById(organizationId: string, userId: string): Promise<OrganizationMembership | null>;
+  /**
+   * Create an organization and the caller's owner membership, together.
+   *
+   * Deliberately **not** scoped: the caller holds no membership yet, which is
+   * the entire point. This is the one write in the repository layer that
+   * cannot take an `OrganizationScope`, because it is what produces the first
+   * one.
+   *
+   * Both rows must exist or neither must — an organization with no owner is
+   * unreachable and uneditable by anyone. The Supabase adapter delegates to a
+   * SECURITY DEFINER function so the pair is one transaction; there is no
+   * two-statement version of this method for that reason.
+   *
+   * The slug is derived, not supplied. It is globally unique and appears in
+   * links, so it is not a field a signing-up stranger chooses.
+   */
+  provision(input: ProvisionOrganizationInput): Promise<OrganizationMembership>;
 }
 
 export interface MembershipRepository {
@@ -142,6 +172,64 @@ export interface MembershipRepository {
   getActiveMembership(organizationId: string, userId: string): Promise<Membership | null>;
   listMembers(scope: OrganizationScope): Promise<MembershipWithUser[]>;
   listAssignableUsers(scope: OrganizationScope): Promise<User[]>;
+  /**
+   * How many active owners the organization has.
+   *
+   * Read before any demotion or removal. The database refuses to leave an
+   * organization ownerless, but a constraint violation surfaces as an
+   * unreadable error — this exists so the interface can say why first.
+   */
+  countActiveOwners(scope: OrganizationScope): Promise<number>;
+  updateRole(
+    scope: OrganizationScope,
+    userId: string,
+    role: MembershipRole,
+  ): Promise<Membership>;
+  updateStatus(
+    scope: OrganizationScope,
+    userId: string,
+    status: MembershipStatus,
+  ): Promise<Membership>;
+  remove(scope: OrganizationScope, userId: string): Promise<void>;
+}
+
+export interface CreateInvitationInput {
+  email: string;
+  role: MembershipRole;
+  /** SHA-256 of the token. The token itself never reaches a repository. */
+  tokenHash: string;
+  invitedByUserId: string;
+  expiresAt: string;
+}
+
+export interface InvitationRepository {
+  /**
+   * Issue an invitation.
+   *
+   * Rejects a second live invitation for the same address through a partial
+   * unique index rather than a prior read, so two admins inviting the same
+   * person at the same moment collide in the database instead of racing.
+   */
+  create(scope: OrganizationScope, input: CreateInvitationInput): Promise<Invitation>;
+  listPending(scope: OrganizationScope): Promise<InvitationWithInviter[]>;
+  revoke(scope: OrganizationScope, invitationId: string): Promise<Invitation>;
+  /**
+   * What the acceptance page shows, keyed by the token hash.
+   *
+   * Not scoped, and readable while signed out: the invitee is not a member of
+   * anything yet. The token hash is the only credential, which is why the raw
+   * token must never be logged or persisted.
+   */
+  preview(tokenHash: string): Promise<InvitationPreview | null>;
+  /**
+   * Spend an invitation and grant the membership, together.
+   *
+   * Returns the organization joined. Throws when the invitation is unknown,
+   * expired, already spent, revoked, or addressed to a different person —
+   * those collapse into one failure on purpose, because by this point the
+   * caller has already been told which by `preview`.
+   */
+  accept(tokenHash: string, userId: string): Promise<{ organizationId: string }>;
 }
 
 export interface LocationRepository {
@@ -565,6 +653,8 @@ export interface LiaDataSource {
   readonly kind: "demo" | "supabase";
   organizations: OrganizationRepository;
   memberships: MembershipRepository;
+  /** Pending offers of membership. Acceptance is not organization-scoped. */
+  invitations: InvitationRepository;
   locations: LocationRepository;
   platformConnections: PlatformConnectionRepository;
   platformProfiles: PlatformProfileRepository;
@@ -583,4 +673,4 @@ export interface LiaDataSource {
   auditEvents: AuditEventRepository;
 }
 
-export type { Organization, Membership, User };
+export type { Organization, Membership, User, Invitation };

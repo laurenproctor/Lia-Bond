@@ -2,9 +2,14 @@
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { newPasswordSchema } from "@/lib/auth/password";
-import { safeDestination } from "@/lib/auth/redirect";
+import {
+  hashInvitationToken,
+  isInvitationTokenShaped,
+} from "@/lib/auth/invitation-token";
+import { MIN_PASSWORD_LENGTH, newPasswordSchema } from "@/lib/auth/password";
+import { DEFAULT_SIGN_IN_DESTINATION, safeDestination } from "@/lib/auth/redirect";
 import { appOrigin } from "@/lib/env";
+import { getDataSource } from "@/lib/data";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 /**
@@ -78,6 +83,202 @@ export async function signOutAction(): Promise<void> {
   const supabase = await createSupabaseServerClient();
   await supabase.auth.signOut();
   redirect("/sign-in");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sign up                                                                     */
+/* -------------------------------------------------------------------------- */
+
+const signUpSchema = z
+  .object({
+    fullName: z.string().trim().min(1, "Enter your name.").max(160),
+    organizationName: z
+      .string()
+      .trim()
+      .min(1, "Enter your restaurant group's name.")
+      .max(160),
+    email: z.email("Enter a valid email address."),
+    password: z.string().min(MIN_PASSWORD_LENGTH, `Use at least ${MIN_PASSWORD_LENGTH} characters.`),
+    confirm: z.string(),
+  })
+  .refine((value) => value.password === value.confirm, {
+    message: "Those passwords do not match.",
+    path: ["confirm"],
+  });
+
+export interface SignUpResult {
+  error: string;
+}
+
+/**
+ * Create an account and the organization that account owns.
+ *
+ * Two steps that must both land, and the ordering is the whole design:
+ *
+ * 1. `signUp` creates the auth account. A database trigger mirrors it into
+ *    `public.users`, which is what every RLS policy resolves through.
+ * 2. `provision` creates the organization and the owner membership, in one
+ *    transaction inside Postgres.
+ *
+ * Step 2 cannot be folded into step 1, and step 1 cannot be rolled back from
+ * here. So a crash between them leaves an account with no organization —
+ * recoverable, because signing in again lands on this same provisioning path.
+ * The reverse order would leave an ownerless organization, which is not
+ * recoverable by anyone.
+ *
+ * Nothing here reports whether an address is already registered. Supabase
+ * returns a success-shaped response for a duplicate sign-up precisely so this
+ * endpoint cannot be used to enumerate customers, and that behaviour is
+ * preserved rather than unpicked.
+ */
+export async function signUpAction(
+  _previous: SignUpResult | null,
+  formData: FormData,
+): Promise<SignUpResult> {
+  const parsed = signUpSchema.safeParse({
+    fullName: formData.get("fullName"),
+    organizationName: formData.get("organizationName"),
+    email: formData.get("email"),
+    password: formData.get("password"),
+    confirm: formData.get("confirm"),
+  });
+
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Check the form and try again." };
+  }
+
+  const { fullName, organizationName, email, password } = parsed.data;
+  const supabase = await createSupabaseServerClient();
+
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      // Read by the profile trigger. This is the only path by which a name
+      // reaches `public.users`, so omitting it would leave every new account
+      // named after the local part of its address.
+      data: { full_name: fullName },
+      emailRedirectTo: `${appOrigin()}/auth/callback`,
+    },
+  });
+
+  if (error) {
+    console.error("[auth:sign-up]", error.message);
+    return { error: "That account could not be created. Try again." };
+  }
+
+  // No session means the project requires email confirmation. The account
+  // exists and is correct; it simply cannot act yet, and provisioning has to
+  // wait until the link is clicked.
+  if (!data.session) {
+    redirect("/sign-in?pending=confirm");
+  }
+
+  try {
+    const dataSource = await getDataSource();
+    await dataSource.organizations.provision({
+      userId: data.user?.id ?? "",
+      name: organizationName,
+    });
+  } catch (cause) {
+    console.error("[auth:sign-up] provisioning failed", cause);
+    return {
+      error:
+        "Your account was created, but we could not set up your organization. Sign in to finish.",
+    };
+  }
+
+  redirect(DEFAULT_SIGN_IN_DESTINATION);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sign up from an invitation                                                  */
+/* -------------------------------------------------------------------------- */
+
+const acceptWithSignUpSchema = z
+  .object({
+    token: z
+      .string()
+      .refine(isInvitationTokenShaped, "That invitation link is not valid."),
+    fullName: z.string().trim().min(1, "Enter your name.").max(160),
+    password: z
+      .string()
+      .min(MIN_PASSWORD_LENGTH, `Use at least ${MIN_PASSWORD_LENGTH} characters.`),
+    confirm: z.string(),
+  })
+  .refine((value) => value.password === value.confirm, {
+    message: "Those passwords do not match.",
+    path: ["confirm"],
+  });
+
+/**
+ * Create an account from an invitation and join, in one step.
+ *
+ * The address is **not** taken from the form. It is re-read from the invitation
+ * on the server, so this cannot be used to register an arbitrary address, and
+ * the account it creates is guaranteed to satisfy the email match that
+ * acceptance requires. A hidden field carrying the address would be one the
+ * browser could edit.
+ *
+ * No organization is provisioned here — that is what separates this from
+ * `signUpAction`. An invitee is joining a group that already exists, and
+ * creating a second empty one for them is the failure this whole route avoids.
+ */
+export async function acceptInvitationWithSignUpAction(
+  _previous: SignUpResult | null,
+  formData: FormData,
+): Promise<SignUpResult> {
+  const parsed = acceptWithSignUpSchema.safeParse({
+    token: formData.get("token"),
+    fullName: formData.get("fullName"),
+    password: formData.get("password"),
+    confirm: formData.get("confirm"),
+  });
+
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Check the form and try again." };
+  }
+
+  const tokenHash = hashInvitationToken(parsed.data.token);
+  const dataSource = await getDataSource();
+
+  const preview = await dataSource.invitations.preview(tokenHash);
+  if (!preview || preview.state !== "pending") {
+    return { error: "That invitation is no longer valid. Ask for a new one." };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.auth.signUp({
+    email: preview.email,
+    password: parsed.data.password,
+    options: { data: { full_name: parsed.data.fullName } },
+  });
+
+  if (error) {
+    console.error("[auth:invite-sign-up]", error.message);
+    return {
+      error:
+        "That account could not be created. If you already have one, sign in and open this link again.",
+    };
+  }
+
+  if (!data.session) {
+    // Email confirmation is switched on for this project. The account exists
+    // but cannot act yet, so the invitation stays pending and the link stays
+    // usable once they confirm.
+    redirect("/sign-in?pending=confirm");
+  }
+
+  try {
+    await dataSource.invitations.accept(tokenHash, data.user?.id ?? "");
+  } catch (cause) {
+    console.error("[auth:invite-sign-up] accept failed", cause);
+    return {
+      error: "Your account was created, but joining failed. Sign in and open the link again.",
+    };
+  }
+
+  redirect(DEFAULT_SIGN_IN_DESTINATION);
 }
 
 /* -------------------------------------------------------------------------- */

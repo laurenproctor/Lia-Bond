@@ -33,6 +33,29 @@ export const MEMBERSHIP_STATUSES = ["invited", "active", "suspended"] as const;
 export const membershipStatusSchema = vocabulary(MEMBERSHIP_STATUSES).schema;
 export type MembershipStatus = z.infer<typeof membershipStatusSchema>;
 
+/**
+ * Invitation lifecycle.
+ *
+ * Expiry is deliberately absent. It is derived from `expiresAt` rather than
+ * stored, because a stored `expired` needs a scheduled job to write it and the
+ * table is wrong in the meantime — every read would have to check the clock as
+ * well as the column, which is the check on its own.
+ */
+export const INVITATION_STATUSES = ["pending", "accepted", "revoked"] as const;
+export const invitationStatusSchema = vocabulary(INVITATION_STATUSES).schema;
+export type InvitationStatus = z.infer<typeof invitationStatusSchema>;
+
+/** What an invitation looks like to somebody holding the link, expiry included. */
+export const INVITATION_STATES = [
+  "pending",
+  "accepted",
+  "revoked",
+  "expired",
+  "unknown",
+] as const;
+export const invitationStateSchema = vocabulary(INVITATION_STATES).schema;
+export type InvitationState = z.infer<typeof invitationStateSchema>;
+
 /* -------------------------------------------------------------------------- */
 /* Location                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -380,6 +403,15 @@ export const AUDIT_EVENT_TYPES = [
   "mention.analyzed",
   "mention.analysis_failed",
   "escalation.created_from_analysis",
+  // Membership. Metadata carries roles, statuses, and email addresses — never
+  // an invitation token, which would turn the audit trail into a way in.
+  "organization.created",
+  "membership.invited",
+  "membership.invitation_revoked",
+  "membership.joined",
+  "membership.role_changed",
+  "membership.status_changed",
+  "membership.removed",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;

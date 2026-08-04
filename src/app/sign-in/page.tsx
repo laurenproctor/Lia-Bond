@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, MailCheck } from "lucide-react";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { SignInForm } from "@/components/auth/sign-in-form";
 import { isSupabaseConfigured } from "@/lib/env";
@@ -22,9 +22,9 @@ export const metadata: Metadata = { title: "Sign in" };
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string; error?: string }>;
+  searchParams: Promise<{ next?: string; error?: string; pending?: string }>;
 }) {
-  const { next, error } = await searchParams;
+  const { next, error, pending } = await searchParams;
 
   return (
     <AuthShell
@@ -48,6 +48,21 @@ export default async function SignInPage({
         Carried by /auth/callback when an emailed link is dead. Lia's own
         wording; the provider's text never reaches here.
       */}
+      {/*
+        Set when sign-up created an account that cannot act yet, because the
+        project requires email confirmation. Saying so here is the difference
+        between "nothing happened" and "check your email".
+      */}
+      {pending === "confirm" ? (
+        <p
+          role="status"
+          className="mb-4 flex items-start gap-1.5 rounded-lg border border-purple-600/20 bg-purple-50 px-3 py-2.5 text-[13px] text-gray-950"
+        >
+          <MailCheck className="mt-px size-4 shrink-0 text-purple-600" aria-hidden />
+          Your account was created. Confirm your email address, then sign in.
+        </p>
+      ) : null}
+
       {error ? (
         <p
           role="alert"
@@ -66,6 +81,16 @@ export default async function SignInPage({
           className="text-purple-600 underline-offset-4 hover:underline"
         >
           Forgot your password?
+        </Link>
+      </p>
+
+      <p className="mt-3 border-t border-gray-200 pt-4 text-center text-[12.5px] text-gray-500">
+        New to Lia?{" "}
+        <Link
+          href="/sign-up"
+          className="font-medium text-purple-600 underline-offset-4 hover:underline"
+        >
+          Create an account
         </Link>
       </p>
     </AuthShell>

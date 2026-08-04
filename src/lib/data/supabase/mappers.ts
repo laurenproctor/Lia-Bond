@@ -4,6 +4,7 @@ import {
   auditEventSchema,
   automationRuleSchema,
   escalationSchema,
+  invitationSchema,
   locationSchema,
   membershipSchema,
   mentionAnalysisSchema,
@@ -20,6 +21,7 @@ import {
   type AuditEvent,
   type AutomationRule,
   type Escalation,
+  type Invitation,
   type Location,
   type Membership,
   type Mention,
@@ -110,6 +112,27 @@ export function toUser(row: Row): User {
       updatedAt: iso(row.updated_at),
     },
     "user",
+  );
+}
+
+export function toInvitation(row: Row): Invitation {
+  return parseOrThrow(
+    invitationSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role,
+      status: row.status,
+      invitedByUserId: row.invited_by_user_id ?? null,
+      expiresAt: iso(row.expires_at),
+      acceptedAt: row.accepted_at ? iso(row.accepted_at) : null,
+      acceptedByUserId: row.accepted_by_user_id ?? null,
+      revokedAt: row.revoked_at ? iso(row.revoked_at) : null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "invitation",
   );
 }
 

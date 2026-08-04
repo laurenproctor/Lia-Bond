@@ -1,4 +1,4 @@
-import type { AnalysisRun, OAuthState, PlatformSyncRun } from "@/domain";
+import type { AnalysisRun, Invitation, OAuthState, PlatformSyncRun } from "@/domain";
 import type { SealedCredentialRecord } from "@/lib/data/types";
 import type { SeedDataset } from "@/lib/seed/dataset";
 import { SEED_DATASET } from "@/lib/seed/dataset";
@@ -64,6 +64,18 @@ interface RuntimeStore {
    */
   analysisRuns: AnalysisRun[];
   analysisRunSequence: number;
+  /**
+   * Invitations.
+   *
+   * Runtime-only, like credentials and sync runs. A seeded invitation would be
+   * a standing offer of membership in the demo tenant, and its token hash would
+   * be a fixture — which is exactly how a fixture credential ends up somewhere
+   * real.
+   */
+  invitations: Invitation[];
+  /** Invitation id → token hash, held beside the records as the database does. */
+  invitationTokenHashes: Map<string, string>;
+  invitationSequence: number;
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -75,6 +87,9 @@ function freshRuntimeStore(): RuntimeStore {
     syncRunSequence: 0,
     analysisRuns: [],
     analysisRunSequence: 0,
+    invitations: [],
+    invitationTokenHashes: new Map(),
+    invitationSequence: 0,
   };
 }
 

@@ -71,6 +71,8 @@ All screens render inside one shell (`src/app/(app)/layout.tsx`).
 | `/api/integrations/google-business-profile/callback` | OAuth callback | — |
 | `/api/integrations/google-business-profile/reviews/sync` | Manual review sync (POST only) | repositories + Google API |
 | `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
+| `/sign-up` | Creates an account **and** the organization it owns. Outside the app shell. | Supabase Auth + `provision_organization` |
+| `/invite/[token]` | Accept an invitation. Public — the invitee has no account yet. | `invitation_preview` / `accept_invitation` |
 | `/forgot-password` | Requests a reset link. Outside the app shell. | Supabase Auth |
 | `/reset-password` | Sets a new password using the recovery session. Outside the app shell. | Supabase Auth |
 | `/auth/callback` | Where an emailed auth link lands; establishes the session | Supabase Auth |
@@ -170,6 +172,85 @@ the middleware would make the app unpleasant, not insecure.
 `public.users.id`. An account created with a fresh id authenticates perfectly and
 then sees nothing at all. `npm run auth:seed` creates the seeded logins with
 their exact UUIDs for this reason.
+
+### Sign-up and provisioning
+
+A new account and a new organization are created together, and the ordering is
+load-bearing:
+
+```text
+signUpAction
+  └─ supabase.auth.signUp()          ← creates auth.users
+       └─ trigger on_auth_user_created
+            └─ public.users          ← the row every RLS policy resolves through
+  └─ organizations.provision()       ← RPC: organization + owner membership, one transaction
+```
+
+**Provisioning is a `SECURITY DEFINER` function, not a loosened policy.**
+`public.organizations` has no INSERT policy and `memberships_insert_admins`
+requires already being an admin, so a brand-new user satisfies neither. Relaxing
+either would mean the ability to create an organization *for yourself* became
+the ability to insert a membership row for anyone. The function takes the user
+from `auth.uid()`, never from an argument, and writes the role `owner`
+literally — so it cannot mint a membership of any other shape.
+
+The two steps cannot be one, and step 1 cannot be rolled back from application
+code. A crash between them leaves an account with no organization, which is
+recoverable. The reverse order would leave an organization with no owner, which
+is not recoverable by anyone.
+
+**The profile trigger closes the invariant that used to be upheld by hand.**
+`auth.users.id = public.users.id` was previously guaranteed only by
+`npm run auth:seed`; any account created another way authenticated perfectly and
+then saw nothing. It now holds by construction.
+
+### Invitations
+
+```text
+/settings ── inviteMemberAction ──▶ token generated, SHA-256 stored
+                                          │
+                                          ▼
+                            copyable link, shown once
+                                          │
+/invite/[token] ── invitation_preview ────┘
+     ├─ signed out        → create account at the invited address, then join
+     ├─ signed in, match  → one button
+     └─ signed in, other  → sign out first
+```
+
+Only the SHA-256 hash reaches the database, exactly as `oauth_states` holds a
+hash rather than a state value (D11). Two things make a copyable link safe to
+send over any channel:
+
+- the token is 32 random bytes, so it cannot be guessed; and
+- **acceptance requires the signed-in account to own the invited address.**
+
+The second is the load-bearing one. Without it a link pasted into the wrong chat
+is a standing grant of whatever role it carries. It is enforced inside
+`accept_invitation` rather than in the server action, because a check in
+application code protects only the path that runs it.
+
+Owner is not an invitable role. Ownership is transferred between people who
+already share an organization, never granted through a link.
+
+### Member management
+
+| Guardrail | Where | Why |
+| --- | --- | --- |
+| You cannot change your own role or status | Server action | An admin demoting themselves loses the permission needed to undo it. The most common way anyone locks themselves out of an admin panel. |
+| The last active owner cannot be demoted, suspended, or removed | Constraint trigger **and** both adapters | An organization with no owner has nobody who can promote anyone. Unrecoverable through the interface. |
+| Only owners may create or unmake owners | Server action | `organization.manage_members` is held by owners and admins alike. Without this an admin could promote themselves, making the distinction decorative. |
+
+The last-owner trigger is `DEFERRABLE INITIALLY DEFERRED`, so it runs at commit
+rather than per row. Handing ownership over is legitimately two statements —
+promote the new owner, demote the old — and a per-row check would reject
+whichever order it was written in.
+
+Suspension is the reversible option and the right one for somebody on leave: RLS
+ignores any membership that is not `active`, so access stops immediately while
+the record and its history stay intact. Removal deletes the membership, not the
+account — audit rows reference `users`, so removing somebody never erases what
+they did.
 
 ### Password recovery
 
@@ -312,6 +393,17 @@ reachable without a session, so provider errors are logged and swallowed too.
 | D51 | Reset requests report success unconditionally | "No account with that email" is a free account-enumeration oracle, and the endpoint is reachable without a session. Provider errors are logged and swallowed for the same reason: a rate-limit message tells the caller the address was worth rate-limiting. |
 | D52 | The callback accepts `token_hash` as well as `code` | Found by walking a real link rather than by reading the docs: an admin-generated link carries no PKCE verifier, so it arrives as a fragment or a token hash and the `code`-only handler rejected it as invalid. Supporting both also makes request-on-laptop, open-on-phone work, which PKCE alone cannot. |
 | D53 | The password policy is length-only, and lives in `src/lib/auth/password.ts` | Composition rules reliably produce `Passw0rd!`. The module exists because a `"use server"` file can only export async functions, so the action cannot own the constant the form must state — two copies would drift into a form promising one rule while the server applied another. |
+
+## Decisions made building sign-up and multi-user
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D54 | Self-serve sign-up creates an organization; invitees join an existing one | Two separate paths because they are two different intentions. Sign-up asking for an organization name and invitation not asking is what stops somebody expecting to join a colleague from silently creating a second, empty group and wondering where their team went. |
+| D55 | An invitation is a copyable link, not an email Lia sends | Supabase's built-in SMTP on a new project is rate-limited to a handful of messages an hour and may deliver only to project members. An email-only invitation would fail silently and look like a bug in Lia. The link is testable today and the delivery mechanism can be added without changing the model. |
+| D56 | Acceptance matches the signed-in account against the invited address | This is what makes D55 safe. A copyable link with no identity check is a standing grant of whatever role it carries to anyone who ever sees it — a forwarded chat message, a screenshot, a shared inbox. Enforced in `accept_invitation` rather than the action, so it holds for every future caller. |
+| D57 | Owner is not an invitable role | A link that mints an owner is the most valuable thing an attacker could intercept, and the gain is nil: ownership is handed over between people who already share an organization, where both parties are known. |
+| D58 | Provisioning and acceptance are `SECURITY DEFINER` functions rather than relaxed policies | Both need to write rows the caller has no membership to authorise, and both need two rows to land together. A policy permissive enough to allow either would allow far more — inserting a membership for an arbitrary user. The functions read `auth.uid()` themselves, so a caller can only ever act as themselves. |
+| D59 | Invitations use the wall clock in demo mode, unlike every other record | Found by a test. `expiresAt` is computed by the action from `Date.now()`, and the demo adapter checked it against the frozen `REFERENCE_NOW` — two different clocks. The seed instant recedes further into the past every day, so a demo invitation would never expire. Seeded rows keep the frozen clock; nothing about an invitation is seeded. |
 
 ## Known gaps after workflow 04
 

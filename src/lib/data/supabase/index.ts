@@ -24,6 +24,8 @@ import {
   upsertPlatformProfileInputSchema,
   type AnalysisRun,
   type Approval,
+  type Invitation,
+  type InvitationPreview,
   type Mention,
   type MentionAnalysis,
   type PlatformSyncRun,
@@ -52,6 +54,7 @@ import {
   toAuditEvent,
   toAutomationRule,
   toEscalation,
+  toInvitation,
   toLocation,
   toMembership,
   toMention,
@@ -130,6 +133,38 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
   /** Base selector for an organization-owned table. */
   const from = (table: string, scope: OrganizationScope) =>
     client.from(table).select("*").eq("organization_id", scope.organizationId);
+
+  /**
+   * Refuse to strip the last active owner.
+   *
+   * The database enforces this with a deferred constraint trigger, which is
+   * the actual guarantee. This exists so the failure is a sentence rather than
+   * a 23514 at commit time — and it returns early when the target is not an
+   * owner, so the ordinary case costs one indexed read.
+   */
+  async function assertNotLastOwner(
+    scope: OrganizationScope,
+    userId: string,
+  ): Promise<void> {
+    const { data, error } = await client
+      .from("memberships")
+      .select("user_id, role, status")
+      .eq("organization_id", scope.organizationId)
+      .eq("role", "owner")
+      .eq("status", "active");
+
+    if (error) fail(error, "check the owners");
+
+    const owners = rows(data);
+    const isTarget = owners.some((row) => row.user_id === userId);
+    if (!isTarget) return;
+
+    if (owners.length <= 1) {
+      throw conflict(
+        "This is the only owner. Make somebody else an owner first, then change this one.",
+      );
+    }
+  }
 
   /**
    * The privileged client, built on first use.
@@ -275,6 +310,34 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         const all = await this.listForUser(userId);
         return all.find((entry) => entry.organization.id === organizationId) ?? null;
       },
+
+      async provision(input) {
+        // An RPC, not two inserts. `organizations` has no INSERT policy and
+        // `memberships_insert_admins` requires already being an admin, so a
+        // brand-new user satisfies neither — and the two rows must land
+        // together or the organization is unreachable by anyone. A function
+        // body is a transaction, which is the only place this codebase has
+        // that guarantee (D17).
+        const { data, error } = await client.rpc("provision_organization", {
+          organization_name: input.name,
+          organization_industry: input.industry ?? "Restaurant group",
+          organization_timezone: input.timezone ?? "UTC",
+          organization_language: input.language ?? "en-US",
+        });
+
+        if (error) fail(error, "create that organization");
+
+        if (typeof data !== "string") {
+          throw new DataError(
+            "unavailable",
+            "Could not create that organization. Please try again.",
+          );
+        }
+
+        const created = await this.getById(data, input.userId);
+        if (!created) throw notFound("Organization");
+        return created;
+      },
     },
 
     memberships: {
@@ -312,6 +375,196 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           .filter((membership) => membership.status === "active")
           .map((membership) => membership.user)
           .sort((a, b) => a.fullName.localeCompare(b.fullName));
+      },
+
+      async countActiveOwners(scope) {
+        const { count, error } = await client
+          .from("memberships")
+          .select("user_id", { count: "exact", head: true })
+          .eq("organization_id", scope.organizationId)
+          .eq("role", "owner")
+          .eq("status", "active");
+
+        if (error) fail(error, "count the owners");
+        return count ?? 0;
+      },
+
+      async updateRole(scope, userId, role) {
+        // Checked here as well as by the database trigger. The trigger is the
+        // guarantee; this is the sentence the user reads. A deferred constraint
+        // failure arrives as an opaque 23514 at commit, which is true but
+        // useless to somebody trying to reorganise their team.
+        if (role !== "owner") await assertNotLastOwner(scope, userId);
+
+        const { data, error } = await client
+          .from("memberships")
+          .update({ role })
+          .eq("organization_id", scope.organizationId)
+          .eq("user_id", userId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "change that role");
+        if (!data) throw notFound("Membership");
+        return toMembership(data as Row);
+      },
+
+      async updateStatus(scope, userId, status) {
+        if (status !== "active") await assertNotLastOwner(scope, userId);
+
+        const { data, error } = await client
+          .from("memberships")
+          .update({ status })
+          .eq("organization_id", scope.organizationId)
+          .eq("user_id", userId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "change that membership");
+        if (!data) throw notFound("Membership");
+        return toMembership(data as Row);
+      },
+
+      async remove(scope, userId) {
+        await assertNotLastOwner(scope, userId);
+
+        const { error } = await client
+          .from("memberships")
+          .delete()
+          .eq("organization_id", scope.organizationId)
+          .eq("user_id", userId);
+
+        if (error) fail(error, "remove that member");
+      },
+    },
+
+    invitations: {
+      async create(scope, input) {
+        const email = input.email.trim().toLowerCase();
+
+        // Read first so the common mistake gets a sentence rather than a
+        // unique-violation. The index is still what guarantees it: two admins
+        // inviting the same person at once will both pass this check, and one
+        // of them will lose at the database.
+        const { data: existingMember, error: memberError } = await client
+          .from("memberships")
+          .select("user_id, users!inner(email)")
+          .eq("organization_id", scope.organizationId)
+          .eq("users.email", email)
+          .maybeSingle();
+
+        if (memberError) fail(memberError, "check the current members");
+        if (existingMember) {
+          throw conflict("That person is already a member of this organization.");
+        }
+
+        const { data, error } = await client
+          .from("invitations")
+          .insert({
+            organization_id: scope.organizationId,
+            email,
+            role: input.role,
+            token_hash: input.tokenHash,
+            invited_by_user_id: input.invitedByUserId,
+            expires_at: input.expiresAt,
+          })
+          .select("*")
+          .single();
+
+        if (error) {
+          // 23505 here is the partial unique index, which means one specific
+          // thing. `fail` would flatten it to "that record already exists".
+          if (error.code === "23505") {
+            throw conflict("That person already has a pending invitation.");
+          }
+          fail(error, "send that invitation");
+        }
+
+        return toInvitation(data as Row);
+      },
+
+      async listPending(scope) {
+        const { data, error } = await client
+          .from("invitations")
+          .select("*, invited_by:users!invitations_invited_by_user_id_fkey(full_name)")
+          .eq("organization_id", scope.organizationId)
+          .eq("status", "pending")
+          .order("created_at", { ascending: false });
+
+        if (error) fail(error, "load pending invitations");
+
+        return rows(data).map((row) => {
+          const inviter = row.invited_by as Row | null;
+          return {
+            ...toInvitation(row),
+            invitedByName: (inviter?.full_name as string | undefined) ?? null,
+          };
+        });
+      },
+
+      async revoke(scope, invitationId) {
+        // Conditional on `pending`, so revoking something already accepted
+        // cannot silently appear to succeed.
+        const { data, error } = await client
+          .from("invitations")
+          .update({ status: "revoked", revoked_at: new Date().toISOString() })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", invitationId)
+          .eq("status", "pending")
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "revoke that invitation");
+        if (!data) throw notFound("Pending invitation");
+        return toInvitation(data as Row);
+      },
+
+      async preview(tokenHash) {
+        // An RPC rather than a select: the caller may not be signed in, and
+        // even signed in they are not a member of the organization yet, so no
+        // policy on `invitations` would return the row. The function is
+        // SECURITY DEFINER and keyed by the token hash.
+        const { data, error } = await client.rpc("invitation_preview", {
+          invitation_token_hash: tokenHash,
+        });
+
+        if (error) fail(error, "read that invitation");
+
+        const row = rows(data)[0];
+        if (!row) return null;
+
+        return {
+          organizationName: String(row.organization_name),
+          email: String(row.invited_email),
+          role: row.invited_role as Invitation["role"],
+          state: row.invitation_state as InvitationPreview["state"],
+        };
+      },
+
+      // The `userId` the interface offers is deliberately not accepted here.
+      // `accept_invitation` reads `auth.uid()` itself, so a caller cannot join
+      // on somebody else's behalf even if this adapter were wrong. The
+      // parameter stays in the interface for the demo adapter, which has no
+      // session to read and must be told who is acting.
+      async accept(tokenHash) {
+        const { data, error } = await client.rpc("accept_invitation", {
+          invitation_token_hash: tokenHash,
+        });
+
+        if (error) {
+          // Unknown, expired, spent, revoked, and addressed to somebody else
+          // all raise P0002 from the function, by design.
+          if (error.code === "P0002") {
+            throw invalidInput("That invitation cannot be accepted.");
+          }
+          fail(error, "accept that invitation");
+        }
+
+        if (typeof data !== "string") {
+          throw new DataError("unavailable", "Could not accept that invitation. Please try again.");
+        }
+
+        return { organizationId: data };
       },
     },
 

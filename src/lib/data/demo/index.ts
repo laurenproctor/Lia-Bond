@@ -10,6 +10,8 @@ import {
   finishAnalysisRunInputSchema,
   finishSyncRunInputSchema,
   ingestMentionInputSchema,
+  invitationState,
+  isExpired,
   isAnalysisRunStale,
   isEscalationClosed,
   isSuccessfulAnalysisRun,
@@ -30,7 +32,9 @@ import {
   type AuditEvent,
   type AutomationRule,
   type Escalation,
+  type Invitation,
   type Location,
+  type Membership,
   type Mention,
   type MentionAnalysis,
   type OAuthState,
@@ -75,6 +79,22 @@ function nowIso(): string {
   return REFERENCE_NOW;
 }
 
+/**
+ * The wall clock, for records whose lifetime is real.
+ *
+ * Invitations are the exception to the seed clock, and it has to be an
+ * exception: their `expiresAt` is computed by the action from `Date.now()`, so
+ * checking it against a frozen `REFERENCE_NOW` compares two different clocks.
+ * The seed instant is in the past and recedes further every day, which means a
+ * demo invitation would never expire — the check would silently pass forever.
+ *
+ * Seeded rows keep the frozen clock, because their whole purpose is to render
+ * identically on every machine. Nothing here is seeded.
+ */
+function realNowIso(): string {
+  return new Date().toISOString();
+}
+
 function textIncludes(haystack: string | null, needle: string): boolean {
   return (haystack ?? "").toLowerCase().includes(needle);
 }
@@ -87,14 +107,14 @@ function textIncludes(haystack: string | null, needle: string): boolean {
  * them. So a numeric suffix is appended rather than the create failing on a
  * conflict the user did not cause and cannot see.
  */
-function uniqueSlug(name: string, taken: Set<string>): string {
+function uniqueSlug(name: string, taken: Set<string>, fallback = "location"): string {
   const base =
     name
       .toLowerCase()
       .normalize("NFKD")
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 56) || "location";
+      .slice(0, 56) || fallback;
 
   if (!taken.has(base)) return base;
 
@@ -114,6 +134,43 @@ export function createDemoDataSource(): LiaDataSource {
     rows: T[],
     scope: OrganizationScope,
   ): T[] => scoped(rows, scope.organizationId);
+
+  function findMembership(scope: OrganizationScope, userId: string): Membership {
+    const membership = orgRows(store().memberships, scope).find(
+      (row) => row.userId === userId,
+    );
+    if (!membership) throw notFound("Membership");
+    return membership;
+  }
+
+  /**
+   * Refuse to strip the last active owner.
+   *
+   * An organization with no owner cannot be repaired through the interface —
+   * there is nobody left who could promote anyone — so this is checked before
+   * the write rather than reported after it.
+   */
+  function assertNotLastOwner(scope: OrganizationScope, userId: string): void {
+    const otherOwners = orgRows(store().memberships, scope).filter(
+      (row) => row.role === "owner" && row.status === "active" && row.userId !== userId,
+    );
+
+    if (otherOwners.length === 0) {
+      throw conflict(
+        "This is the only owner. Make somebody else an owner first, then change this one.",
+      );
+    }
+  }
+
+  /** The invitation a token hash refers to, or null. Never logs the hash. */
+  function findByTokenHash(tokenHash: string): Invitation | null {
+    const runtime = demoRuntimeStore();
+    for (const [invitationId, storedHash] of runtime.invitationTokenHashes) {
+      if (storedHash !== tokenHash) continue;
+      return runtime.invitations.find((row) => row.id === invitationId) ?? null;
+    }
+    return null;
+  }
 
   const mentionsIn = (scope: OrganizationScope): Mention[] =>
     orgRows(store().mentions, scope);
@@ -151,6 +208,44 @@ export function createDemoDataSource(): LiaDataSource {
         const all = await this.listForUser(userId);
         return all.find((entry) => entry.organization.id === organizationId) ?? null;
       },
+
+      async provision(input) {
+        const name = input.name.trim();
+        if (!name) throw invalidInput("An organization name is required.");
+
+        const user = store().users.find((row) => row.id === input.userId);
+        if (!user) throw notFound("User account");
+
+        const taken = new Set(store().organizations.map((row) => row.slug));
+        const timestamp = nowIso();
+
+        const organization = {
+          id: seedId(`organization:${name}:${input.userId}`),
+          name,
+          slug: uniqueSlug(name, taken, "organization"),
+          industry: input.industry?.trim() || "Restaurant group",
+          websiteUrl: null,
+          defaultTimezone: input.timezone?.trim() || "UTC",
+          defaultLanguage: input.language?.trim() || "en-US",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+
+        // Both rows or neither. In demo mode that is one synchronous block; the
+        // Supabase adapter gets the same guarantee from a function body.
+        store().organizations.push(organization);
+        store().memberships.push({
+          id: seedId(`membership:${organization.id}:${input.userId}`),
+          organizationId: organization.id,
+          userId: input.userId,
+          role: "owner",
+          status: "active",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+
+        return { organization, role: "owner", status: "active" };
+      },
     },
 
     memberships: {
@@ -178,6 +273,221 @@ export function createDemoDataSource(): LiaDataSource {
           .filter((membership) => membership.status === "active")
           .map((membership): User => membership.user)
           .sort((a, b) => a.fullName.localeCompare(b.fullName));
+      },
+
+      async countActiveOwners(scope) {
+        return orgRows(store().memberships, scope).filter(
+          (membership) => membership.role === "owner" && membership.status === "active",
+        ).length;
+      },
+
+      async updateRole(scope, userId, role) {
+        const membership = findMembership(scope, userId);
+
+        // Mirrors the database constraint trigger. Demo mode has no trigger, so
+        // without this the two adapters would disagree about what is legal —
+        // and the one without a database is the one tests run against.
+        if (membership.role === "owner" && role !== "owner") {
+          assertNotLastOwner(scope, userId);
+        }
+
+        return replaceRow(store().memberships, {
+          ...membership,
+          role,
+          updatedAt: nowIso(),
+        });
+      },
+
+      async updateStatus(scope, userId, status) {
+        const membership = findMembership(scope, userId);
+
+        if (membership.role === "owner" && status !== "active") {
+          assertNotLastOwner(scope, userId);
+        }
+
+        return replaceRow(store().memberships, {
+          ...membership,
+          status,
+          updatedAt: nowIso(),
+        });
+      },
+
+      async remove(scope, userId) {
+        const membership = findMembership(scope, userId);
+        if (membership.role === "owner") assertNotLastOwner(scope, userId);
+
+        const rows = store().memberships;
+        rows.splice(rows.indexOf(membership), 1);
+      },
+    },
+
+    invitations: {
+      async create(scope, input) {
+        const email = input.email.trim().toLowerCase();
+        if (!email.includes("@")) throw invalidInput("Enter a valid email address.");
+
+        // The partial unique index, in application form. Demo mode has no
+        // index, and letting two live invitations exist here would make the
+        // adapters disagree about a rule the tests rely on.
+        const alreadyPending = demoRuntimeStore().invitations.some(
+          (row) =>
+            row.organizationId === scope.organizationId &&
+            row.email === email &&
+            row.status === "pending",
+        );
+        if (alreadyPending) {
+          throw conflict("That person already has a pending invitation.");
+        }
+
+        if (
+          orgRows(store().memberships, scope).some((membership) => {
+            const user = store().users.find((row) => row.id === membership.userId);
+            return user?.email.toLowerCase() === email;
+          })
+        ) {
+          throw conflict("That person is already a member of this organization.");
+        }
+
+        const runtime = demoRuntimeStore();
+        runtime.invitationSequence += 1;
+        const timestamp = realNowIso();
+
+        const invitation = {
+          id: seedId(`invitation:${scope.organizationId}:${runtime.invitationSequence}`),
+          organizationId: scope.organizationId,
+          email,
+          role: input.role,
+          status: "pending" as const,
+          invitedByUserId: input.invitedByUserId,
+          expiresAt: input.expiresAt,
+          acceptedAt: null,
+          acceptedByUserId: null,
+          revokedAt: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+
+        runtime.invitations.push(invitation);
+        // Held beside the record rather than on it, as the database does: the
+        // hash is a lookup key, and putting it on the domain object would carry
+        // it into anything that ever serialises an Invitation.
+        runtime.invitationTokenHashes.set(invitation.id, input.tokenHash);
+
+        return invitation;
+      },
+
+      async listPending(scope) {
+        return demoRuntimeStore()
+          .invitations.filter(
+            (row) => row.organizationId === scope.organizationId && row.status === "pending",
+          )
+          .map((row) => ({
+            ...row,
+            invitedByName:
+              store().users.find((user) => user.id === row.invitedByUserId)?.fullName ?? null,
+          }))
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      },
+
+      async revoke(scope, invitationId) {
+        const runtime = demoRuntimeStore();
+        const invitation = runtime.invitations.find(
+          (row) => row.id === invitationId && row.organizationId === scope.organizationId,
+        );
+
+        if (!invitation) throw notFound("Invitation");
+        if (invitation.status !== "pending") {
+          throw conflict("That invitation is no longer pending.");
+        }
+
+        const revoked = {
+          ...invitation,
+          status: "revoked" as const,
+          revokedAt: realNowIso(),
+          updatedAt: realNowIso(),
+        };
+        replaceRow(runtime.invitations, revoked);
+
+        // The hash is deliberately kept. Acceptance is gated on `status ===
+        // "pending"`, so a revoked invitation is already unusable — and
+        // keeping the lookup is what lets the acceptance page say "that
+        // invitation was withdrawn" instead of "that link is not valid".
+        // Postgres does the same thing, and the two adapters must not show
+        // different screens for the same situation.
+
+        return revoked;
+      },
+
+      async preview(tokenHash) {
+        const invitation = findByTokenHash(tokenHash);
+        if (!invitation) return null;
+
+        const organization = store().organizations.find(
+          (row) => row.id === invitation.organizationId,
+        );
+        if (!organization) return null;
+
+        return {
+          organizationName: organization.name,
+          email: invitation.email,
+          role: invitation.role,
+          state: invitationState(invitation, new Date(realNowIso())),
+        };
+      },
+
+      async accept(tokenHash, userId) {
+        const runtime = demoRuntimeStore();
+        const invitation = findByTokenHash(tokenHash);
+        const user = store().users.find((row) => row.id === userId);
+
+        // One failure for every reason, matching the SQL. The caller has
+        // already been told which by `preview`; distinguishing them here would
+        // only grade an attacker's attempts.
+        if (
+          !invitation ||
+          !user ||
+          invitation.status !== "pending" ||
+          isExpired(invitation, new Date(realNowIso())) ||
+          invitation.email !== user.email.trim().toLowerCase()
+        ) {
+          throw invalidInput("That invitation cannot be accepted.");
+        }
+
+        replaceRow(runtime.invitations, {
+          ...invitation,
+          status: "accepted",
+          acceptedAt: realNowIso(),
+          acceptedByUserId: userId,
+          updatedAt: realNowIso(),
+        });
+
+        const existing = store().memberships.find(
+          (row) =>
+            row.organizationId === invitation.organizationId && row.userId === userId,
+        );
+
+        if (existing) {
+          // Upsert, not insert. Re-inviting somebody who was suspended, or
+          // moving them to a different role, has to actually take effect.
+          replaceRow(store().memberships, {
+            ...existing,
+            role: invitation.role,
+            status: "active",
+            updatedAt: nowIso(),
+          });
+        } else {
+          store().memberships.push({
+            id: seedId(`membership:${invitation.organizationId}:${userId}`),
+            organizationId: invitation.organizationId,
+            userId,
+            role: invitation.role,
+            status: "active",
+            createdAt: nowIso(),
+            updatedAt: nowIso(),
+          });
+        }
+
+        return { organizationId: invitation.organizationId };
       },
     },
 
