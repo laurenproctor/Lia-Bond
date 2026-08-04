@@ -121,3 +121,24 @@ describe("location scoping", () => {
     ).toBe(false);
   });
 });
+
+describe("brand voice", () => {
+  it("is held by owners, admins, and the communications lead", () => {
+    expect(can("owner", "brand_voice.update")).toBe(true);
+    expect(can("admin", "brand_voice.update")).toBe(true);
+    expect(can("communications_lead", "brand_voice.update")).toBe(true);
+  });
+
+  it("is not held by approvers or location managers", () => {
+    // Approving one response is a different job from setting the policy for
+    // every response. A location manager's authority is scoped to their own
+    // restaurants, and the voice is organization-wide.
+    expect(can("approver", "brand_voice.update")).toBe(false);
+    expect(can("location_manager", "brand_voice.update")).toBe(false);
+  });
+
+  it("is not held by analysts or viewers", () => {
+    expect(can("analyst", "brand_voice.update")).toBe(false);
+    expect(can("viewer", "brand_voice.update")).toBe(false);
+  });
+});
