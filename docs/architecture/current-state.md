@@ -71,6 +71,9 @@ All screens render inside one shell (`src/app/(app)/layout.tsx`).
 | `/api/integrations/google-business-profile/callback` | OAuth callback | — |
 | `/api/integrations/google-business-profile/reviews/sync` | Manual review sync (POST only) | repositories + Google API |
 | `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
+| `/forgot-password` | Requests a reset link. Outside the app shell. | Supabase Auth |
+| `/reset-password` | Sets a new password using the recovery session. Outside the app shell. | Supabase Auth |
+| `/auth/callback` | Where an emailed auth link lands; establishes the session | Supabase Auth |
 | `/brand-voice` | Voice configuration | typed fixture (no table yet) |
 | `/settings` | Organization administration | repositories + typed fixture |
 
@@ -167,6 +170,41 @@ the middleware would make the app unpleasant, not insecure.
 `public.users.id`. An account created with a fresh id authenticates perfectly and
 then sees nothing at all. `npm run auth:seed` creates the seeded logins with
 their exact UUIDs for this reason.
+
+### Password recovery
+
+```text
+/forgot-password  ── requestPasswordResetAction ──▶ Supabase sends the email
+                                                          │
+/auth/callback  ◀── the emailed link ─────────────────────┘
+     └─ establishes the session, redirects to `next`
+          └─ /reset-password ── updatePasswordAction ──▶ /overview
+```
+
+The callback is a **route handler, not a page**, for the same reason refresh
+lives in middleware: a server component cannot set a cookie, so the session
+would be established and immediately lost.
+
+It accepts two link shapes, because which one arrives is decided by how the
+link was requested:
+
+| Parameter | Produced by | Bound to the requesting browser |
+| --- | --- | --- |
+| `code` | `resetPasswordForEmail` — the `@supabase/ssr` client sends a PKCE challenge | Yes. Fails if the email is opened on another device. |
+| `token_hash` + `type` | An admin-generated link, or the email template set to `{{ .TokenHash }}` | No. Works across devices. |
+
+A third shape cannot be served at all: an implicit-flow link carries its tokens
+in the URL **fragment**, which browsers never send to a server. A link landing
+on the callback with neither parameter is that case, and the fix is the email
+template rather than the handler.
+
+**The seeded logins cannot use this flow.** Their addresses are `@example.com`
+and receive nothing. `npm run auth:seed` is their recovery path — re-running it
+resets every seeded password, which is why it is idempotent.
+
+Requesting a reset reports success whether or not the address exists. "No
+account with that email" is a free account-enumeration oracle on an endpoint
+reachable without a session, so provider errors are logged and swallowed too.
 
 ## Technical constraints
 
@@ -271,6 +309,9 @@ their exact UUIDs for this reason.
 | D48 | Sign-in-with-Google stays separate from the Google Business Profile grant | Different lifetimes and different blast radius. The GBP grant is org-level standing authority over listings; sign-in is per-user identity. Sharing a credential would mean disconnecting Google logs everyone out, and reauthorizing a listing silently re-authenticates a person. |
 | D49 | `next` is validated as a relative path, not against a closed route list | `ALLOWED_REDIRECT_PATHS` names three integration screens — reusing it would discard where somebody was going whenever they signed in from anywhere else. An open redirect requires reaching another origin, so rejecting anything that can express one is sufficient and does not over-restrict. |
 | D50 | Sign-out is a form posting to a server action, not an `onClick` | It clears an httpOnly cookie, which only the server can do. It also works before hydration — being unable to sign out because a bundle is still loading is a bad failure for the one control somebody reaches for when they are worried. |
+| D51 | Reset requests report success unconditionally | "No account with that email" is a free account-enumeration oracle, and the endpoint is reachable without a session. Provider errors are logged and swallowed for the same reason: a rate-limit message tells the caller the address was worth rate-limiting. |
+| D52 | The callback accepts `token_hash` as well as `code` | Found by walking a real link rather than by reading the docs: an admin-generated link carries no PKCE verifier, so it arrives as a fragment or a token hash and the `code`-only handler rejected it as invalid. Supporting both also makes request-on-laptop, open-on-phone work, which PKCE alone cannot. |
+| D53 | The password policy is length-only, and lives in `src/lib/auth/password.ts` | Composition rules reliably produce `Passw0rd!`. The module exists because a `"use server"` file can only export async functions, so the action cannot own the constant the form must state — two copies would drift into a form promising one rule while the server applied another. |
 
 ## Known gaps after workflow 04
 

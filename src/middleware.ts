@@ -24,8 +24,20 @@ import { NextResponse, type NextRequest } from "next/server";
  * not insecure.
  */
 
-/** Routes reachable without a session. */
-const PUBLIC_PATHS = ["/sign-in", "/auth"];
+/**
+ * Routes reachable without a session.
+ *
+ * `/reset-password` is here even though it needs a *recovery* session, which
+ * is a real session. If middleware bounced an unauthenticated visitor, someone
+ * with a dead link would land back on sign-in with no explanation; the page
+ * checks for itself and says the link expired.
+ */
+const PUBLIC_PATHS = [
+  "/sign-in",
+  "/forgot-password",
+  "/reset-password",
+  "/auth",
+];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some(

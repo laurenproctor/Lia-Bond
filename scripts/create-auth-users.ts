@@ -16,7 +16,10 @@
  * permission matrix with a real session, not to model a real sign-up. The
  * script refuses to run against NODE_ENV=production.
  *
- * Idempotent: re-running updates the existing accounts rather than failing.
+ * Idempotent, and that is load-bearing rather than tidy: re-running **resets
+ * every seeded account's password** to the value below. That is the recovery
+ * path for these users, because the real one cannot work for them — a reset
+ * link would be emailed to an `@example.com` address that does not exist.
  *
  * Run with: npm run auth:seed
  */
@@ -122,8 +125,15 @@ for (const user of SEED_DATASET.users) {
 }
 
 console.log(
-  `\n${created} created, ${updated} updated, ${failed} failed.` +
+  `\n${created} created, ${updated} reset, ${failed} failed.` +
     (failed > 0 ? "\nSome accounts could not be created — see the errors above." : ""),
 );
+
+if (updated > 0) {
+  console.log(
+    "\nRe-running this is how you recover a seeded login: the password reset\n" +
+      "flow emails these @example.com addresses, which do not exist.",
+  );
+}
 
 if (failed > 0) process.exit(1);

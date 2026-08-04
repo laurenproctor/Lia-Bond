@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import { AlertTriangle, LogIn } from "lucide-react";
 import { signInAction, type SignInResult } from "@/app/actions/auth";
+import { AUTH_INPUT_CLASS } from "@/components/auth/auth-shell";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -61,7 +62,7 @@ export function SignInForm({ next }: { next?: string }) {
           autoComplete="email"
           required
           autoFocus
-          className="h-11 rounded-[10px] border border-gray-300 bg-white px-3.5 text-[14px] text-gray-950 outline-none focus-visible:border-purple-600 focus-visible:ring-2 focus-visible:ring-purple-600/20"
+          className={AUTH_INPUT_CLASS}
         />
       </div>
 
@@ -78,7 +79,7 @@ export function SignInForm({ next }: { next?: string }) {
           type="password"
           autoComplete="current-password"
           required
-          className="h-11 rounded-[10px] border border-gray-300 bg-white px-3.5 text-[14px] text-gray-950 outline-none focus-visible:border-purple-600 focus-visible:ring-2 focus-visible:ring-purple-600/20"
+          className={AUTH_INPUT_CLASS}
         />
       </div>
 
