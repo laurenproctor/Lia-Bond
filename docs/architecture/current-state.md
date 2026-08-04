@@ -1,7 +1,7 @@
 # Current state
 
 Factual snapshot of the Lia codebase after workflow 04 (AI provider layer and
-mention analysis). Update this document whenever a workflow changes the stack,
+mention analysis) and the authentication work that followed it. Update this document whenever a workflow changes the stack,
 the tenancy model, or the data flow.
 
 ## Stack
@@ -16,11 +16,11 @@ the tenancy model, or the data flow.
 | Charts | recharts | 3.10 |
 | Validation | zod | 4.4 |
 | Credential encryption | `node:crypto`, AES-256-GCM | stdlib |
-| SQL validation | libpg-query (parse only) | 17.x |
+| SQL validation | libpg-query (parse), plus migrations applied to a live project | 17.x |
 | Database (target) | Supabase / PostgreSQL | — |
 | Database client | `@supabase/supabase-js`, `@supabase/ssr` | 2.x / 0.12 |
 | Tests | vitest (node environment) | 4.x |
-| Auth provider | **none yet** — see "Authentication" below | — |
+| Auth provider | Supabase Auth, email + password | — |
 | State management | none; server components plus local `useState` | — |
 
 ## Directories
@@ -44,7 +44,7 @@ the tenancy model, or the data flow.
 | `src/lib/view-models/` | Maps domain records onto the props existing components expect. |
 | `supabase/migrations/` | Ordered SQL migrations. |
 | `supabase/seed.sql` | **Generated** from `src/lib/seed/dataset.ts`. Do not hand-edit. |
-| `scripts/` | Repository tooling: the seed-SQL generator and the migration parser. |
+| `scripts/` | Repository tooling: seed-SQL generator, migration parser, auth-user provisioning. |
 | `tests/` | Vitest suites. |
 
 ## Routes
@@ -70,6 +70,7 @@ All screens render inside one shell (`src/app/(app)/layout.tsx`).
 | `/api/integrations/google-business-profile/connect` | Starts OAuth (POST only) | — |
 | `/api/integrations/google-business-profile/callback` | OAuth callback | — |
 | `/api/integrations/google-business-profile/reviews/sync` | Manual review sync (POST only) | repositories + Google API |
+| `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
 | `/brand-voice` | Voice configuration | typed fixture (no table yet) |
 | `/settings` | Organization administration | repositories + typed fixture |
 
@@ -131,17 +132,41 @@ treated as an untrusted hint and re-verified server-side on every resolve.
 
 ## Authentication
 
-No auth provider is wired up yet. `src/lib/auth/session.ts` exposes
+Supabase Auth, email and password. `src/lib/auth/session.ts` exposes
 `getSession()` with two implementations behind one signature:
 
 - **Supabase** — used when `NEXT_PUBLIC_SUPABASE_URL` and
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set. Reads the Supabase auth session.
-- **Demo** — the default. Returns a seeded user, selectable through the
-  `lia_demo_user` cookie so role behaviour can be exercised locally.
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set. Reads the verified Supabase session.
+- **Demo** — the fallback. Returns a seeded user, selectable through the
+  `lia_demo_user` cookie so role behaviour can be exercised with no database.
 
-Membership verification, permission checks, and audit writes run identically in
-both modes, so introducing a real provider is a change to one file rather than a
-change to every call site.
+That split was designed before a provider existed, and it held: wiring one was a
+change to `middleware.ts`, a sign-in route, and a sign-out action — `getSession()`
+itself did not change, and neither did any call site.
+
+```text
+request
+  └─ middleware.ts               ← refreshes the token, redirects if signed out
+       └─ getSession()           ← the verified user, or null
+            └─ getOrganizationContext()
+                 └─ repositories ← queries run as that user; RLS applies
+```
+
+**Middleware does two things a page cannot.** A server component cannot set a
+cookie, so a refreshed access token could not survive the request without it —
+`createSupabaseServerClient` swallows the write for exactly that reason. And it
+turns an unauthenticated request into a redirect rather than a 500.
+
+It is **not** a security boundary. It runs on a browser-supplied cookie. The
+enforcement is row-level security in Postgres, where `auth.uid()` comes from the
+verified JWT — a forged cookie yields a session that can read nothing. Deleting
+the middleware would make the app unpleasant, not insecure.
+
+**`auth.users.id` must equal `public.users.id`.** Every policy resolves through
+`auth.uid() = memberships.user_id`, and `memberships.user_id` references
+`public.users.id`. An account created with a fresh id authenticates perfectly and
+then sees nothing at all. `npm run auth:seed` creates the seeded logins with
+their exact UUIDs for this reason.
 
 ## Technical constraints
 
@@ -237,19 +262,29 @@ change to every call site.
 | D44 | Synchronous Messages API, not Batches | Batches are half the price and can take an hour. Wrong for a button somebody is waiting on; the right home for a future overnight run. |
 | D45 | A run's first model call goes alone | The system prompt is cached, and no request can read an entry another is still writing. Firing the batch at once would pay full price for every mention. |
 
+## Decisions made wiring authentication
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D46 | `/sign-in` added outside the fixed route list | `CLAUDE.md` fixes the routes, and D16 refused an `/[organizationSlug]` prefix on that basis. This is a considered exception rather than drift: every route on that list is a product screen for a signed-in user, and all of them are unreachable without somewhere to sign in. It sits outside the `(app)` group, so it renders with no sidebar, switcher, or user menu — each of which needs the session it exists to establish. |
+| D47 | Email and password, not Google OAuth | The seeded users have `@example.com` addresses, so under Google OAuth none of them could ever sign in and the seven-role matrix would be untestable. Email and password creates all seven with matching UUIDs. Everything built here is provider-agnostic, so adding Google later is a dashboard toggle plus a button. |
+| D48 | Sign-in-with-Google stays separate from the Google Business Profile grant | Different lifetimes and different blast radius. The GBP grant is org-level standing authority over listings; sign-in is per-user identity. Sharing a credential would mean disconnecting Google logs everyone out, and reauthorizing a listing silently re-authenticates a person. |
+| D49 | `next` is validated as a relative path, not against a closed route list | `ALLOWED_REDIRECT_PATHS` names three integration screens — reusing it would discard where somebody was going whenever they signed in from anywhere else. An open redirect requires reaching another origin, so rejecting anything that can express one is sufficient and does not over-restrict. |
+| D50 | Sign-out is a form posting to a server action, not an `onClick` | It clears an httpOnly cookie, which only the server can do. It also works before hydration — being unable to sign out because a bundle is still loading is a bad failure for the one control somebody reaches for when they are worried. |
+
 ## Known gaps after workflow 04
 
 Carried over from workflow 01:
 
-- **Migrations have never been executed.** This environment has libpq client
-  tools only — no PostgreSQL server binary — and the Docker daemon is not
-  running, so `supabase start` cannot run. The SQL is validated by parse only,
-  now repeatably via `npm run db:validate`.
-- The Supabase adapter is written against the schema but is **unverified against
-  a live database** for the same reason. This now includes the credential and
-  OAuth-state repositories, and the two Postgres functions they call.
-- There is no real authentication provider, so `auth.uid()` is never populated in
-  practice yet.
+- ~~Migrations have never been executed.~~ **Resolved.** All eight are applied to
+  a hosted Supabase project via `supabase db push`, the seed is loaded, and the
+  RLS policies are verified against live Postgres — including a harness
+  self-test confirming the checks can actually fail. Running them surfaced a
+  seed-generator bug that four workflows of parse-validation had missed.
+- The Supabase adapter is now partly exercised: reads through the inbox,
+  overview, and mention detail run against real Postgres under RLS. The write
+  paths — sync ingest, analysis, escalation creation — have still only run
+  against the demo adapter.
 - Brand voice has no table; the screen still reads a typed fixture.
 - Insights aggregates are computed in the repository layer over the full mention
   set. They will need SQL aggregates or a materialized view at real volume.
