@@ -540,6 +540,7 @@ Guarantees:
 | "a sync is already running" | Another request holds the lock | Wait. It clears when that run finishes, or after 30 minutes if its process died. |
 | Sync reports 0 fetched on a busy listing | Wrong Google location mapped, or the listing is unverified | Check the mapping on the setup screen; verify the location in Google. |
 | "no longer available to this connection" | Google 404 — unverified location, or access withdrawn | Verify the location in Google, or reauthorize with an account that manages it. |
+| Discovery and mapping work, but **every** review sync fails | The **Google My Business API** (legacy v4) is not enabled. The two v1 APIs cover accounts and locations only. | Enable it in the Cloud Console — see §16. |
 | Reviews imported with no restaurant attached | The Google listing is mapped to no Lia location | Map it on the setup screen, then sync again — the ingest is idempotent. |
 | "some reviews could not be stored" | Item-level failures; the rest were saved | Run the sync again. Check `platform_sync_runs.error_code` for the reason. |
 | Counts show everything "unchanged" | Working as intended | That is what an idempotent second run looks like. |
@@ -550,18 +551,51 @@ state values, or Google's message text.
 ## 16. Google Cloud Console setup
 
 1. Create a Google Cloud project.
-2. Enable the Business Profile APIs — at minimum **My Business Account
-   Management API** and **My Business Business Information API**.
-3. **Request Business Profile API access.** Google gates these behind an
-   application form and grants a default quota of zero. Approval takes days to
-   weeks; without it, calls fail even with a valid token. This is the step most
-   likely to block a first real connection.
+
+2. **Request Business Profile API access — do this first.** Google gates these
+   APIs behind an application form and grants a **default quota of zero**.
+   Approval takes days to weeks, and until it lands a perfectly valid OAuth
+   token returns quota errors on every call — which reads like a broken
+   integration rather than a pending form. The console work below takes
+   minutes; the wait does not.
+
+3. **Enable the APIs Lia actually calls.** Google's setup page lists eight;
+   these three are the ones this codebase reaches, and enabling all eight is
+   harmless if you would rather not think about it.
+
+   | Enable | Because the client calls | Used for |
+   | --- | --- | --- |
+   | My Business Account Management API | `mybusinessaccountmanagement.googleapis.com/v1` | Accounts the user administers |
+   | My Business Business Information API | `mybusinessbusinessinformation.googleapis.com/v1` | Locations under an account |
+   | **Google My Business API** | `mybusiness.googleapis.com/v4` | **Reviews** |
+
+   The third is the one that gets missed. It is the legacy v4 API, its name
+   does not follow the `My Business *` pattern of the others, and it is the
+   only one that serves reviews — Google never migrated them to the v1 family
+   (see §17). Enable the first two and OAuth, discovery, and location mapping
+   all work perfectly; then review sync fails with `resource_unavailable` and
+   looks like a permissions problem.
+
 4. Configure the OAuth consent screen. External apps serving other people's
    businesses require verification, since `business.manage` is a sensitive scope.
+
 5. Create an **OAuth 2.0 Client ID** of type *Web application*.
+
+   Not an API key, and not a service account. An API key identifies the
+   project rather than a person, and these endpoints return one specific
+   owner's listings — there is no way to express "on behalf of this user" with
+   one. A service account has no path to a Business Profile at all: there is no
+   domain-wide delegation for it, so no service account can be granted access
+   to somebody's listings. Google's own wording is *"Because your app accesses
+   protected, non-public data, you need an OAuth 2.0 client ID."*
+
 6. Register the redirect URI exactly as in `.env.example`, for every
    environment.
+
 7. Put the client id and secret in `.env.local` — never in the repository.
+
+Reference: [Basic setup](https://developers.google.com/my-business/content/basic-setup)
+and [Prerequisites](https://developers.google.com/my-business/content/prereqs).
 
 ## 17. Review synchronisation (workflow 03)
 
