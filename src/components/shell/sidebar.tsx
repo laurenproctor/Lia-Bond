@@ -84,8 +84,8 @@ export function Sidebar({
         )}
       >
         <div className="flex h-14 items-center justify-between px-4 md:h-16 md:justify-center xl:justify-start xl:px-5">
-          <Logo className="md:hidden xl:inline-flex" />
-          <Logo compact className="hidden md:inline-flex xl:hidden" />
+          <Logo className="md:hidden xl:block" />
+          <Logo compact className="hidden md:block xl:hidden" />
           <button
             type="button"
             onClick={() => setDrawerOpen(false)}

@@ -42,6 +42,18 @@ export type GoogleIntegrationMode = z.infer<typeof googleIntegrationModeSchema>;
 const aiModeSchema = z.enum(["live", "mock"]);
 export type AiMode = z.infer<typeof aiModeSchema>;
 
+/**
+ * How outbound mail leaves this process.
+ *
+ * `log` writes the message to the server log and delivers nothing. It exists so
+ * the help form can be exercised locally without a Resend account, and — like
+ * every other mock in this file — it is refused in production. The UI is told
+ * which mode ran and says "recorded, not sent" rather than claiming a delivery
+ * that did not happen.
+ */
+const emailModeSchema = z.enum(["live", "log"]);
+export type EmailMode = z.infer<typeof emailModeSchema>;
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -79,6 +91,17 @@ const envSchema = z
      */
     LIA_ANALYSIS_BATCH_SIZE: z.coerce.number().int().min(1).max(500).optional(),
 
+    /* Outbound mail. Server-only. */
+    RESEND_API_KEY: z.string().min(10).optional(),
+    LIA_EMAIL_MODE: emailModeSchema.optional(),
+    /** Where help requests land. */
+    SUPPORT_INBOX_EMAIL: z.email().optional(),
+    /**
+     * Envelope sender. Accepts a bare address or "Name <address>", which is why
+     * it is not `z.email()`. Must sit on a domain verified with Resend.
+     */
+    SUPPORT_FROM_EMAIL: z.string().min(5).optional(),
+
     /** 32 bytes, base64 / base64url / hex. Encrypts stored OAuth credentials. */
     TOKEN_ENCRYPTION_KEY: z.string().min(32).optional(),
     /** Names the active key so ciphertext stays readable across a rotation. */
@@ -103,6 +126,13 @@ const envSchema = z
       message: "LIA_AI_MODE=mock is refused in production",
       path: ["LIA_AI_MODE"],
     },
+  )
+  .refine(
+    (value) => !(value.LIA_EMAIL_MODE === "log" && value.NODE_ENV === "production"),
+    {
+      message: "LIA_EMAIL_MODE=log is refused in production",
+      path: ["LIA_EMAIL_MODE"],
+    },
   );
 
 export type Env = z.infer<typeof envSchema>;
@@ -122,6 +152,10 @@ function readEnv(): Env {
     GOOGLE_INTEGRATION_MODE: process.env.GOOGLE_INTEGRATION_MODE || undefined,
     TOKEN_ENCRYPTION_KEY: process.env.TOKEN_ENCRYPTION_KEY || undefined,
     TOKEN_ENCRYPTION_KEY_ID: process.env.TOKEN_ENCRYPTION_KEY_ID || undefined,
+    RESEND_API_KEY: process.env.RESEND_API_KEY || undefined,
+    LIA_EMAIL_MODE: process.env.LIA_EMAIL_MODE || undefined,
+    SUPPORT_INBOX_EMAIL: process.env.SUPPORT_INBOX_EMAIL || undefined,
+    SUPPORT_FROM_EMAIL: process.env.SUPPORT_FROM_EMAIL || undefined,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || undefined,
     LIA_AI_MODE: process.env.LIA_AI_MODE || undefined,
     LIA_ANALYSIS_BATCH_SIZE: process.env.LIA_ANALYSIS_BATCH_SIZE || undefined,
@@ -326,6 +360,77 @@ export function requireAnthropicApiKey(): string {
   }
 
   return env.ANTHROPIC_API_KEY;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Outbound mail                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Where a help request goes when nothing else is configured.
+ *
+ * A default rather than a required variable on purpose: the help form is the
+ * one path in the app where failing closed would mean a person with a problem
+ * has no way to report it.
+ */
+export const DEFAULT_SUPPORT_INBOX = "laurenproctor32@gmail.com";
+
+/**
+ * Resend's shared sending identity.
+ *
+ * Usable with no DNS setup at all, but it only delivers to the address that
+ * owns the Resend account — so a CC to anyone else is dropped by Resend, not by
+ * Lia. Set `SUPPORT_FROM_EMAIL` to an address on a verified domain to lift that.
+ */
+export const DEFAULT_SUPPORT_FROM = "Lia support <onboarding@resend.dev>";
+
+export function isEmailConfigured(): boolean {
+  return Boolean(env.RESEND_API_KEY);
+}
+
+/**
+ * Which sender this process should use.
+ *
+ * Same posture as the Google and analysis modes: explicit configuration wins, a
+ * key means live, and the no-delivery mode is never chosen for you — so nobody
+ * mistakes a logged message for a sent one.
+ */
+export function resolveEmailMode(): EmailMode | "unconfigured" {
+  if (env.LIA_EMAIL_MODE === "log") {
+    // The schema already refuses this in production; this is the branch that
+    // would silently swallow mail, so it re-checks rather than trusts.
+    if (env.NODE_ENV === "production") {
+      throw new ConfigurationError(
+        "LIA_EMAIL_MODE=log cannot be used in production.",
+        ["LIA_EMAIL_MODE"],
+      );
+    }
+    return "log";
+  }
+
+  if (env.LIA_EMAIL_MODE === "live") return "live";
+  return isEmailConfigured() ? "live" : "unconfigured";
+}
+
+/** The Resend key, or a configuration error naming what is missing. */
+export function requireResendApiKey(): string {
+  if (!env.RESEND_API_KEY) {
+    throw new ConfigurationError("Email is not configured on this server.", [
+      "RESEND_API_KEY",
+    ]);
+  }
+
+  return env.RESEND_API_KEY;
+}
+
+/** The address help requests are delivered to. */
+export function supportInboxAddress(): string {
+  return env.SUPPORT_INBOX_EMAIL ?? DEFAULT_SUPPORT_INBOX;
+}
+
+/** The address help requests are sent from. */
+export function supportFromAddress(): string {
+  return env.SUPPORT_FROM_EMAIL ?? DEFAULT_SUPPORT_FROM;
 }
 
 /**

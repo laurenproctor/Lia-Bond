@@ -4,6 +4,7 @@ import {
   BarChart3,
   Building2,
   LayoutDashboard,
+  LifeBuoy,
   MessageCircle,
   MessagesSquare,
   Newspaper,
@@ -87,6 +88,13 @@ export const NAV_SECTIONS: NavSection[] = [
       { label: "Integrations", href: "/integrations", icon: Plug },
       { label: "Settings", href: "/settings", icon: Settings },
     ],
+  },
+  {
+    // Unlabelled and last, so it reads as a footer item rather than another
+    // part of the product to configure.
+    id: "support",
+    label: null,
+    items: [{ label: "Help", href: "/help", icon: LifeBuoy }],
   },
 ];
 

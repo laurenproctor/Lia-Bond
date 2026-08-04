@@ -84,7 +84,7 @@ export function UserMenu({
           {[
             { label: "Your profile", href: "/settings", icon: UserRound },
             { label: "Organization settings", href: "/settings", icon: Settings },
-            { label: "Help center", href: "/settings", icon: LifeBuoy },
+            { label: "Help", href: "/help", icon: LifeBuoy },
           ].map((item) => (
             <Link
               key={item.label}

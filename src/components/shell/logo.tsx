@@ -1,6 +1,16 @@
+import Image from "next/image";
 import { cn } from "@/lib/cn";
 
-/** Lia wordmark. The sparkle is decorative; the text carries the name. */
+import mark from "../../../public/lia-logo.png";
+
+/**
+ * Lia mark: the wordmark with the speech bubble standing in for the dot on the i.
+ *
+ * The supplied artwork is neon line art, whose stroke falls below a pixel at the
+ * sizes the shell actually renders it, so the asset is the filled silhouette of
+ * that mark rather than its outline. `alt` carries the name; there is no
+ * separate text beside it.
+ */
 export function Logo({
   className,
   compact = false,
@@ -9,26 +19,11 @@ export function Logo({
   compact?: boolean;
 }) {
   return (
-    <span
-      className={cn(
-        "inline-flex items-baseline gap-0.5 font-semibold tracking-tight text-white select-none",
-        compact ? "text-lg" : "text-[26px]",
-        className,
-      )}
-    >
-      Lia
-      <svg
-        viewBox="0 0 12 12"
-        className={cn("self-start", compact ? "size-2" : "size-2.5")}
-        aria-hidden
-        focusable="false"
-      >
-        <path
-          d="M6 0 7.3 4.7 12 6 7.3 7.3 6 12 4.7 7.3 0 6l4.7-1.3z"
-          fill="var(--color-purple-400)"
-        />
-      </svg>
-      <span className="sr-only">Lia</span>
-    </span>
+    <Image
+      src={mark}
+      alt="Lia"
+      priority
+      className={cn("w-auto select-none", compact ? "h-7" : "h-10", className)}
+    />
   );
 }
