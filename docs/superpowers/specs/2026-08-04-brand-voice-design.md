@@ -172,20 +172,30 @@ against the stored row and, when nothing differs, returns the existing row
 unchanged — no `version` bump, no `updated_at` change (D63). Both adapters
 implement the same comparison, and the demo adapter is where it is tested.
 
-## Server action
+## Save service and server action
 
-`src/app/actions/brand-voice.ts` — `updateBrandVoiceAction`, following
-`setAutomationRuleEnabledAction` step for step:
+Split in two, following `analyzeMentions` rather than
+`setAutomationRuleEnabledAction`. The reason is testability: nothing under
+`tests/` imports `@/app/actions`, and the repository has no mocking
+infrastructure at all, so logic inside an action is logic no test can reach. The
+service takes an already-authorized context and is the tested unit; the action
+authorizes, calls it, and revalidates.
 
 ```text
-runAction("brand_voice.update")
-  └─ updateBrandVoiceInputSchema.parse(input)
-  └─ authorize("brand_voice.update")
-  └─ dataSource.brandVoice.get()      ← previous state, for the diff
-  └─ dataSource.brandVoice.save()
-  └─ recordAuditEvent()               ← skipped when nothing changed
-  └─ revalidatePath("/brand-voice")
+updateBrandVoiceAction                       src/app/actions/brand-voice.ts
+  └─ runAction("brand_voice.update")
+       └─ updateBrandVoiceInputSchema.parse(input)   ← before the role check
+       └─ authorize("brand_voice.update")
+       └─ saveBrandVoice(context, input)      src/lib/brand-voice/save.ts
+            └─ brandVoice.get()               ← previous state, for the diff
+            └─ brandVoice.save()
+            └─ recordAuditEvent()             ← skipped when nothing changed
+       └─ revalidatePath("/brand-voice")
 ```
+
+Parsing precedes the role check so malformed input is reported as a validation
+error whoever sends it, rather than as "forbidden" for a payload that was never
+valid.
 
 The audit event carries the previous and new state. Phrase lists are
 organization-authored configuration, not customer data, so they are recorded in
@@ -256,11 +266,17 @@ migration parsing.
   save inserts at version 1, a changed save bumps to 2, a no-op save leaves
   both `version` and `updated_at` alone.
 
-### Action
+### Save service
 
-- `tests/brand-voice-action.test.ts` — a disallowed role is rejected before any
-  write; a successful save records an audit event; a no-op save records none;
-  invalid input is rejected without reaching the repository.
+- `tests/brand-voice-save.test.ts` — a successful save persists and records
+  exactly one attributed audit event; the event carries only the fields that
+  moved; a no-op save records none and leaves the version alone; a creation
+  records a null previous state; one organization's trail stays out of
+  another's.
+
+The role check is **not** tested here. It lives in the action, via
+`authorize()`, and the matrix behind it is covered by `tests/permissions.test.ts`
+— the same boundary every other action in the repository has.
 
 ## Non-goals
 
