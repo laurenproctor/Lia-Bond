@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isSitePath } from "@/lib/site/routes";
 
 /**
  * Session refresh and the authentication gate.
@@ -95,7 +96,12 @@ export async function middleware(request: NextRequest) {
 
   const { pathname, search } = request.nextUrl;
 
-  if (!user && !isPublic(pathname)) {
+  // `isSitePath` is separate from `isPublic` rather than folded into it because
+  // the two answer different questions: `isPublic` means "an auth screen that
+  // must stay reachable without a session", `isSitePath` means "public
+  // marketing". Merging them would blur a distinction the comments above
+  // explain carefully.
+  if (!user && !isPublic(pathname) && !isSitePath(pathname)) {
     const signIn = request.nextUrl.clone();
     signIn.pathname = "/sign-in";
     signIn.search = "";
