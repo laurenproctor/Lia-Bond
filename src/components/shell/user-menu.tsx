@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronsUpDown, LifeBuoy, LogOut, Settings, UserRound } from "lucide-react";
 import Link from "next/link";
+import { signOutAction } from "@/app/actions/auth";
 import { Avatar } from "@/components/ui/avatar";
 import { cn } from "@/lib/cn";
 import { MEMBERSHIP_ROLE_LABELS } from "@/lib/labels";
@@ -97,14 +98,23 @@ export function UserMenu({
             </Link>
           ))}
           <div className="my-1 border-t border-gray-200" />
-          <button
-            type="button"
-            role="menuitem"
-            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-gray-700 hover:bg-gray-50 hover:text-gray-950"
-          >
-            <LogOut className="size-4 text-gray-500" aria-hidden />
-            Log out
-          </button>
+          {/*
+            A form rather than an onClick handler: signing out clears an
+            httpOnly cookie, which only the server can do. It also means the
+            control works before React has hydrated — being unable to sign out
+            because a bundle is still loading is a bad failure for the one
+            action somebody reaches for when they are worried.
+          */}
+          <form action={signOutAction}>
+            <button
+              type="submit"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-gray-700 hover:bg-gray-50 hover:text-gray-950"
+            >
+              <LogOut className="size-4 text-gray-500" aria-hidden />
+              Log out
+            </button>
+          </form>
         </div>
       ) : null}
     </div>

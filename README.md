@@ -159,6 +159,47 @@ review mentioning an allergic reaction produces a critical escalation locally.
 Full detail, including the cost model, the prompt-versioning rule, and the
 known limits: [`docs/ai/analysis.md`](docs/ai/analysis.md).
 
+## Signing in
+
+Supabase Auth, email and password. Middleware refreshes the session on every
+request and redirects an unauthenticated request to `/sign-in` rather than
+letting it reach a page that throws.
+
+With a Supabase project configured, create logins for the seeded users:
+
+```bash
+npm run auth:seed
+```
+
+That mints one account per seeded user **with the seeded UUID**, which matters
+more than it looks: every RLS policy resolves through
+`auth.uid() = memberships.user_id`, so an account created with a fresh id
+authenticates perfectly and then sees nothing at all.
+
+All seven share the password `lia-dev-password` and let you exercise the whole
+permission matrix:
+
+| Email | Role |
+| --- | --- |
+| `daniel.reyes@example.com` | owner |
+| `kate.morgan@example.com` | admin |
+| `naomi.clarke@example.com` | communications lead |
+| `priya.raman@example.com` | location manager |
+| `marcus.bell@example.com` | approver |
+| `jordan.ellis@example.com` | analyst |
+| `sofia.duarte@example.com` | owner, second organization |
+
+Sign in as the analyst and the **Analyze** control disappears; sign in as Sofia
+and you see Harbor & Vine's mentions and none of Union Square's. Both are
+enforced in Postgres, not in the UI.
+
+The script refuses to run with `NODE_ENV=production` — these are fictional
+people sharing one published password.
+
+**Without** a Supabase project the app falls back to demo mode: `getSession()`
+returns a seeded user and sign-in is not required, so the app still runs with no
+database at all.
+
 ## Local database setup
 
 Requires Docker (for `supabase start`) and the Supabase CLI.
