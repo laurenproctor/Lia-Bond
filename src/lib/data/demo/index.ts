@@ -26,6 +26,7 @@ import {
   sourceFieldsChanged,
   startAnalysisRunInputSchema,
   startSyncRunInputSchema,
+  updateBrandVoiceInputSchema,
   upsertPlatformConnectionInputSchema,
   upsertPlatformProfileInputSchema,
   type AnalysisRun,
@@ -1779,6 +1780,12 @@ export function createDemoDataSource(): LiaDataSource {
       },
 
       async save(scope, input) {
+        // Re-parse rather than trust the caller's shape: this is what actually
+        // enforces phrase deduplication, trim-and-drop-blanks, the length caps,
+        // and the approved/prohibited collision rule. A caller reaching the
+        // repository directly bypasses none of that.
+        const value = updateBrandVoiceInputSchema.parse(input);
+
         const existing = store().brandVoiceProfiles.find(
           (row) => row.organizationId === scope.organizationId,
         );
@@ -1787,10 +1794,10 @@ export function createDemoDataSource(): LiaDataSource {
           const created: BrandVoiceProfile = {
             id: seedId(`brand_voice:${scope.organizationId}`),
             organizationId: scope.organizationId,
-            name: input.name,
-            axes: { ...input.axes },
-            approvedPhrases: [...input.approvedPhrases],
-            prohibitedPhrases: [...input.prohibitedPhrases],
+            name: value.name,
+            axes: { ...value.axes },
+            approvedPhrases: [...value.approvedPhrases],
+            prohibitedPhrases: [...value.prohibitedPhrases],
             version: 1,
             updatedByUserId: scope.userId,
             createdAt: nowIso(),
@@ -1805,14 +1812,14 @@ export function createDemoDataSource(): LiaDataSource {
         // `response_drafts.brand_voice_version` records which voice produced a
         // draft, so bumping on a no-op would invalidate the provenance of every
         // existing draft because somebody pressed Save twice.
-        if (matchesStored(existing, input)) return existing;
+        if (matchesStored(existing, value)) return existing;
 
         const updated: BrandVoiceProfile = {
           ...existing,
-          name: input.name,
-          axes: { ...input.axes },
-          approvedPhrases: [...input.approvedPhrases],
-          prohibitedPhrases: [...input.prohibitedPhrases],
+          name: value.name,
+          axes: { ...value.axes },
+          approvedPhrases: [...value.approvedPhrases],
+          prohibitedPhrases: [...value.prohibitedPhrases],
           version: existing.version + 1,
           updatedByUserId: scope.userId,
           updatedAt: nowIso(),

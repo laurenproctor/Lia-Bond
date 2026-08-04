@@ -447,4 +447,31 @@ describe("brand voice", () => {
     const ushgProfile = await data.brandVoice.get(ushg.admin());
     expect(ushgProfile?.name).not.toBe("Harbor voice");
   });
+
+  it("rejects a phrase listed in both the approved and prohibited lists", async () => {
+    await expect(
+      data.brandVoice.save(harbor.owner(), {
+        ...input,
+        approvedPhrases: ["thank you"],
+        prohibitedPhrases: ["thank you"],
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("dedupes phrases differing only in case, keeping the first spelling", async () => {
+    const saved = await data.brandVoice.save(harbor.owner(), {
+      ...input,
+      approvedPhrases: ["Thank You", "thank you"],
+    });
+    expect(saved.approvedPhrases).toEqual(["Thank You"]);
+  });
+
+  it("rejects a phrase over 80 characters", async () => {
+    await expect(
+      data.brandVoice.save(harbor.owner(), {
+        ...input,
+        approvedPhrases: ["a".repeat(81)],
+      }),
+    ).rejects.toThrow();
+  });
 });
