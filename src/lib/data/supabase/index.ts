@@ -3,19 +3,26 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   canDecideOnDraft,
+  createEscalationInputSchema,
   createLocationInputSchema,
+  createMentionAnalysisInputSchema,
   createMentionInputSchema,
+  finishAnalysisRunInputSchema,
   finishSyncRunInputSchema,
   ingestMentionInputSchema,
+  isAnalysisRunStale,
   isEscalationClosed,
+  isSuccessfulAnalysisRun,
   isSuccessfulSyncRun,
   isSyncRunStale,
   recordAuditEventInputSchema,
   requiresResolutionNote,
   sourceFieldsChanged,
+  startAnalysisRunInputSchema,
   startSyncRunInputSchema,
   upsertPlatformConnectionInputSchema,
   upsertPlatformProfileInputSchema,
+  type AnalysisRun,
   type Approval,
   type Mention,
   type MentionAnalysis,
@@ -33,12 +40,14 @@ import {
   rankByUrgency,
 } from "@/lib/data/metrics";
 import {
+  AnalysisRunInProgressError,
   SyncRunInProgressError,
   type LiaDataSource,
   type OrganizationScope,
   type ProfileSyncState,
 } from "@/lib/data/types";
 import {
+  toAnalysisRun,
   toApproval,
   toAuditEvent,
   toAutomationRule,
@@ -142,6 +151,18 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
     return privileged;
   };
 
+  /** The analysis run currently holding this organization's lock, if any. */
+  async function findActiveAnalysisRun(
+    scope: OrganizationScope,
+  ): Promise<AnalysisRun | null> {
+    const { data, error } = await from("analysis_runs", scope)
+      .eq("status", "running")
+      .maybeSingle();
+
+    if (error) fail(error, "check for a running analysis");
+    return data ? toAnalysisRun(data as Row) : null;
+  }
+
   /** The run currently holding the lock for this profile, if there is one. */
   async function findActiveRun(
     scope: OrganizationScope,
@@ -156,6 +177,28 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
 
     if (error) fail(error, "check for a running sync");
     return data ? toPlatformSyncRun(data as Row) : null;
+  }
+
+  /** Mention ids that already carry an analysis. One indexed column read. */
+  async function fetchAnalyzedMentionIds(
+    scope: OrganizationScope,
+  ): Promise<string[]> {
+    const { data, error } = await client
+      .from("mention_analyses")
+      .select("mention_id")
+      .eq("organization_id", scope.organizationId);
+
+    if (error) fail(error, "load the analyzed mentions");
+
+    // Distinct: the table is append-only, so a re-analysed mention appears
+    // more than once and would otherwise inflate the backlog arithmetic.
+    return [
+      ...new Set(
+        rows(data).flatMap((row) =>
+          typeof row.mention_id === "string" ? [row.mention_id] : [],
+        ),
+      ),
+    ];
   }
 
   async function fetchMentions(scope: OrganizationScope): Promise<Mention[]> {
@@ -862,6 +905,154 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
     },
 
+    analysisRuns: {
+      /**
+       * Open a run.
+       *
+       * The lock is `analysis_runs_one_active`, a partial unique index on the
+       * organization where status = 'running'. Inserting is therefore the
+       * whole of the concurrency control — a second concurrent request gets a
+       * 23505 rather than both walking the same backlog and paying twice for
+       * the overlap.
+       *
+       * A run whose process died still holds the lock, so a stale one is
+       * closed before retrying once.
+       */
+      async start(scope, input) {
+        const value = startAnalysisRunInputSchema.parse(input);
+
+        const row = {
+          organization_id: scope.organizationId,
+          trigger: value.trigger,
+          actor_user_id: value.actorUserId,
+          status: "running",
+          started_at: value.startedAt,
+        };
+
+        const first = await client
+          .from("analysis_runs")
+          .insert(row)
+          .select("*")
+          .single();
+
+        if (!first.error) return toAnalysisRun(first.data as Row);
+        if (first.error.code !== "23505") fail(first.error, "start the analysis");
+
+        const active = await findActiveAnalysisRun(scope);
+
+        if (!active) {
+          // The index rejected the insert but no running row is visible: the
+          // other run finished between the two statements. Retry exactly once,
+          // so a genuinely repeating conflict surfaces rather than spinning.
+          const retry = await client
+            .from("analysis_runs")
+            .insert(row)
+            .select("*")
+            .single();
+          if (retry.error) fail(retry.error, "start the analysis");
+          return toAnalysisRun(retry.data as Row);
+        }
+
+        if (!isAnalysisRunStale(active, Date.parse(value.startedAt) || Date.now())) {
+          throw new AnalysisRunInProgressError(active.id);
+        }
+
+        await client
+          .from("analysis_runs")
+          .update({
+            status: "failed",
+            completed_at: value.startedAt,
+            error_code: "analysis_abandoned",
+            error_message:
+              "This analysis stopped without finishing. It was closed so a new one could start.",
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", active.id)
+          .eq("status", "running");
+
+        const reclaimed = await client
+          .from("analysis_runs")
+          .insert(row)
+          .select("*")
+          .single();
+
+        if (reclaimed.error) {
+          // Another request reclaimed it first. Theirs is running; ours is not.
+          if (reclaimed.error.code === "23505") {
+            throw new AnalysisRunInProgressError(active.id);
+          }
+          fail(reclaimed.error, "start the analysis");
+        }
+
+        return toAnalysisRun(reclaimed.data as Row);
+      },
+
+      async finish(scope, runId, input) {
+        const value = finishAnalysisRunInputSchema.parse(input);
+
+        const { data, error } = await client
+          .from("analysis_runs")
+          .update({
+            status: value.status,
+            completed_at: value.completedAt,
+            analyzed_count: value.counts.analyzed,
+            heuristic_count: value.counts.heuristic,
+            escalated_count: value.counts.escalated,
+            failed_count: value.counts.failed,
+            remaining_count: value.counts.remaining,
+            model_provider: value.modelProvider,
+            model_name: value.modelName,
+            prompt_version: value.promptVersion,
+            error_code: value.errorCode,
+            error_message: value.errorMessage,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", runId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "record the analysis result");
+        if (!data) throw notFound("Analysis run");
+        return toAnalysisRun(data as Row);
+      },
+
+      async get(scope, runId) {
+        const { data, error } = await from("analysis_runs", scope)
+          .eq("id", runId)
+          .maybeSingle();
+
+        if (error) fail(error, "load the analysis run");
+        return data ? toAnalysisRun(data as Row) : null;
+      },
+
+      async list(scope, limit) {
+        let query = from("analysis_runs", scope).order("started_at", {
+          ascending: false,
+        });
+        if (limit !== undefined) query = query.limit(limit);
+
+        const { data, error } = await query;
+        if (error) fail(error, "load the analysis history");
+        return rows(data).map(toAnalysisRun);
+      },
+
+      async latest(scope) {
+        // One descending scan answers both questions. Bounded because the card
+        // only needs the head of the history.
+        const { data, error } = await from("analysis_runs", scope)
+          .order("started_at", { ascending: false })
+          .limit(50);
+
+        if (error) fail(error, "load the analysis status");
+
+        const runs = rows(data).map(toAnalysisRun);
+        return {
+          latest: runs[0] ?? null,
+          lastSuccessful: runs.find(isSuccessfulAnalysisRun) ?? null,
+        };
+      },
+    },
+
     mentions: {
       async list(scope, filter = {}) {
         let query = from("mentions", scope).order("published_at", { ascending: false });
@@ -1128,6 +1319,145 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return { mention: toMention(data as Row), outcome: "created" };
       },
 
+      /**
+       * The unanalysed backlog, oldest first.
+       *
+       * Two queries rather than a join: PostgREST has no `not exists`, and
+       * pulling the analysed ids is a single indexed column read against
+       * `mention_analyses_mention_idx`. At the volume a per-organization
+       * inbox reaches this is cheap; past that it becomes a view, and the
+       * signature does not change.
+       */
+      async listUnanalyzed(scope, limit) {
+        const analyzedIds = await fetchAnalyzedMentionIds(scope);
+
+        let query = from("mentions", scope).order("published_at", {
+          ascending: true,
+        });
+
+        if (analyzedIds.length > 0) {
+          query = query.not(
+            "id",
+            "in",
+            `(${analyzedIds.map((id) => `"${id}"`).join(",")})`,
+          );
+        }
+
+        const { data, error } = await query.limit(limit);
+        if (error) fail(error, "load the unanalyzed mentions");
+        return rows(data).map(toMention);
+      },
+
+      async countUnanalyzed(scope) {
+        const [analyzedIds, total] = await Promise.all([
+          fetchAnalyzedMentionIds(scope),
+          (async () => {
+            const { count, error } = await client
+              .from("mentions")
+              .select("id", { count: "exact", head: true })
+              .eq("organization_id", scope.organizationId);
+
+            if (error) fail(error, "count the unanalyzed mentions");
+            return count ?? 0;
+          })(),
+        ]);
+
+        // Analysed ids are distinct per mention, and every analysis belongs to
+        // a mention in the same organization, so the difference is exact.
+        return Math.max(0, total - analyzedIds.length);
+      },
+
+      async createAnalysis(scope, input) {
+        const value = createMentionAnalysisInputSchema.parse(input);
+
+        // The mention is confirmed under the caller's own scope first, so an
+        // analysis cannot be attached to another organization's mention.
+        const { data: mention, error: mentionError } = await from("mentions", scope)
+          .eq("id", value.mentionId)
+          .maybeSingle();
+
+        if (mentionError) fail(mentionError, "store the analysis");
+        if (!mention) throw notFound("Mention");
+
+        // Insert, never upsert: the table is append-only by design, so a
+        // re-analysis lands beside the previous one and readers take the latest.
+        const { data, error } = await client
+          .from("mention_analyses")
+          .insert({
+            organization_id: scope.organizationId,
+            mention_id: value.mentionId,
+            model_provider: value.modelProvider,
+            model_name: value.modelName,
+            prompt_version: value.promptVersion,
+            relevance_score: value.relevanceScore,
+            relevance_explanation: value.relevanceExplanation,
+            sentiment: value.sentiment,
+            sentiment_score: value.sentimentScore,
+            risk_level: value.riskLevel,
+            risk_categories: value.riskCategories,
+            risk_explanation: value.riskExplanation,
+            topics: value.topics,
+            facts_needing_verification: value.factsNeedingVerification,
+            recommended_action: value.recommendedAction,
+            recommendation_explanation: value.recommendationExplanation,
+            analyzed_at: value.analyzedAt,
+            analysis_run_id: value.analysisRunId,
+            input_tokens: value.inputTokens,
+            output_tokens: value.outputTokens,
+          })
+          .select("*")
+          .single();
+
+        if (error) fail(error, "store the analysis");
+        return toMentionAnalysis(data as Row);
+      },
+
+      /**
+       * Write the four columns an analysis owns.
+       *
+       * The column list is the guarantee. `content`, `rating`, `author_name`,
+       * `published_at`, and every `source_*` column are absent, so an analysis
+       * cannot overwrite what a sync imported — the mirror of the rule that
+       * keeps a sync out of Lia's workflow state.
+       *
+       * The `status` filter is applied in the query rather than read-then-write:
+       * `eq("status", "new")` means a mention somebody moved in the meantime is
+       * not matched at all, so the race resolves in the person's favour.
+       */
+      async applyAnalysisOutcome(scope, mentionId, outcome) {
+        const sourceUntouched = {
+          sentiment: outcome.sentiment,
+          risk_level: outcome.riskLevel,
+          relevance_score: outcome.relevanceScore,
+        };
+
+        const advanced = await client
+          .from("mentions")
+          .update({ ...sourceUntouched, status: outcome.status })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", mentionId)
+          .eq("status", "new")
+          .select("*")
+          .maybeSingle();
+
+        if (advanced.error) fail(advanced.error, "record the analysis outcome");
+        if (advanced.data) return toMention(advanced.data as Row);
+
+        // Not `new` any more — a person has already moved it. The scores still
+        // apply; the status they chose stands.
+        const { data, error } = await client
+          .from("mentions")
+          .update(sourceUntouched)
+          .eq("organization_id", scope.organizationId)
+          .eq("id", mentionId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "record the analysis outcome");
+        if (!data) throw notFound("Mention");
+        return toMention(data as Row);
+      },
+
       async countByProfile(scope, profileIds) {
         const counts: Record<string, number> = {};
         for (const id of profileIds) counts[id] = 0;
@@ -1313,6 +1643,53 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           .maybeSingle();
         if (error) fail(error, "load the escalation");
         return data ? toEscalation(data as Row) : null;
+      },
+
+      async create(scope, input) {
+        const value = createEscalationInputSchema.parse(input);
+
+        // Confirmed under the caller's own scope, so an escalation cannot be
+        // attached to another organization's mention.
+        const { data: mention, error: mentionError } = await from("mentions", scope)
+          .eq("id", value.mentionId)
+          .maybeSingle();
+
+        if (mentionError) fail(mentionError, "raise the escalation");
+        if (!mention) throw notFound("Mention");
+
+        // One per mention. Two open cases for one review is a queue nobody
+        // trusts, and a re-run must not produce that.
+        const { data: existing, error: existingError } = await from(
+          "escalations",
+          scope,
+        )
+          .eq("mention_id", value.mentionId)
+          .maybeSingle();
+
+        if (existingError) fail(existingError, "raise the escalation");
+        if (existing) {
+          return { escalation: toEscalation(existing as Row), created: false };
+        }
+
+        const { data, error } = await client
+          .from("escalations")
+          .insert({
+            organization_id: scope.organizationId,
+            mention_id: value.mentionId,
+            category: value.category,
+            severity: value.severity,
+            status: "open",
+            title: value.title,
+            summary: value.summary,
+            // Unassigned on purpose — see the domain schema's note.
+            assigned_user_id: null,
+            due_at: value.dueAt,
+          })
+          .select("*")
+          .single();
+
+        if (error) fail(error, "raise the escalation");
+        return { escalation: toEscalation(data as Row), created: true };
       },
 
       async updateStatus(scope, escalationId, status, resolutionNote) {

@@ -1,12 +1,18 @@
 import {
   applySourceFields,
   auditEventSchema,
+  createEscalationInputSchema,
   createLocationInputSchema,
+  createMentionAnalysisInputSchema,
   createMentionInputSchema,
+  EMPTY_ANALYSIS_COUNTS,
   EMPTY_SYNC_COUNTS,
+  finishAnalysisRunInputSchema,
   finishSyncRunInputSchema,
   ingestMentionInputSchema,
+  isAnalysisRunStale,
   isEscalationClosed,
+  isSuccessfulAnalysisRun,
   isSuccessfulSyncRun,
   isSyncRunStale,
   NEW_CONNECTION_DEFAULTS,
@@ -15,9 +21,11 @@ import {
   recordAuditEventInputSchema,
   requiresResolutionNote,
   sourceFieldsChanged,
+  startAnalysisRunInputSchema,
   startSyncRunInputSchema,
   upsertPlatformConnectionInputSchema,
   upsertPlatformProfileInputSchema,
+  type AnalysisRun,
   type Approval,
   type AuditEvent,
   type AutomationRule,
@@ -43,6 +51,7 @@ import {
 } from "@/lib/data/metrics";
 import { demoRuntimeStore, demoStore, replaceRow, scoped } from "@/lib/data/demo/store";
 import {
+  AnalysisRunInProgressError,
   SyncRunInProgressError,
   type LiaDataSource,
   type MentionDetail,
@@ -736,6 +745,110 @@ export function createDemoDataSource(): LiaDataSource {
       },
     },
 
+    analysisRuns: {
+      async start(scope, input) {
+        const value = startAnalysisRunInputSchema.parse(input);
+        const runtime = demoRuntimeStore();
+        const now = Date.now();
+
+        const active = orgRows(runtime.analysisRuns, scope).find(
+          (row) => row.status === "running",
+        );
+
+        if (active) {
+          // A run abandoned by a process that died must not block the
+          // organization forever, so a stale one is closed rather than
+          // honoured. Mirrors the reclaim in the Supabase adapter.
+          if (!isAnalysisRunStale(active, now)) {
+            throw new AnalysisRunInProgressError(active.id);
+          }
+
+          replaceRow(runtime.analysisRuns, {
+            ...active,
+            status: "failed",
+            completedAt: new Date(now).toISOString(),
+            errorCode: "analysis_abandoned",
+            errorMessage:
+              "This analysis stopped without finishing. It was closed so a new one could start.",
+            updatedAt: new Date(now).toISOString(),
+          });
+        }
+
+        runtime.analysisRunSequence += 1;
+        const created: AnalysisRun = {
+          id: seedId(
+            `analysis-run:${scope.organizationId}:${runtime.analysisRunSequence}`,
+          ),
+          organizationId: scope.organizationId,
+          trigger: value.trigger,
+          actorUserId: value.actorUserId,
+          status: "running",
+          startedAt: value.startedAt,
+          completedAt: null,
+          counts: { ...EMPTY_ANALYSIS_COUNTS },
+          modelProvider: null,
+          modelName: null,
+          promptVersion: null,
+          errorCode: null,
+          errorMessage: null,
+          createdAt: value.startedAt,
+          updatedAt: value.startedAt,
+        };
+
+        runtime.analysisRuns.push(created);
+        return created;
+      },
+
+      async finish(scope, runId, input) {
+        const value = finishAnalysisRunInputSchema.parse(input);
+        const runtime = demoRuntimeStore();
+
+        const run = runtime.analysisRuns.find(
+          (row) => row.id === runId && row.organizationId === scope.organizationId,
+        );
+        if (!run) throw notFound("Analysis run");
+
+        return replaceRow(runtime.analysisRuns, {
+          ...run,
+          status: value.status,
+          completedAt: value.completedAt,
+          counts: value.counts,
+          modelProvider: value.modelProvider,
+          modelName: value.modelName,
+          promptVersion: value.promptVersion,
+          errorCode: value.errorCode,
+          errorMessage: value.errorMessage,
+          updatedAt: value.completedAt,
+        });
+      },
+
+      async get(scope, runId) {
+        return (
+          demoRuntimeStore().analysisRuns.find(
+            (row) => row.id === runId && row.organizationId === scope.organizationId,
+          ) ?? null
+        );
+      },
+
+      async list(scope, limit) {
+        const rows = orgRows(demoRuntimeStore().analysisRuns, scope).sort(
+          (a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt),
+        );
+        return limit === undefined ? rows : rows.slice(0, limit);
+      },
+
+      async latest(scope) {
+        const rows = orgRows(demoRuntimeStore().analysisRuns, scope).sort(
+          (a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt),
+        );
+
+        return {
+          latest: rows[0] ?? null,
+          lastSuccessful: rows.find(isSuccessfulAnalysisRun) ?? null,
+        };
+      },
+    },
+
     mentions: {
       async list(scope, filter = {}) {
         const connectionsById = new Map(
@@ -960,6 +1073,69 @@ export function createDemoDataSource(): LiaDataSource {
         return { mention: created, outcome: "created" };
       },
 
+      async listUnanalyzed(scope, limit) {
+        const analyzed = new Set(
+          analysesIn(scope).map((analysis) => analysis.mentionId),
+        );
+
+        return mentionsIn(scope)
+          .filter((mention) => !analyzed.has(mention.id))
+          // Oldest first: a backlog should drain in arrival order rather than
+          // the newest batch being re-picked while older mentions never surface.
+          .sort((a, b) => Date.parse(a.publishedAt) - Date.parse(b.publishedAt))
+          .slice(0, limit);
+      },
+
+      async countUnanalyzed(scope) {
+        const analyzed = new Set(
+          analysesIn(scope).map((analysis) => analysis.mentionId),
+        );
+        return mentionsIn(scope).filter((mention) => !analyzed.has(mention.id))
+          .length;
+      },
+
+      async createAnalysis(scope, input) {
+        const value = createMentionAnalysisInputSchema.parse(input);
+
+        const mention = mentionsIn(scope).find(
+          (row) => row.id === value.mentionId,
+        );
+        // The scope filter is what stops an analysis being attached to another
+        // organization's mention by supplying its id.
+        if (!mention) throw notFound("Mention");
+
+        const created: MentionAnalysis = {
+          ...value,
+          // Append-only, so the id has to differ per analysis rather than per
+          // mention — re-analysing inserts beside the old row, never over it.
+          id: seedId(
+            `analysis:runtime:${value.mentionId}:${store().mentionAnalyses.length}`,
+          ),
+          organizationId: scope.organizationId,
+          createdAt: nowIso(),
+        };
+
+        store().mentionAnalyses.push(created);
+        return created;
+      },
+
+      async applyAnalysisOutcome(scope, mentionId, outcome) {
+        const mention = mentionsIn(scope).find((row) => row.id === mentionId);
+        if (!mention) throw notFound("Mention");
+
+        return replaceRow(store().mentions, {
+          ...mention,
+          sentiment: outcome.sentiment,
+          riskLevel: outcome.riskLevel,
+          relevanceScore: outcome.relevanceScore,
+          // Only from `new`. A mention somebody has already escalated,
+          // dismissed, or responded to keeps the state that person set — the
+          // machine does not get to reopen a decision a human made.
+          status: mention.status === "new" ? outcome.status : mention.status,
+          updatedAt: nowIso(),
+        });
+      },
+
       async countByProfile(scope, profileIds) {
         const wanted = new Set(profileIds);
         const counts: Record<string, number> = {};
@@ -1129,6 +1305,43 @@ export function createDemoDataSource(): LiaDataSource {
 
       async get(scope, escalationId) {
         return orgRows(store().escalations, scope).find((row) => row.id === escalationId) ?? null;
+      },
+
+      async create(scope, input) {
+        const value = createEscalationInputSchema.parse(input);
+
+        const mention = mentionsIn(scope).find((row) => row.id === value.mentionId);
+        if (!mention) throw notFound("Mention");
+
+        // One escalation per mention. Two open cases for one review is a queue
+        // nobody trusts, and re-running an analysis must not produce that.
+        const existing = orgRows(store().escalations, scope).find(
+          (row) => row.mentionId === value.mentionId,
+        );
+        if (existing) return { escalation: existing, created: false };
+
+        const created: Escalation = {
+          id: seedId(`escalation:runtime:${value.mentionId}`),
+          organizationId: scope.organizationId,
+          mentionId: value.mentionId,
+          category: value.category,
+          severity: value.severity,
+          status: "open",
+          title: value.title,
+          summary: value.summary,
+          // Unassigned on purpose: an unowned item in the escalations centre
+          // is the "somebody must look at this" signal. Defaulting an owner
+          // would make it look handled.
+          assignedUserId: null,
+          dueAt: value.dueAt,
+          resolvedAt: null,
+          resolutionNote: null,
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        };
+
+        store().escalations.push(created);
+        return { escalation: created, created: true };
       },
 
       async updateStatus(scope, escalationId, status, resolutionNote) {

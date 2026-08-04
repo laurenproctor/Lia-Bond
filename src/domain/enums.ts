@@ -374,6 +374,12 @@ export const AUDIT_EVENT_TYPES = [
   // never a reviewer's name, never a token.
   "integration.reviews_synced",
   "integration.review_sync_failed",
+  // Analysis. Metadata carries counts, a model name, a prompt version, and a
+  // normalised error code — never review text, never a reviewer's name, and
+  // never the prompt, which contains both.
+  "mention.analyzed",
+  "mention.analysis_failed",
+  "escalation.created_from_analysis",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;

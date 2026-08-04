@@ -236,6 +236,11 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "integration.credentials_revocation_failed": "Credential revocation unconfirmed",
   "integration.reviews_synced": "Reviews synced",
   "integration.review_sync_failed": "Review sync failed",
+  "mention.analyzed": "Mention analyzed",
+  "mention.analysis_failed": "Analysis failed",
+  // Named for who raised it. An escalation nobody chose to raise is a
+  // different thing to explain than one a person opened.
+  "escalation.created_from_analysis": "Escalation raised by analysis",
 };
 
 /** Sync-run outcomes, as a person would describe them. */

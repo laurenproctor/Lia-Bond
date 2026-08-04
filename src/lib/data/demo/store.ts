@@ -1,4 +1,4 @@
-import type { OAuthState, PlatformSyncRun } from "@/domain";
+import type { AnalysisRun, OAuthState, PlatformSyncRun } from "@/domain";
 import type { SealedCredentialRecord } from "@/lib/data/types";
 import type { SeedDataset } from "@/lib/seed/dataset";
 import { SEED_DATASET } from "@/lib/seed/dataset";
@@ -55,6 +55,15 @@ interface RuntimeStore {
   syncRuns: PlatformSyncRun[];
   /** Monotonic counter, so two runs in the same millisecond get distinct ids. */
   syncRunSequence: number;
+  /**
+   * Analysis history.
+   *
+   * Runtime-only for the same reason as sync runs: a seeded analysis run would
+   * claim the demo tenant had spent money on a model it never called. The
+   * seeded `mentionAnalyses` are hand-written fixtures and carry no run id.
+   */
+  analysisRuns: AnalysisRun[];
+  analysisRunSequence: number;
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -64,6 +73,8 @@ function freshRuntimeStore(): RuntimeStore {
     credentials: new Map(),
     syncRuns: [],
     syncRunSequence: 0,
+    analysisRuns: [],
+    analysisRunSequence: 0,
   };
 }
 

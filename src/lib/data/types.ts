@@ -1,14 +1,18 @@
 import type {
+  AnalysisRun,
   Approval,
   AuditEvent,
   AuditEventFilter,
   AutomationRule,
   AutomationRuleFilter,
   ConnectionHealthUpdate,
+  CreateEscalationInput,
   CreateLocationInput,
+  CreateMentionAnalysisInput,
   CreateMentionInput,
   Escalation,
   EscalationFilter,
+  FinishAnalysisRunInput,
   FinishSyncRunInput,
   IngestMentionInput,
   Location,
@@ -29,6 +33,7 @@ import type {
   RecordAuditEventInput,
   ResponseDraft,
   ResponseDraftFilter,
+  StartAnalysisRunInput,
   StartSyncRunInput,
   SyncResource,
   UpsertPlatformConnectionInput,
@@ -66,6 +71,22 @@ export interface OrganizationScope {
 export interface MentionIngestResult {
   mention: Mention;
   outcome: MentionIngestOutcome;
+}
+
+/**
+ * The four columns an analysis is allowed to write on a mention.
+ *
+ * Narrow on purpose. These are the denormalised fields the inbox filters on,
+ * the risk index sorts by, and every chart buckets over — they have to move
+ * when an analysis lands, or the analysis is invisible to the product. Nothing
+ * else is reachable from here.
+ */
+export interface MentionAnalysisOutcome {
+  sentiment: Mention["sentiment"];
+  riskLevel: Mention["riskLevel"];
+  relevanceScore: number | null;
+  /** Applied only when the mention is still `new`. */
+  status: Extract<MentionStatus, "analyzed" | "escalated">;
 }
 
 /** Bundles a mention with everything the workspaces render alongside it. */
@@ -314,6 +335,44 @@ export interface MentionRepository {
     scope: OrganizationScope,
     profileIds: string[],
   ): Promise<Record<string, number>>;
+  /**
+   * Mentions that have never been analysed, oldest first.
+   *
+   * Oldest-first so a backlog drains in arrival order rather than the newest
+   * batch being re-analysed while older mentions never surface.
+   *
+   * `limit` bounds the batch; `countUnanalyzed` reports the whole backlog, so
+   * a capped run can say what it left behind instead of implying it finished.
+   */
+  listUnanalyzed(scope: OrganizationScope, limit: number): Promise<Mention[]>;
+  countUnanalyzed(scope: OrganizationScope): Promise<number>;
+  /**
+   * Record an analysis.
+   *
+   * Append-only: re-analysing inserts a new row rather than overwriting, so a
+   * prompt or model change stays auditable and readers take the latest.
+   */
+  createAnalysis(
+    scope: OrganizationScope,
+    input: CreateMentionAnalysisInput,
+  ): Promise<MentionAnalysis>;
+  /**
+   * Write the fields an analysis owns.
+   *
+   * Deliberately not `create`, and deliberately not a general update. An
+   * analysis owns exactly these four columns; it may not touch content,
+   * rating, author, or any source-owned field. That is the mirror of the rule
+   * workflow 03 established for syncs, and like that one it is enforced by the
+   * input type rather than by care at the call site.
+   *
+   * `status` advances only from `new`, so a mention somebody has already
+   * escalated, dismissed, or responded to keeps the state that person set.
+   */
+  applyAnalysisOutcome(
+    scope: OrganizationScope,
+    mentionId: string,
+    outcome: MentionAnalysisOutcome,
+  ): Promise<Mention>;
   updateStatus(
     scope: OrganizationScope,
     mentionId: string,
@@ -344,6 +403,19 @@ export interface ResponseDraftRepository {
 export interface EscalationRepository {
   list(scope: OrganizationScope, filter?: EscalationFilter): Promise<Escalation[]>;
   get(scope: OrganizationScope, escalationId: string): Promise<Escalation | null>;
+  /**
+   * Raise an escalation.
+   *
+   * Refuses when the mention already has one, rather than creating a second.
+   * A restaurant with two open cases for one review is a queue nobody trusts,
+   * and re-running an analysis must not produce that. Returns the existing
+   * escalation instead, so the caller can tell "already raised" from "raised
+   * now" by comparing ids.
+   */
+  create(
+    scope: OrganizationScope,
+    input: CreateEscalationInput,
+  ): Promise<{ escalation: Escalation; created: boolean }>;
   updateStatus(
     scope: OrganizationScope,
     escalationId: string,
@@ -429,6 +501,60 @@ export interface ProfileSyncState {
   lastSuccessful: PlatformSyncRun | null;
 }
 
+/**
+ * Raised when an analysis is already running for this organization.
+ *
+ * Its own type rather than a generic conflict, for the same reason
+ * `SyncRunInProgressError` is: the caller has to be able to tell "somebody
+ * else is already doing this" — which is fine and needs no remediation — from
+ * every other reason a run could fail to open.
+ */
+export class AnalysisRunInProgressError extends Error {
+  readonly activeRunId: string;
+
+  constructor(activeRunId: string) {
+    super("An analysis is already running for this organization.");
+    this.name = "AnalysisRunInProgressError";
+    this.activeRunId = activeRunId;
+  }
+}
+
+export interface AnalysisRunRepository {
+  /**
+   * Open a run, or refuse because one is already open.
+   *
+   * Enforced by `analysis_runs_one_active`, a partial unique index — not by
+   * reading first and then inserting, which is two statements with a race
+   * between them. Throws `AnalysisRunInProgressError`.
+   *
+   * A run left `running` by a process that died is reclaimed rather than
+   * blocking the organization forever; see `ANALYSIS_RUN_STALE_AFTER_MS`.
+   */
+  start(scope: OrganizationScope, input: StartAnalysisRunInput): Promise<AnalysisRun>;
+  finish(
+    scope: OrganizationScope,
+    runId: string,
+    input: FinishAnalysisRunInput,
+  ): Promise<AnalysisRun>;
+  get(scope: OrganizationScope, runId: string): Promise<AnalysisRun | null>;
+  /** Most recent runs, newest first. */
+  list(scope: OrganizationScope, limit?: number): Promise<AnalysisRun[]>;
+  /**
+   * The latest run and the latest successful one.
+   *
+   * Two different questions, answered together because the inbox card asks
+   * both at once: "is it running / did it just fail" and "when did analysis
+   * last actually get through anything".
+   */
+  latest(scope: OrganizationScope): Promise<AnalysisRunState>;
+}
+
+/** What the /mentions card renders about analysis. */
+export interface AnalysisRunState {
+  latest: AnalysisRun | null;
+  lastSuccessful: AnalysisRun | null;
+}
+
 export interface AuditEventRepository {
   list(scope: OrganizationScope, filter?: AuditEventFilter): Promise<AuditEvent[]>;
   record(scope: OrganizationScope, input: RecordAuditEventInput): Promise<AuditEvent>;
@@ -448,6 +574,8 @@ export interface LiaDataSource {
   oauthStates: OAuthStateRepository;
   /** Synchronisation history, and the lock that keeps runs from overlapping. */
   platformSyncRuns: PlatformSyncRunRepository;
+  /** Analysis history, and the lock that keeps runs from overlapping. */
+  analysisRuns: AnalysisRunRepository;
   mentions: MentionRepository;
   responseDrafts: ResponseDraftRepository;
   escalations: EscalationRepository;

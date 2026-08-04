@@ -12,6 +12,7 @@ import type { Location, MembershipRole } from "@/domain";
 
 export const PERMISSIONS = [
   "mention.update_status",
+  "mention.analyze",
   "response.assign",
   "response.decide",
   "escalation.assign",
@@ -43,6 +44,12 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
     "communications_lead",
     "location_manager",
   ],
+  // Running an analysis spends money on a model and fills the queue these
+  // three roles are accountable for, so they can refresh their own inbox
+  // rather than filing a ticket. Location managers are absent for the same
+  // reason they are absent from integration work: a run walks the whole
+  // organization's backlog, so there is no location to scope them to.
+  "mention.analyze": ["owner", "admin", "communications_lead"],
   "response.assign": [
     "owner",
     "admin",

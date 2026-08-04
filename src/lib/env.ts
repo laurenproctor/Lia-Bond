@@ -31,6 +31,17 @@ import { z } from "zod";
 const googleIntegrationModeSchema = z.enum(["live", "mock"]);
 export type GoogleIntegrationMode = z.infer<typeof googleIntegrationModeSchema>;
 
+/**
+ * Which analyser is in play.
+ *
+ * Same posture as the Google mode, and refused in production for the same
+ * reason: a deployment quietly serving fabricated risk assessments would be
+ * worse than one that failed to boot. A fake "low risk" on a food-safety
+ * complaint is not a cosmetic problem.
+ */
+const aiModeSchema = z.enum(["live", "mock"]);
+export type AiMode = z.infer<typeof aiModeSchema>;
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -55,6 +66,19 @@ const envSchema = z
     GOOGLE_OAUTH_REDIRECT_URI: z.url().optional(),
     GOOGLE_INTEGRATION_MODE: googleIntegrationModeSchema.optional(),
 
+    /* Analysis. Server-only. */
+    ANTHROPIC_API_KEY: z.string().min(10).optional(),
+    LIA_AI_MODE: aiModeSchema.optional(),
+    /**
+     * Mentions analysed per run.
+     *
+     * Coerced because every environment variable is a string, and bounded
+     * because one click should have a predictable cost — a first run after a
+     * large backfill would otherwise be thousands of model calls in one
+     * request.
+     */
+    LIA_ANALYSIS_BATCH_SIZE: z.coerce.number().int().min(1).max(500).optional(),
+
     /** 32 bytes, base64 / base64url / hex. Encrypts stored OAuth credentials. */
     TOKEN_ENCRYPTION_KEY: z.string().min(32).optional(),
     /** Names the active key so ciphertext stays readable across a rotation. */
@@ -71,6 +95,13 @@ const envSchema = z
     {
       message: "GOOGLE_INTEGRATION_MODE=mock is refused in production",
       path: ["GOOGLE_INTEGRATION_MODE"],
+    },
+  )
+  .refine(
+    (value) => !(value.LIA_AI_MODE === "mock" && value.NODE_ENV === "production"),
+    {
+      message: "LIA_AI_MODE=mock is refused in production",
+      path: ["LIA_AI_MODE"],
     },
   );
 
@@ -91,6 +122,9 @@ function readEnv(): Env {
     GOOGLE_INTEGRATION_MODE: process.env.GOOGLE_INTEGRATION_MODE || undefined,
     TOKEN_ENCRYPTION_KEY: process.env.TOKEN_ENCRYPTION_KEY || undefined,
     TOKEN_ENCRYPTION_KEY_ID: process.env.TOKEN_ENCRYPTION_KEY_ID || undefined,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || undefined,
+    LIA_AI_MODE: process.env.LIA_AI_MODE || undefined,
+    LIA_ANALYSIS_BATCH_SIZE: process.env.LIA_ANALYSIS_BATCH_SIZE || undefined,
   });
 
   if (!parsed.success) {
@@ -240,6 +274,58 @@ export function requireTokenEncryptionKey(): { raw: string; keyId: string } {
     raw: env.TOKEN_ENCRYPTION_KEY,
     keyId: env.TOKEN_ENCRYPTION_KEY_ID ?? "default",
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Analysis                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** Default mentions per run. Overridable, so a large backlog can be drained. */
+export const DEFAULT_ANALYSIS_BATCH_SIZE = 50;
+
+export function analysisBatchSize(): number {
+  return env.LIA_ANALYSIS_BATCH_SIZE ?? DEFAULT_ANALYSIS_BATCH_SIZE;
+}
+
+export function isAiConfigured(): boolean {
+  return Boolean(env.ANTHROPIC_API_KEY);
+}
+
+/**
+ * Which analyser this process should use.
+ *
+ * Explicit configuration wins. Otherwise a key means live and anything else
+ * means unconfigured — the mock is never chosen for you, so a developer cannot
+ * mistake a fabricated risk assessment for a real one.
+ */
+export function resolveAiMode(): AiMode | "unconfigured" {
+  if (env.LIA_AI_MODE === "mock") {
+    // Belt and braces: the schema already refuses this combination, but this
+    // is the branch that would serve fabricated risk levels, so it re-checks
+    // rather than trusts.
+    if (env.NODE_ENV === "production") {
+      throw new ConfigurationError(
+        "LIA_AI_MODE=mock cannot be used in production.",
+        ["LIA_AI_MODE"],
+      );
+    }
+    return "mock";
+  }
+
+  if (env.LIA_AI_MODE === "live") return "live";
+  return isAiConfigured() ? "live" : "unconfigured";
+}
+
+/** The analysis API key, or a configuration error naming what is missing. */
+export function requireAnthropicApiKey(): string {
+  if (!env.ANTHROPIC_API_KEY) {
+    throw new ConfigurationError(
+      "Mention analysis is not configured on this server.",
+      ["ANTHROPIC_API_KEY"],
+    );
+  }
+
+  return env.ANTHROPIC_API_KEY;
 }
 
 /**

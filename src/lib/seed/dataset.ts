@@ -1049,6 +1049,12 @@ function analysis(seed: AnalysisSeed): MentionAnalysis {
     recommendedAction: seed.recommendedAction,
     recommendationExplanation: seed.recommendationExplanation,
     analyzedAt: minutesAgo(5),
+    // Provenance (workflow 04). These fixtures were written by hand, not
+    // produced by a run, so there is no run to point at and no tokens were
+    // spent — claiming either would fabricate a cost record.
+    analysisRunId: null,
+    inputTokens: null,
+    outputTokens: null,
     createdAt: minutesAgo(5),
   };
 }
