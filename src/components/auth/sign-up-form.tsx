@@ -52,7 +52,7 @@ export function SignUpForm() {
 
       <AuthField
         name="organizationName"
-        label="Restaurant group"
+        label="Company name"
         autoComplete="organization"
         hint="You can invite the rest of your team once you are in."
       />

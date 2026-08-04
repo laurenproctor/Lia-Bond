@@ -95,7 +95,7 @@ const signUpSchema = z
     organizationName: z
       .string()
       .trim()
-      .min(1, "Enter your restaurant group's name.")
+      .min(1, "Enter your company name.")
       .max(160),
     email: z.email("Enter a valid email address."),
     password: z.string().min(MIN_PASSWORD_LENGTH, `Use at least ${MIN_PASSWORD_LENGTH} characters.`),

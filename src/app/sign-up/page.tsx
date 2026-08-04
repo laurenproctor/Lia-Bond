@@ -21,7 +21,7 @@ export default function SignUpPage() {
   return (
     <AuthShell
       title="Create your account"
-      description="Set up your restaurant group and start monitoring."
+      description="Set up your company and start monitoring."
       footer={
         <p className="text-[12.5px] text-white/50">
           Already have an account?{" "}
