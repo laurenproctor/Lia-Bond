@@ -24,8 +24,41 @@ function quote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function literal(value: Scalar | Scalar[] | object): string {
+/**
+ * Columns stored as `jsonb`.
+ *
+ * Named explicitly rather than inferred from the value, because an empty array
+ * is ambiguous: `'{}'` is an empty Postgres array and `'[]'` is an empty JSON
+ * one, and nothing about `[]` says which column it is destined for. Guessing
+ * produces SQL that parses cleanly and fails at execution — which is exactly
+ * how `automation_rules.conditions` shipped as `{"[object Object]",...}` and
+ * survived every check this repository had until the seed was first run
+ * against a real database.
+ *
+ * Keys are the camelCase field names from the dataset, matched before
+ * `columnName()` converts them.
+ */
+const JSONB_COLUMNS = new Set([
+  "capabilities",
+  "providerMetadata",
+  "rawPayload",
+  "sourceMetadata",
+  "conditions",
+  "actions",
+  "previousState",
+  "newState",
+  "metadata",
+]);
+
+function literal(value: Scalar | Scalar[] | object, key?: string): string {
   if (value === null || value === undefined) return "null";
+
+  // Decided by the column, not by the shape of the value. A jsonb column takes
+  // JSON whether it holds an object, an array of objects, or an empty array.
+  if (key !== undefined && JSONB_COLUMNS.has(key)) {
+    return `${quote(JSON.stringify(value))}::jsonb`;
+  }
+
   if (typeof value === "number") return String(value);
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "string") return quote(value);
@@ -37,8 +70,12 @@ function literal(value: Scalar | Scalar[] | object): string {
     return quote(`{${items.join(",")}}`);
   }
 
-  // Everything else is jsonb.
-  return `${quote(JSON.stringify(value))}::jsonb`;
+  // An object in a column not listed above. Still jsonb — but reaching here
+  // means the column is missing from JSONB_COLUMNS, so say so rather than
+  // emitting something that happens to work today.
+  throw new Error(
+    `Object value for column "${key ?? "unknown"}" — add it to JSONB_COLUMNS in this script.`,
+  );
 }
 
 /** camelCase -> snake_case, matching the column names in the migrations. */
@@ -51,7 +88,10 @@ function insert(table: string, rows: Row[], columns: string[]): string {
 
   const columnList = columns.map(columnName).join(", ");
   const values = rows
-    .map((row) => `  (${columns.map((key) => literal(row[key] as Scalar)).join(", ")})`)
+    .map(
+      (row) =>
+        `  (${columns.map((key) => literal(row[key] as Scalar, key)).join(", ")})`,
+    )
     .join(",\n");
 
   return [
