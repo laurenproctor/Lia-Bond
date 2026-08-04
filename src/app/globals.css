@@ -64,6 +64,56 @@
   --shadow-card: 0 1px 2px 0 rgb(17 24 39 / 0.04);
   --shadow-raised: 0 4px 16px -4px rgb(17 24 39 / 0.1);
   --shadow-panel: 0 12px 32px -8px rgb(11 24 48 / 0.24);
+
+  /* ---------------------------------------------------------------------
+     Marketing site.
+
+     Public routes under `(site)` use a different brand from the product: the
+     reference is a Claude Design artifact — white surfaces, ink headings, a
+     brand orange, a supporting blue, and hand-drawn speech bubbles.
+
+     Six values are darkened from the reference to clear WCAG AA. Each is a
+     same-hue darkening, so the site still reads as the reference. The
+     reasoning is in docs/superpowers/specs/2026-08-04-marketing-site-design.md
+     and `tests/site-palette.test.ts` re-measures every one of them from this
+     file on each run.
+
+     Prefixed because `@theme` is global: without `site-`, these would collide
+     with the product's navy and purple scales above.
+     --------------------------------------------------------------------- */
+  --color-site-ink: #0b0f18;
+  --color-site-body: #3a4454;
+  /* Reference #8A93A3 — 2.93:1 on the tint. */
+  --color-site-muted: #697386;
+  /* The reference grey, kept for the ink surface where it measures 6.19:1. */
+  --color-site-muted-dark: #8a93a3;
+  /* Ornament only. Form controls take --color-site-field. */
+  --color-site-border: #e6eaf0;
+  /* Reference #E6EAF0 — 1.21:1, failing WCAG 1.4.11 on an input. */
+  --color-site-field: #8296b4;
+  --color-site-tint: #f6f9fd;
+
+  --color-site-orange: #ff7a2e;
+  --color-site-orange-hover: #e8651c;
+
+  /* Reference #0D88FF — 3.51:1 as text. Kept below for non-text use. */
+  --color-site-blue: #0074e5;
+  /* Strokes, dots, rules. Never carries text. */
+  --color-site-blue-mark: #0d88ff;
+  --color-site-blue-tint: #eaf3ff;
+  --color-site-blue-edge: #a8d0ff;
+  --color-site-blue-ink: #13314f;
+  /* Reference #5E83A6 — 3.56:1. */
+  --color-site-blue-meta: #507292;
+
+  --color-site-amber-tint: #fff3ea;
+  --color-site-amber-edge: #c0521a;
+  --color-site-amber-ink: #9a3f12;
+  /* Reference #B97A52 — 3.23:1. */
+  --color-site-amber-meta: #9c633f;
+
+  --font-site: var(--font-geist), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
 }
 
 @layer base {
@@ -86,6 +136,17 @@
 
   [data-surface="dark"] :focus-visible {
     outline-color: #ffffff;
+  }
+
+  /* The marketing site's own keyboard and selection colours. Scoped to the
+     wrapper `(site)/layout.tsx` renders, so the product keeps its purple. */
+  [data-surface="site"] :focus-visible {
+    outline-color: var(--color-site-blue);
+  }
+
+  [data-surface="site"] ::selection {
+    background: var(--color-site-blue-mark);
+    color: #ffffff;
   }
 
   ::selection {
@@ -137,6 +198,37 @@
   }
 }
 
+/* The speech bubbles drift. Decorative only — nothing is communicated by the
+   movement, which is why the reduced-motion block below stops it outright
+   rather than shortening it. */
+@keyframes lia-float-a {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4.5deg);
+  }
+  50% {
+    transform: translateY(-7px) rotate(-4.5deg);
+  }
+}
+
+@keyframes lia-float-b {
+  0%,
+  100% {
+    transform: translateY(0) rotate(5deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(5deg);
+  }
+}
+
+@utility site-float-a {
+  animation: lia-float-a 6.5s ease-in-out infinite;
+}
+
+@utility site-float-b {
+  animation: lia-float-b 5.8s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -145,5 +237,10 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .site-float-a,
+  .site-float-b {
+    animation: none;
   }
 }
