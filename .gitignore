@@ -12,3 +12,6 @@ yarn-error.log*
 .vercel
 *.tsbuildinfo
 next-env.d.ts
+
+# Supabase CLI link state — machine-local, contains no secrets but no value in git
+supabase/.temp/
