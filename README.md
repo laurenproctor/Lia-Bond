@@ -66,6 +66,9 @@ Copy `.env.example` to `.env.local`. Nothing is required for local development.
 | `GOOGLE_CLIENT_SECRET` | **server only** | Google OAuth client secret. Never `NEXT_PUBLIC_`. |
 | `GOOGLE_OAUTH_REDIRECT_URI` | server | Must match a URI registered on the OAuth client exactly. Read from configuration, never from a request parameter. |
 | `GOOGLE_INTEGRATION_MODE` | server | `live` or `mock`. Unset decides from the credentials. `mock` is refused in production. |
+| `ANTHROPIC_API_KEY` | **server only** | Powers mention analysis. Never `NEXT_PUBLIC_`. |
+| `LIA_AI_MODE` | server | `live` or `mock`. Unset decides from the key. `mock` is refused in production. |
+| `LIA_ANALYSIS_BATCH_SIZE` | server | Mentions analysed per run. Defaults to 50. |
 
 Shape is validated at startup; presence is validated at first use, so the app
 still builds and runs without a Google project configured.
@@ -118,6 +121,43 @@ startup when `NODE_ENV=production`.
 
 Full detail, including the Google Cloud Console setup and the scope rationale:
 [`docs/integrations/google-business-profile.md`](docs/integrations/google-business-profile.md).
+
+## Mention analysis
+
+Classifies imported mentions for relevance, sentiment, topics, and risk, writes
+the result into `mention_analyses`, and raises an escalation when it finds
+something serious — keeping the promise in `docs/product-spec.md` that
+high-risk content is always escalated.
+
+Run it from `/mentions`, where the unanalysed backlog is shown with an
+**Analyze** button.
+
+**It writes no customer-facing text**, and **it is not monitoring** — analysis
+runs when somebody asks it to, so a backlog stays a backlog until a run clears
+it. Both are stated on the screen rather than left to be inferred.
+
+Two behaviours worth knowing before reading the code:
+
+- A **rating with no written review skips the model entirely** and is scored by
+  a pure function. Asking a model to explain a wordless four-star review invites
+  it to invent a reason, and an invented reason stored as an analysis would be
+  quoted back by a later drafting workflow.
+- An analysis **never overwrites a status a person set**. It advances `new` and
+  nothing else, and it touches no field a sync owns.
+
+Try it without an API key:
+
+```bash
+# .env.local
+LIA_AI_MODE=mock
+```
+
+The mock walks the whole pipeline — the run lock, batching, persistence,
+escalation, audit — deterministically and for free. It reacts to the text, so a
+review mentioning an allergic reaction produces a critical escalation locally.
+
+Full detail, including the cost model, the prompt-versioning rule, and the
+known limits: [`docs/ai/analysis.md`](docs/ai/analysis.md).
 
 ## Local database setup
 

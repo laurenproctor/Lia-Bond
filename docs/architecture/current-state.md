@@ -1,8 +1,8 @@
 # Current state
 
-Factual snapshot of the Lia codebase after workflow 03 (Google Business Profile
-review synchronisation). Update this document whenever a workflow changes the
-stack, the tenancy model, or the data flow.
+Factual snapshot of the Lia codebase after workflow 04 (AI provider layer and
+mention analysis). Update this document whenever a workflow changes the stack,
+the tenancy model, or the data flow.
 
 ## Stack
 
@@ -32,6 +32,8 @@ stack, the tenancy model, or the data flow.
 | `src/components/` | Presentational components. **Never** query the database. |
 | `src/domain/` | Zod schemas, inferred types, and lifecycle enums. No I/O. |
 | `src/integrations/` | Platform connector boundary. All Google API behaviour lives behind it. |
+| `src/ai/` | Model boundary. All Anthropic API behaviour lives behind it. |
+| `src/lib/analysis/` | Analysis orchestration: prompt, schema, heuristic, run service. |
 | `src/lib/integrations/` | OAuth state, credential handling, discovery, mapping, health. |
 | `src/lib/crypto/` | AES-256-GCM credential vault. Server-only. |
 | `src/lib/auth/` | Session resolution and the central permission matrix. |
@@ -154,6 +156,13 @@ change to every call site.
 - OAuth tokens never reach a client component, a repository DTO, an audit event,
   a log line, or a redirect URL. `src/lib/integrations/credentials.ts` is the
   only module that decrypts one.
+- No model provider message reaches a user, a log, or a stored row. Stricter
+  than the provider rule for Google, and for a specific reason: a model error
+  can echo the prompt, and the prompt contains a review and a reviewer's name.
+- An analysis writes only `sentiment`, `risk_level`, `relevance_score`, and a
+  status advanced from `new`. Source-owned columns are not reachable from
+  `MentionAnalysisOutcome`, the mirror of the rule that keeps a sync out of
+  Lia's workflow state.
 - A synchronisation writes only source-owned fields. Lia's workflow state —
   status, sentiment, risk, assignment, drafts, approvals, escalations — is not
   reachable from `IngestMentionInput`, so an ingest cannot overwrite it even by
@@ -209,7 +218,26 @@ change to every call site.
 | D30 | Reviews retry; discovery does not | A sync is background-shaped, where waiting out a 429 is right. Discovery runs inside a page render where a person is waiting, and three backoffs would hang the page for seven seconds before failing anyway. |
 | D31 | Per-location sync buttons, no "sync everything" | Each location is a separate Google request against a shared quota. Forty restaurants behind one spinner is illegible and uninterruptible; bulk is the scheduler's job. |
 
-## Known gaps after workflow 03
+## Decisions made in workflow 04
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D32 | Analysis before drafting | Every imported review read as `risk_level: low`, so the guards that say high-risk content must always be escalated were inert. Shipping drafting first would have landed customer-facing text generation in the same pass as its own safety inputs. |
+| D33 | Real Anthropic SDK plus a deterministic mock, chosen by env | The `GOOGLE_INTEGRATION_MODE` pattern, unchanged. Tests and local development run with no key; production refuses the mock at environment parse. |
+| D34 | Brand voice stays a typed fixture | Analysis does not read it. Promoting it now would ship a table nothing queries; it becomes real in workflow 05, where it drives generation. |
+| D35 | `AiProvider` has one method | Same reasoning as D9. There is one thing Lia asks a model to do today, and extension points for a second caller that does not exist would be guessing at its requirements. |
+| D36 | One call per mention returning one combined analysis | `mention_analyses` is one row carrying all five results — the schema already said this. The fields are interdependent, so five calls would each re-read the review and still merge into one row. |
+| D37 | Analysis is its own run, with a partial unique index as the lock | Mirrors `platform_sync_runs`. An application check is two statements with a race between them, and serverless means two requests are routinely two processes. |
+| D38 | High and critical risk auto-create an open, unassigned escalation | Keeps the product spec's promise. Reversible by dismissal, and an unowned item in the escalations centre is exactly the "somebody must look at this" signal. |
+| D39 | An analysis may not write source state | The mirror of D22. `MentionAnalysisOutcome` has fields for four columns and nothing else, so the guarantee is structural rather than a rule a call site must remember. |
+| D40 | Rating-only reviews are analysed deterministically, with no model call | A rating with no text has nothing to classify. The saving is incidental — the real reason is that asking a model to explain a wordless review invites it to invent a reason, and an invented reason stored as an analysis would be quoted back by a later drafting workflow. |
+| D41 | Reviewer display names are sent to the model | The user's explicit decision. Recorded because it sends personal data to a third party for a classification task that does not require it. |
+| D42 | The `mention_analyses` insert is the per-item commit point | No transaction is available (D17). Ordering escalation → mention update → analysis insert means a crash costs a repeated call, never a silently un-analysed mention. Analysis-first would leave a record that looks analysed, never gets its risk level, and is never selected again. |
+| D43 | `effort` left at the API default | Judging whether a mildly-worded review describes a safety incident is the call the guardrails rest on. Sweeping down needs labelled data, not a guess made before the feature has run. |
+| D44 | Synchronous Messages API, not Batches | Batches are half the price and can take an hour. Wrong for a button somebody is waiting on; the right home for a future overnight run. |
+| D45 | A run's first model call goes alone | The system prompt is cached, and no request can read an entry another is still writing. Firing the batch at once would pay full price for every mention. |
+
+## Known gaps after workflow 04
 
 Carried over from workflow 01:
 
@@ -269,3 +297,26 @@ New in workflow 03:
   locations under one connection ever returned the same `reviewId`, the row
   would move between them rather than duplicating — no data loss, but the
   location attribution would follow whichever synced last.
+
+New in workflow 04:
+
+- **The Anthropic API has never been called from this repository.** Same
+  position workflow 02 was in with Google: every test stubs the provider, and
+  the client is covered against a stubbed `fetch` rather than a live request.
+- **Prompt quality is unvalidated.** There is no labelled dataset, so the first
+  version's risk classification is untested against ground truth. The
+  `prompt_version` column and the append-only analyses table exist so a later
+  version can be compared against this one.
+- `effort` is left at the API default and unswept (D43). Deliberate — the sweep
+  needs real data.
+- **No scheduler.** `analyzeMentions()` accepts `trigger: "scheduled"` and needs
+  no request context, but nothing calls it on a timer.
+- Cost is bounded per run, not per day. Adequate while the trigger is manual.
+- Auto-escalation is a machine decision: a false critical creates an escalation
+  somebody must dismiss.
+- Analysis is per organization, not per location — there is no way to analyse
+  one restaurant's backlog only.
+- No re-analysis surface. The table supports it (append-only, readers take the
+  latest) but nothing in the product triggers it.
+- Brand voice still has no table. It arrives in workflow 05, where it first
+  drives generation.

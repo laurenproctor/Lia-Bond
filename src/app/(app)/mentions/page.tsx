@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { CalendarRange, Download, Star } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
+import { AnalysisPanel } from "@/components/mentions/analysis-panel";
 import { MentionListItem } from "@/components/mentions/mention-list-item";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -11,8 +12,11 @@ import { SearchInput } from "@/components/ui/search-input";
 import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import { SelectFilter } from "@/components/ui/select-filter";
+import { isAiAvailable } from "@/ai/registry";
+import { getAnalysisStatus } from "@/lib/analysis/analyze";
+import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
-import { getOrganizationScope } from "@/lib/tenancy/organization-context";
+import { getOrganizationContext } from "@/lib/tenancy/organization-context";
 import { toMentionViews } from "@/lib/view-models/mention";
 import type { MentionSourceType } from "@/domain";
 
@@ -27,13 +31,15 @@ const REVIEW_TYPES: MentionSourceType[] = [
 const REDDIT_TYPES: MentionSourceType[] = ["reddit_post", "reddit_comment"];
 
 export default async function MentionsPage() {
-  const scope = await getOrganizationScope();
+  const context = await getOrganizationContext();
+  const { scope, role } = context;
   const dataSource = await getDataSource();
 
-  const [mentions, locations, counts] = await Promise.all([
+  const [mentions, locations, counts, analysisStatus] = await Promise.all([
     dataSource.mentions.list(scope, { limit: 50 }),
     dataSource.locations.list(scope),
     dataSource.mentions.counts(scope),
+    getAnalysisStatus({ dataSource, scope }),
   ]);
 
   const analyses = await Promise.all(
@@ -136,6 +142,18 @@ export default async function MentionsPage() {
           ]}
         />
       </PageHeader>
+
+      <Card>
+        <AnalysisPanel
+          unanalyzedCount={analysisStatus.unanalyzedCount}
+          lastRunAt={analysisStatus.lastSuccessful?.completedAt ?? null}
+          lastStatus={analysisStatus.latest?.status ?? null}
+          lastErrorMessage={analysisStatus.latest?.errorMessage ?? null}
+          running={analysisStatus.running}
+          canAnalyze={can(role, "mention.analyze")}
+          available={isAiAvailable()}
+        />
+      </Card>
 
       <div className="grid items-start gap-4 xl:grid-cols-12">
         <Card flush className="xl:col-span-5">

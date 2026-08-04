@@ -355,11 +355,64 @@ export const mentionAnalysisSchema = z
     recommendedAction: recommendedActionSchema,
     recommendationExplanation: z.string().nullable(),
     analyzedAt: timestampSchema,
+    /** Which run produced it. Null for seeded rows and one-off analyses. */
+    analysisRunId: uuidSchema.nullable(),
+    /** Null on a heuristic analysis, which spends no tokens. */
+    inputTokens: z.number().int().min(0).nullable(),
+    outputTokens: z.number().int().min(0).nullable(),
     createdAt: timestampSchema,
   })
   .extend(organizationOwnedSchema.shape);
 
 export type MentionAnalysis = z.infer<typeof mentionAnalysisSchema>;
+
+/**
+ * What an analysis run writes.
+ *
+ * `organizationId` is absent for the same reason it is absent from
+ * `CreateMentionInput`: the tenant comes from the caller's verified scope, not
+ * from the payload.
+ *
+ * `analyzedAt` is supplied rather than defaulted so every analysis in one run
+ * carries that run's instant, and the demo store's fixed clock does not
+ * disagree with Postgres.
+ */
+export const createMentionAnalysisInputSchema = mentionAnalysisSchema
+  .omit({
+    id: true,
+    organizationId: true,
+    createdAt: true,
+  })
+  .extend({
+    analysisRunId: uuidSchema.nullable().default(null),
+    inputTokens: z.number().int().min(0).nullable().default(null),
+    outputTokens: z.number().int().min(0).nullable().default(null),
+  });
+
+export type CreateMentionAnalysisInput = z.input<
+  typeof createMentionAnalysisInputSchema
+>;
+
+/** Provenance for an analysis produced without a model call. */
+export const HEURISTIC_MODEL_PROVIDER = "lia" as const;
+export const HEURISTIC_MODEL_NAME = "rating-heuristic" as const;
+
+/**
+ * Was this analysis produced by a model, or by a pure function?
+ *
+ * Worth being able to ask: a rating-only review's analysis is honest but
+ * shallow, and a reader comparing two analyses should be able to tell which
+ * kind they are looking at rather than assuming a model weighed both.
+ */
+export function isHeuristicAnalysis(analysis: {
+  modelProvider: string;
+  modelName: string;
+}): boolean {
+  return (
+    analysis.modelProvider === HEURISTIC_MODEL_PROVIDER &&
+    analysis.modelName === HEURISTIC_MODEL_NAME
+  );
+}
 
 /** A mention with its latest analysis, which is what every workspace renders. */
 export const mentionWithAnalysisSchema = z.object({

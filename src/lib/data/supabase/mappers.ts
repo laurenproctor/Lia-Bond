@@ -1,4 +1,5 @@
 import {
+  analysisRunSchema,
   approvalSchema,
   auditEventSchema,
   automationRuleSchema,
@@ -14,6 +15,7 @@ import {
   platformSyncRunSchema,
   responseDraftSchema,
   userSchema,
+  type AnalysisRun,
   type Approval,
   type AuditEvent,
   type AutomationRule,
@@ -286,6 +288,43 @@ export function toMention(row: Row): Mention {
  * The counts arrive as five separate columns and are folded into one object,
  * because five loose integers on a domain type invite reading four of them.
  */
+/**
+ * An analysis run.
+ *
+ * The five counts arrive as separate columns and are folded into one object,
+ * for the same reason a sync run's are: five loose integers on a domain type
+ * invite reading four of them.
+ */
+export function toAnalysisRun(row: Row): AnalysisRun {
+  return parseOrThrow(
+    analysisRunSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      trigger: row.trigger,
+      actorUserId: row.actor_user_id ?? null,
+      status: row.status,
+      startedAt: iso(row.started_at),
+      completedAt: isoOrNull(row.completed_at),
+      counts: {
+        analyzed: Number(row.analyzed_count ?? 0),
+        heuristic: Number(row.heuristic_count ?? 0),
+        escalated: Number(row.escalated_count ?? 0),
+        failed: Number(row.failed_count ?? 0),
+        remaining: Number(row.remaining_count ?? 0),
+      },
+      modelProvider: row.model_provider ?? null,
+      modelName: row.model_name ?? null,
+      promptVersion: row.prompt_version ?? null,
+      errorCode: row.error_code ?? null,
+      errorMessage: row.error_message ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "analysis run",
+  );
+}
+
 export function toPlatformSyncRun(row: Row): PlatformSyncRun {
   return parseOrThrow(
     platformSyncRunSchema,
@@ -343,6 +382,15 @@ export function toMentionAnalysis(row: Row): MentionAnalysis {
       recommendedAction: row.recommended_action,
       recommendationExplanation: row.recommendation_explanation ?? null,
       analyzedAt: iso(row.analyzed_at),
+      analysisRunId: row.analysis_run_id ?? null,
+      inputTokens:
+        row.input_tokens === null || row.input_tokens === undefined
+          ? null
+          : Number(row.input_tokens),
+      outputTokens:
+        row.output_tokens === null || row.output_tokens === undefined
+          ? null
+          : Number(row.output_tokens),
       createdAt: iso(row.created_at),
     },
     "mention analysis",

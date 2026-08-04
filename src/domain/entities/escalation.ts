@@ -35,6 +35,29 @@ export const escalationSchema = z
 
 export type Escalation = z.infer<typeof escalationSchema>;
 
+/**
+ * Raising an escalation.
+ *
+ * No `assignedUserId`: an escalation raised by an analysis has no owner yet,
+ * and picking one is a human decision. An unassigned item in the escalations
+ * centre is precisely the "somebody must look at this" signal — giving it a
+ * default owner would make it look handled.
+ *
+ * No `status` either. A new escalation is `open`; there is no legitimate reason
+ * to create one already resolved, and the create constraint on the table would
+ * refuse it anyway.
+ */
+export const createEscalationInputSchema = z.object({
+  mentionId: uuidSchema,
+  category: escalationCategorySchema,
+  severity: escalationSeveritySchema,
+  title: z.string().min(1).max(240),
+  summary: z.string().nullable(),
+  dueAt: timestampSchema.nullable(),
+});
+
+export type CreateEscalationInput = z.infer<typeof createEscalationInputSchema>;
+
 export const escalationFilterSchema = z.object({
   mentionId: uuidSchema.optional(),
   statuses: z.array(escalationStatusSchema).optional(),
