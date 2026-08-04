@@ -356,6 +356,7 @@ export const AUDIT_ENTITY_TYPES = [
   "approval",
   "escalation",
   "automation_rule",
+  "brand_voice",
 ] as const;
 export const auditEntityTypeSchema = vocabulary(AUDIT_ENTITY_TYPES).schema;
 export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>;
@@ -412,6 +413,7 @@ export const AUDIT_EVENT_TYPES = [
   "membership.role_changed",
   "membership.status_changed",
   "membership.removed",
+  "brand_voice.updated",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
