@@ -13,14 +13,14 @@
 ## Global constraints
 
 - **Sentence case throughout the interface.** Headings, buttons, labels, nav items. Never Title Case.
-- **Server components by default.** Only `SiteNav` (mobile disclosure) and `AccessForm` are `"use client"`.
+- **Server components by default.** The only client components are `SiteNav` (mobile disclosure), `AccessForm` (the form), and `(site)/error.tsx` (Next requires error boundaries to be client components).
 - **TypeScript strict. No `any`** unless justified in a comment.
 - **No page component over ~300 lines.**
 - **Never imply direct publishing where the connector does not support it** (CLAUDE.md rule 6). Platform claims derive from `src/domain/entities/platform.ts` and `src/lib/seed/dataset.ts`, not from the reference copy.
 - **Accessible labels and keyboard states.** Every interactive element reachable and visibly focused.
 - **No inline secrets.**
 - **Palette is fixed by Task 2.** Never hand-write a hex value in a component; use the `site-*` tokens.
-- **Font stack:** Geist for `(site)`, Inter for `(app)`. Applied per route group, never on `<html>`.
+- **Font stack:** Inter stays on `<html>` as the application default — six auth routes have no group layout and depend on it. `(site)` overrides with Geist via the `font-site` utility. See Task 3.
 - **Commit after every task.**
 
 ---
@@ -613,24 +613,37 @@ git commit -m "Add marketing design tokens with AA contrast corrections"
 
 ---
 
-## Task 3: Split the fonts across route groups
+## Task 3: Document the two-font arrangement
 
-Today the root layout puts `inter.variable` on `<html>`, so every route inherits Inter. The site needs Geist. Moving each font into its own group layout means Next only preloads the face a route actually uses.
+**Amended after the pre-flight scan.** The original task moved Inter out of the
+root layout and into `(app)`. That would have been correct if every route lived
+in a group — but six do not. `/sign-in`, `/sign-up`, `/forgot-password`,
+`/reset-password`, `/invite`, and `/auth` sit directly under `src/app` with no
+layout of their own, so removing the root font variable would have dropped Inter
+on all six and left them on the system stack.
 
-The subtlety: `body` computes `font-family: var(--font-sans)` above the wrapper, and descendants inherit the *computed* value. Declaring the variable on a wrapper is not enough — the wrapper must also re-declare `font-family`, which is what the `font-sans` / `font-site` utility does.
+So Inter stays on `<html>` as the application-wide default, and the `(site)`
+layout overrides it with Geist for marketing routes only. `(app)` needs no
+change at all.
+
+The mechanism worth understanding, because Task 6 depends on it: `body` computes
+`font-family: var(--font-sans)` at the body element, and descendants inherit the
+*already-computed* value. Declaring `--font-geist` on a wrapper is therefore not
+enough on its own — the wrapper must also re-declare `font-family`, which is
+what the `font-site` utility does. Variable plus utility, together, or Geist
+never takes effect.
+
+The cost accepted here: Inter is preloaded on marketing routes where Geist
+actually renders. Step 2 measures it so the number is known rather than assumed.
 
 **Files:**
-- Modify: `src/app/layout.tsx`
-- Modify: `src/app/(app)/layout.tsx`
+- Modify: `src/app/layout.tsx` (comment only, no behaviour change)
 
-- [ ] **Step 1: Take the font off the root layout**
+- [ ] **Step 1: Record why the root font stays**
 
-In `src/app/layout.tsx`, delete the `Inter` import and the `inter` constant:
+In `src/app/layout.tsx`, replace the bare `inter` constant declaration:
 
 ```ts
-// DELETE these lines:
-import { Inter } from "next/font/google";
-
 const inter = Inter({
   subsets: ["latin"],
   display: "swap",
@@ -638,37 +651,22 @@ const inter = Inter({
 });
 ```
 
-Change the `<html>` element from:
-
-```tsx
-    <html lang="en" className={inter.variable}>
-```
-
-to:
-
-```tsx
-    {/* No font variable here. Each route group declares its own so Next
-        preloads only the face that group uses — the product never downloads
-        Geist, and the marketing site never downloads Inter. */}
-    <html lang="en">
-```
-
-The skip link's `focus:bg-purple-600` stays: it renders above both groups and purple is the product's colour, which is the right default for a link that only appears on keyboard focus.
-
-- [ ] **Step 2: Give the product group its font**
-
-In `src/app/(app)/layout.tsx`, add the import at the top:
-
-```ts
-import { Inter } from "next/font/google";
-```
-
-After the imports, add the constant:
+with the same declaration carrying its reason:
 
 ```ts
 /**
- * Declared here rather than in the root layout so Next preloads Inter only on
- * product routes. The marketing site under `(site)` loads Geist instead.
+ * The application-wide default, set here rather than per route group.
+ *
+ * Six routes — /sign-in, /sign-up, /forgot-password, /reset-password, /invite,
+ * and /auth — sit directly under `src/app` with no layout of their own, so this
+ * is the only place that can give them a typeface. Moving Inter down into
+ * `(app)` would silently drop them onto the system stack.
+ *
+ * The marketing site overrides this in `(site)/layout.tsx`, which declares
+ * Geist and re-applies `font-family` via the `font-site` utility. Re-applying
+ * is required, not decorative: `body` resolves `var(--font-sans)` here, and
+ * descendants inherit that computed value rather than re-resolving the
+ * variable.
  */
 const inter = Inter({
   subsets: ["latin"],
@@ -677,54 +675,22 @@ const inter = Inter({
 });
 ```
 
-Then wrap the returned `<AppShell>` in a variable-carrying element. Change:
+Change nothing else. `<html className={inter.variable}>` stays exactly as it is.
 
-```tsx
-  return (
-    <AppShell
-```
+- [ ] **Step 2: Confirm the auth routes still have Inter**
 
-to:
+Run: `npm run dev`, open `http://localhost:3000/sign-in`, and inspect the
+heading in devtools.
 
-```tsx
-  return (
-    // `font-sans` is not redundant with the variable: `body` resolves
-    // `var(--font-sans)` above this element, where `--font-inter` is undefined,
-    // and descendants inherit that already-computed value. Re-declaring the
-    // family here is what makes the variable take effect.
-    <div className={`${inter.variable} font-sans`}>
-      <AppShell
-```
+Expected: `font-family` resolves to a name containing `__Inter`. This is the
+regression the pre-flight scan caught; the check exists so it stays caught.
 
-and close it — find the closing of the `AppShell` element:
-
-```tsx
-      {children}
-    </AppShell>
-  );
-```
-
-replace with:
-
-```tsx
-        {children}
-      </AppShell>
-    </div>
-  );
-```
-
-Re-indent the `AppShell` props by two spaces so the file stays consistent.
-
-- [ ] **Step 3: Verify the product still renders in Inter**
-
-Run: `npm run dev`, open `http://localhost:3000/overview`, and in devtools inspect the sidebar. Expected: `font-family` resolves to a name containing `__Inter`.
-
-- [ ] **Step 4: Typecheck and commit**
+- [ ] **Step 3: Typecheck and commit**
 
 ```bash
 npm run typecheck
-git add src/app/layout.tsx "src/app/(app)/layout.tsx"
-git commit -m "Move the product font into its own route group"
+git add src/app/layout.tsx
+git commit -m "Record why the root layout owns the default font"
 ```
 
 ---
