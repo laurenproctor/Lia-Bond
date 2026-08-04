@@ -3,6 +3,7 @@ import {
   approvalSchema,
   auditEventSchema,
   automationRuleSchema,
+  brandVoiceProfileSchema,
   escalationSchema,
   isAutoPublishSafe,
   locationSchema,
@@ -231,6 +232,29 @@ describe("automation guardrails", () => {
   it("never lets a seeded rule auto-publish risky content", () => {
     for (const rule of SEED_DATASET.automationRules) {
       expect(isAutoPublishSafe(rule)).toBe(true);
+    }
+  });
+});
+
+describe("brand voice seed", () => {
+  it("gives the primary organization exactly one profile", () => {
+    const owned = SEED_DATASET.brandVoiceProfiles.filter(
+      (profile) => profile.organizationId === ORG_USHG,
+    );
+    expect(owned).toHaveLength(1);
+  });
+
+  it("holds at most one profile per organization", () => {
+    const seen = new Set<string>();
+    for (const profile of SEED_DATASET.brandVoiceProfiles) {
+      expect(seen.has(profile.organizationId)).toBe(false);
+      seen.add(profile.organizationId);
+    }
+  });
+
+  it("seeds values that satisfy the domain schema", () => {
+    for (const profile of SEED_DATASET.brandVoiceProfiles) {
+      expect(() => brandVoiceProfileSchema.parse(profile)).not.toThrow();
     }
   });
 });

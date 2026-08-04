@@ -189,6 +189,30 @@ sections.push(
     "id", "organizationId", "name", "description", "status", "priority",
     "conditions", "actions", "lastRunAt", "createdAt", "updatedAt",
   ]),
+  insert(
+    "brand_voice_profiles",
+    SEED_DATASET.brandVoiceProfiles.map((profile) => ({
+      id: profile.id,
+      organizationId: profile.organizationId,
+      name: profile.name,
+      axisWarmth: profile.axes.warmth,
+      axisDetail: profile.axes.detail,
+      axisFormality: profile.axes.formality,
+      axisConfidence: profile.axes.confidence,
+      axisHospitality: profile.axes.hospitality,
+      approvedPhrases: profile.approvedPhrases,
+      prohibitedPhrases: profile.prohibitedPhrases,
+      version: profile.version,
+      updatedByUserId: profile.updatedByUserId,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    })),
+    [
+      "id", "organizationId", "name", "axisWarmth", "axisDetail",
+      "axisFormality", "axisConfidence", "axisHospitality", "approvedPhrases",
+      "prohibitedPhrases", "version", "updatedByUserId", "createdAt", "updatedAt",
+    ],
+  ),
   insert("audit_events", SEED_DATASET.auditEvents, [
     "id", "organizationId", "actorUserId", "actorType", "eventType",
     "entityType", "entityId", "previousState", "newState", "metadata",
@@ -210,4 +234,4 @@ const total = Object.values(SEED_DATASET).reduce(
   (sum, rows) => sum + (rows as unknown[]).length,
   0,
 );
-console.log(`Wrote ${outputPath} (${total} rows across 13 tables).`);
+console.log(`Wrote ${outputPath} (${total} rows across 14 tables).`);

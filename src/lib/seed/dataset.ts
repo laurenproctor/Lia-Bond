@@ -2,6 +2,7 @@ import type {
   Approval,
   AuditEvent,
   AutomationRule,
+  BrandVoiceProfile,
   ConnectorCapabilities,
   Escalation,
   Location,
@@ -51,6 +52,7 @@ export interface SeedDataset {
   approvals: Approval[];
   escalations: Escalation[];
   automationRules: AutomationRule[];
+  brandVoiceProfiles: BrandVoiceProfile[];
   auditEvents: AuditEvent[];
 }
 
@@ -1730,6 +1732,32 @@ const automationRules: AutomationRule[] = [
 ];
 
 /* -------------------------------------------------------------------------- */
+/* Brand voice                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export const BRAND_VOICE_USHG = seedId("brand_voice:ushg");
+
+const brandVoiceProfiles: BrandVoiceProfile[] = [
+  {
+    id: BRAND_VOICE_USHG,
+    organizationId: ORG_USHG,
+    name: "Union Square Hospitality voice",
+    axes: { warmth: 45, detail: 40, formality: 55, confidence: 44, hospitality: 35 },
+    approvedPhrases: [
+      "thank you for sharing",
+      "we appreciate the feedback",
+      "we're here to help",
+      "we look forward to welcoming you back",
+    ],
+    prohibitedPhrases: ["we never", "not our fault", "policy prohibits", "as per our policy"],
+    version: 1,
+    updatedByUserId: USER_NAOMI,
+    createdAt: CREATED,
+    updatedAt: CREATED,
+  },
+];
+
+/* -------------------------------------------------------------------------- */
 /* Audit events                                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -1887,6 +1915,7 @@ export const SEED_DATASET: SeedDataset = {
   approvals,
   escalations,
   automationRules,
+  brandVoiceProfiles,
   auditEvents,
 };
 
