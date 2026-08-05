@@ -305,6 +305,7 @@ export async function pollMonitoringQuery(
   let requestsSpent = 0;
   let truncated = false;
   let malformedCount = 0;
+  let ingestFailures = 0;
 
   try {
     // Resolved before spending a request: an unconnected organization should
@@ -443,11 +444,20 @@ export async function pollMonitoringQuery(
             // One candidate's failure — a storage conflict, a schema
             // surprise the normaliser's own bounds did not anticipate — must
             // not cost the batch its others, the same reasoning
-            // `syncGoogleReviews` applies per review. Neither accepted nor
-            // rejected: the gate reached no stored verdict for it, so
-            // `evaluated` and `accepted + rejected` disagreeing is the
-            // honest record of what happened, in the absence of a counter
-            // `news_poll_runs` has no column for.
+            // `syncGoogleReviews` applies per review, but counted rather
+            // than swallowed: a run that ingested nothing and still closed
+            // `completed` would be the exact silent failure D26 named
+            // `platform_sync_runs` to prevent. Neither accepted nor
+            // rejected — the gate reached no stored verdict for it — but
+            // `ingestFailures` drives `status` to `partial` below and
+            // carries a Lia-authored `errorCode`/`errorMessage`, never the
+            // thrown error's own text.
+            ingestFailures += 1;
+            if (!errorCode) {
+              errorCode = "ingest_failed";
+              errorMessage =
+                "Some articles could not be stored. Try polling again, and let your administrator know if it keeps happening.";
+            }
           }
         }
 
@@ -499,11 +509,12 @@ export async function pollMonitoringQuery(
       : null;
 
   // The provider capped the page, sent items that could not be normalised,
-  // or something failed after the search succeeded: recorded as `partial` so
-  // a degraded poll never reads as either a quiet news day or a clean run.
+  // one or more candidates failed to store, or something failed after the
+  // search succeeded: recorded as `partial` so a degraded poll never reads
+  // as either a quiet news day or a clean run.
   const status: NewsPollRun["status"] = runFailed
     ? "failed"
-    : truncated || malformedCount > 0
+    : truncated || malformedCount > 0 || ingestFailures > 0
       ? "partial"
       : "completed";
 

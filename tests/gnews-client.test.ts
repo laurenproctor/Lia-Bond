@@ -121,6 +121,24 @@ describe("normaliseGNewsArticle", () => {
       }),
     ).toBeNull();
   });
+
+  /**
+   * `mentions.sourceUrl` is `z.url()`: a scheme-less string passes GNews's
+   * own promised shape and this function's `typeof` check, but is not a
+   * well-formed URL. Catching it here — the same `new URL()` parse `z.url()`
+   * itself uses — means it becomes a counted `malformedCount`, not a
+   * `ZodError` thrown by `mentions.ingest` after the gate already admitted
+   * it.
+   */
+  it("returns null rather than throwing on a url with no scheme", () => {
+    expect(normaliseGNewsArticle({ ...ARTICLE, url: "www.example-paper.com/food/story" })).toBeNull();
+  });
+
+  it("returns null rather than throwing on a publisher domain longer than the mention field allows", () => {
+    const longHostUrl = `https://${"a".repeat(250)}.com/story`;
+    const result = normaliseGNewsArticle({ ...ARTICLE, url: longHostUrl });
+    expect(result).toBeNull();
+  });
 });
 
 describe("GNewsMonitor.search", () => {

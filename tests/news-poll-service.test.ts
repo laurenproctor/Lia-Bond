@@ -400,13 +400,60 @@ describe("pollMonitoringQuery", () => {
       now: "2026-08-04T12:00:00.000Z",
     });
 
-    // The well-formed candidate still landed, and the run closed normally
-    // rather than staying `running` or being marked `failed` outright.
+    // The well-formed candidate still landed, and the failure is counted
+    // and surfaced rather than swallowed: `partial`, not the outright
+    // `failed` a run-level error would produce, and not a silent `completed`
+    // either.
     expect(outcome.accepted).toBe(1);
-    expect(["completed", "partial"]).toContain(outcome.status);
+    expect(outcome.status).toBe("partial");
+    expect(outcome.errorCode).toBe("ingest_failed");
 
     const [run] = await dataSource.newsPollRuns.listForQuery(ushg.admin(), query.id, 1);
-    expect(run?.status).not.toBe("running");
+    expect(run?.status).toBe("partial");
+    expect(run?.errorCode).toBe("ingest_failed");
+  });
+
+  it("reports a batch that fails ingest entirely as partial, not a clean completed", async () => {
+    const query = await dataSource.monitoringQueries.create(ushg.admin(), QUERY_INPUT);
+
+    // Every candidate is well-formed enough to pass the gate — matching
+    // keywords, no exclusions — but fails `mentions.ingest`'s own
+    // `sourceUrl: z.url()` validation. This is the concrete scenario the
+    // review named: a GNews payload the normaliser's `typeof` check accepts
+    // but which is not a well-formed URL (now also caught at the normaliser,
+    // see tests/gnews-client.test.ts — this proves the poll service does not
+    // silently lose the batch even if that boundary is ever bypassed).
+    const malformedUrl = batch(["Gramercy Tavern reopens"]).articles[0]!;
+    const articles = [
+      { ...malformedUrl, externalId: "malformed-1", url: "www.paper.example/story-1" },
+      { ...malformedUrl, externalId: "malformed-2", url: "www.paper.example/story-2" },
+    ];
+
+    const outcome = await pollMonitoringQuery({
+      dataSource,
+      scope: ushg.admin(),
+      query,
+      monitor: monitorReturning({
+        articles,
+        requestsSpent: 1,
+        truncated: false,
+        malformedCount: 0,
+      }),
+      trigger: "manual",
+      actorUserId: ushg.admin().userId,
+      now: "2026-08-04T12:00:00.000Z",
+    });
+
+    // Total ingest loss must not read as a clean, uneventful poll.
+    expect(outcome.accepted).toBe(0);
+    expect(outcome.status).toBe("partial");
+    expect(outcome.errorCode).not.toBeNull();
+
+    const mentions = await dataSource.mentions.list(ushg.admin(), {
+      sourceTypes: ["news_article"],
+      limit: 100,
+    });
+    expect(mentions.filter((m) => m.title === "Gramercy Tavern reopens")).toHaveLength(0);
   });
 
   it("records min, mean, and max gate scores on the run", async () => {

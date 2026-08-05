@@ -30,6 +30,28 @@ function domainOf(url: string): string | null {
   }
 }
 
+/**
+ * Is this a fully-qualified URL — the same test `mentionSchema.sourceUrl`'s
+ * `z.url()` applies?
+ *
+ * GNews's schema promises a URL but not a well-formed one: `"www.paper.
+ * example/story"`, missing its scheme, is a plain string as far as
+ * `typeof` is concerned. `new URL()` is the same WHATWG parser `z.url()`
+ * uses, so validating here means the same input either passes both checks
+ * or neither — a malformed one is dropped into `malformedCount` rather than
+ * reaching `mentions.ingest`, where it would throw *after* the gate has
+ * already admitted it, past the point where "one bad candidate" can be
+ * absorbed by anything but a counted failure.
+ */
+function isWellFormedUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return Boolean(parsed);
+  } catch {
+    return false;
+  }
+}
+
 function isoOrNull(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const parsed = new Date(value);
@@ -52,6 +74,8 @@ function isoOrNull(value: unknown): string | null {
 const MAX_EXTERNAL_ID_LENGTH = 300;
 const MAX_TITLE_LENGTH = 400;
 const MAX_PUBLISHER_NAME_LENGTH = 200;
+/** Mirrors `mentionSchema.publisherDomain`'s bound. */
+const MAX_PUBLISHER_DOMAIN_LENGTH = 253;
 
 /**
  * One GNews article to Lia's shape, or null.
@@ -71,6 +95,12 @@ export function normaliseGNewsArticle(raw: unknown): ExternalArticle | null {
   const title = typeof article.title === "string" ? article.title.trim() : "";
   const publishedAt = isoOrNull(article.publishedAt);
   if (!url || !title || !publishedAt) return null;
+  // Malformed here, not merely absent: `mentions.sourceUrl` is `z.url()`,
+  // and a scheme-less string like "www.paper.example/story" is exactly the
+  // shape that would otherwise pass every check in this function only to
+  // throw inside `mentions.ingest`, well past where the gate already
+  // admitted it.
+  if (!isWellFormedUrl(url)) return null;
   if (url.length > MAX_EXTERNAL_ID_LENGTH) return null;
   if (title.length > MAX_TITLE_LENGTH) return null;
 
@@ -82,6 +112,11 @@ export function normaliseGNewsArticle(raw: unknown): ExternalArticle | null {
   const publisherName = typeof source.name === "string" ? source.name : null;
   if (publisherName !== null && publisherName.length > MAX_PUBLISHER_NAME_LENGTH) return null;
 
+  const publisherDomain = domainOf(url);
+  if (publisherDomain !== null && publisherDomain.length > MAX_PUBLISHER_DOMAIN_LENGTH) {
+    return null;
+  }
+
   return {
     externalId: url,
     url,
@@ -91,7 +126,7 @@ export function normaliseGNewsArticle(raw: unknown): ExternalArticle | null {
         ? article.description.trim()
         : null,
     publisherName,
-    publisherDomain: domainOf(url),
+    publisherDomain,
     authorName: null,
     publishedAt,
     language: null,
