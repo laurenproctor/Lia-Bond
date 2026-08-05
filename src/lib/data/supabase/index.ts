@@ -64,6 +64,7 @@ import {
   toResponseDraft,
   toUser,
 } from "@/lib/data/supabase/mappers";
+import { createMonitoringRepositories } from "@/lib/data/supabase/monitoring";
 
 /**
  * The Supabase adapter.
@@ -124,22 +125,6 @@ function fail(error: { message: string; code?: string }, action: string): never 
     throw new DataError("forbidden", "You don't have permission to do that.");
   }
   throw new DataError("unavailable", `Could not ${action}. Please try again.`);
-}
-
-/**
- * Placeholder for a repository member `createSupabaseDataSource` does not
- * implement yet.
- *
- * News monitoring's real Supabase adapter (PostgREST queries, row mappers,
- * the `23505` → `PollRunInProgressError` translation) is Task 5's work, not
- * this one's. This keeps `LiaDataSource` — which requires these members —
- * satisfied, and the branch typechecking, without pre-empting that design.
- */
-function notImplemented(member: string): never {
-  throw new DataError(
-    "unavailable",
-    `${member} is not implemented yet. The Supabase adapter for news monitoring lands separately.`,
-  );
 }
 
 export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource {
@@ -1069,57 +1054,9 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
     },
 
-    // Stubs — see `notImplemented`. Replaced wholesale by Task 5.
-    monitoringQueries: {
-      async list() {
-        notImplemented("monitoringQueries.list");
-      },
-      async get() {
-        notImplemented("monitoringQueries.get");
-      },
-      async create() {
-        notImplemented("monitoringQueries.create");
-      },
-      async update() {
-        notImplemented("monitoringQueries.update");
-      },
-      async remove() {
-        notImplemented("monitoringQueries.remove");
-      },
-      async markPolled() {
-        notImplemented("monitoringQueries.markPolled");
-      },
-      async listDue() {
-        notImplemented("monitoringQueries.listDue");
-      },
-    },
-
-    newsPollRuns: {
-      async start() {
-        notImplemented("newsPollRuns.start");
-      },
-      async finish() {
-        notImplemented("newsPollRuns.finish");
-      },
-      async listForQuery() {
-        notImplemented("newsPollRuns.listForQuery");
-      },
-      async requestsSpentSince() {
-        notImplemented("newsPollRuns.requestsSpentSince");
-      },
-    },
-
-    newsRejectedCandidates: {
-      async recordMany() {
-        notImplemented("newsRejectedCandidates.recordMany");
-      },
-      async listForQuery() {
-        notImplemented("newsRejectedCandidates.listForQuery");
-      },
-      async purgeOlderThan() {
-        notImplemented("newsRejectedCandidates.purgeOlderThan");
-      },
-    },
+    // News monitoring's own file: see the doc comment at the top of
+    // `supabase/monitoring.ts`.
+    ...createMonitoringRepositories(client),
 
     mentions: {
       async list(scope, filter = {}) {
