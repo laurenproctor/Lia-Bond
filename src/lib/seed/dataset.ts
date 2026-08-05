@@ -484,6 +484,13 @@ const platformProfiles: PlatformProfile[] = [
 /* -------------------------------------------------------------------------- */
 
 export const MQ_USHG_BRAND = seedId("mq:ushg-brand");
+// The identifier is a holdover from an earlier draft that bound this query to
+// "Gramercy Tavern" — a real, unrelated New York restaurant, not part of this
+// fictional dataset. Fixed in review: the query's *content* (name, keywords)
+// below now names only the fictional Maison Laurent / SoHo identity. Kept the
+// export name as-is since nothing about a stable identifier label is
+// customer- or database-facing, and renaming it would only churn the derived
+// seed UUID for no benefit.
 export const MQ_USHG_GRAMERCY = seedId("mq:ushg-gramercy");
 export const MQ_HARBOR_BRAND = seedId("mq:harbor-brand");
 
@@ -551,14 +558,21 @@ const monitoringQueries: MonitoringQuery[] = [
     // query's, so the two must agree for the seed to depict a state the real
     // system could have produced.
     locationId: LOC_SOHO,
-    name: "Gramercy Tavern (SoHo) watch",
+    name: "Maison Laurent SoHo watch",
     queryType: "location",
-    // "Gramercy Tavern" is this codebase's own canonical location-query
-    // fixture (every monitoring test uses it — see tests/relevance-gate.test.ts,
-    // tests/gnews-client.test.ts, tests/news-poll-service.test.ts, etc.);
-    // kept here as a second keyword alongside the brand name so this query
-    // would plausibly have found the SoHo articles it is attributed to.
-    keywords: ["Maison Laurent SoHo", "Gramercy Tavern"],
+    // "Laurent" alone is exactly the short, space-less term
+    // src/lib/monitoring/gate.ts::isAmbiguous treats as ambiguous — the same
+    // "Nobu, Odo, Zuma" pattern that comment names, a plausible shorthand an
+    // admin configuring this query might actually type. "Prince Street" is
+    // this location's own seeded street address (see LOC_SOHO's
+    // addressLine1 above) — a real street name, but not a real *business*,
+    // and it shares no substring with "Laurent" so distinctSignals treats
+    // the two as independent evidence rather than collapsing them. A
+    // candidate matching only "Laurent" needs "Prince Street" to also match
+    // (or an allowed-domains hit) before the gate admits it; both existing
+    // SoHo mentions below say "Maison Laurent" outright, so "Laurent" alone
+    // is why this query would have found them.
+    keywords: ["Laurent", "Prince Street"],
     // A publisher on this list also earns LOCAL_OUTLET_BONUS in the gate —
     // both outlets below already cover this SoHo location.
     allowedDomains: ["eater.com", "timeout.com"],
