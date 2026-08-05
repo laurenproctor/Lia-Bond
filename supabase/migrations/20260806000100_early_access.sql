@@ -29,8 +29,11 @@ create table public.early_access_requests (
   -- the Zod schema, which is the thing that actually runs on every write.
   industry text check (industry is null or length(industry) between 1 and 60),
 
-  -- Which page converted. A path, never an absolute URL.
-  source_path text check (source_path is null or source_path like '/%'),
+  -- Which page converted. A path, never an absolute URL, and capped at 120 to
+  -- match the bound in `@/lib/site/early-access`.
+  source_path text check (
+    source_path is null or (source_path like '/%' and length(source_path) <= 120)
+  ),
 
   created_at timestamptz not null default now()
 );
