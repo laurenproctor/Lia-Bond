@@ -10,6 +10,7 @@ import {
   type SyncTrigger,
 } from "@/domain";
 import { recordAuditEvent } from "@/lib/audit/record";
+import { SYSTEM_ACTOR_ID } from "@/lib/cron/system-actor";
 import { DataError, PollRunInProgressError } from "@/lib/data/errors";
 import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
 import { remainingScheduledRequests } from "@/lib/monitoring/budget";
@@ -503,22 +504,11 @@ export async function pollMonitoringQuery(
 /* The sweep                                                                   */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Stands in for a real user on the one write path with no session behind it.
- *
- * Cron holds no membership, so it cannot construct a verified
- * `OrganizationScope` the way `getOrganizationContext()` does for every other
- * caller (D70). This sentinel exists only to satisfy `OrganizationScope`'s
- * `userId: string` — widening that field to `string | null` would weaken the
- * tenancy type for every call site in the codebase to accommodate this one.
- *
- * It must never reach the database: `public.users` has no row for it, so an
- * audit event or a connection carrying it as a foreign key would fail. The
- * scheduled path records audit with `actorType: "system"` and
- * `actorUserId: null` instead, and `ensureNewsConnection` refuses to create a
- * connection when `actorUserId` (not `scope.userId`) is null.
- */
-export const SYSTEM_ACTOR_ID = "00000000-0000-0000-0000-000000000000";
+// Re-exported so existing imports (`tests/news-poll-service.test.ts` among
+// them) keep working unchanged: this moved to `src/lib/cron/system-actor.ts`
+// once the analyze-mentions sweep needed the same sentinel and "poll-service"
+// stopped being an accurate home for it.
+export { SYSTEM_ACTOR_ID };
 
 export interface PollDueQueriesOptions {
   dataSource: LiaDataSource;

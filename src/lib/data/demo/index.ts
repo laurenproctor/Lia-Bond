@@ -153,6 +153,20 @@ export function createDemoDataSource(): LiaDataSource {
         const all = await this.listForUser(userId);
         return all.find((entry) => entry.organization.id === organizationId) ?? null;
       },
+
+      // Deliberately unscoped — see the doc comment on
+      // `listWithUnanalyzedMentions` in types.ts. Mirrors `listUnanalyzed`'s
+      // own selection ("no analysis row"), just unfiltered by organization.
+      async listWithUnanalyzedMentions() {
+        const analyzed = new Set(
+          store().mentionAnalyses.map((analysis) => analysis.mentionId),
+        );
+        const organizationIds = new Set<string>();
+        for (const mention of store().mentions) {
+          if (!analyzed.has(mention.id)) organizationIds.add(mention.organizationId);
+        }
+        return [...organizationIds];
+      },
     },
 
     memberships: {

@@ -140,6 +140,24 @@ export interface OrganizationRepository {
   listForUser(userId: string): Promise<OrganizationMembership[]>;
   getBySlug(slug: string, userId: string): Promise<OrganizationMembership | null>;
   getById(organizationId: string, userId: string): Promise<OrganizationMembership | null>;
+  /**
+   * Ids of organizations with at least one mention `analyzeMentions` would
+   * pick up — the same "no analysis row" selection `MentionRepository.
+   * listUnanalyzed` uses, not merely `status = 'new'`: a mention whose status
+   * was already advanced but whose analysis insert never landed (a crash
+   * between the two, per the ordering note on `analyzeOne`) must still count,
+   * or that organization silently stops being swept for it.
+   *
+   * The one deliberately unscoped read on this repository — mirrors
+   * `MonitoringQueryRepository.listDue`. Cron holds no membership and cannot
+   * construct a scope, so it cannot enumerate tenants any other way; every
+   * other method here answers "what can this user see," which has no meaning
+   * for a scheduler. Deriving the swept set from monitoring queries instead
+   * was considered and rejected: analysis covers every mention source, not
+   * just news, so a Google-only organization would never be analysed.
+   * Service-role only. Never call this from a request path.
+   */
+  listWithUnanalyzedMentions(): Promise<string[]>;
 }
 
 export interface MembershipRepository {

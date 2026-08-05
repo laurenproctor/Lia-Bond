@@ -276,6 +276,42 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         const all = await this.listForUser(userId);
         return all.find((entry) => entry.organization.id === organizationId) ?? null;
       },
+
+      // Deliberately unscoped and run under the service-role client — see the
+      // doc comment on `listWithUnanalyzedMentions` in types.ts and on
+      // `serviceClient` above. Mirrors `fetchAnalyzedMentionIds` /
+      // `listUnanalyzed`'s own selection ("no analysis row"), just read across
+      // every tenant instead of one `scope`.
+      async listWithUnanalyzedMentions() {
+        const [mentionsResult, analysesResult] = await Promise.all([
+          serviceClient().from("mentions").select("id, organization_id"),
+          serviceClient().from("mention_analyses").select("mention_id"),
+        ]);
+
+        if (mentionsResult.error) fail(mentionsResult.error, "load mentions");
+        if (analysesResult.error) {
+          fail(analysesResult.error, "load the analyzed mentions");
+        }
+
+        const analyzedIds = new Set(
+          rows(analysesResult.data).flatMap((row) =>
+            typeof row.mention_id === "string" ? [row.mention_id] : [],
+          ),
+        );
+
+        const organizationIds = new Set<string>();
+        for (const row of rows(mentionsResult.data)) {
+          if (
+            typeof row.id === "string" &&
+            typeof row.organization_id === "string" &&
+            !analyzedIds.has(row.id)
+          ) {
+            organizationIds.add(row.organization_id);
+          }
+        }
+
+        return [...organizationIds];
+      },
     },
 
     memberships: {
