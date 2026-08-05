@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { LiaDataSource } from "@/lib/data/types";
-import { PollRunInProgressError } from "@/lib/data/errors";
+import { DataError, PollRunInProgressError } from "@/lib/data/errors";
 import { freshDataSource, harbor, ushg } from "./helpers/scope";
 
 let dataSource: LiaDataSource;
@@ -71,6 +71,18 @@ describe("monitoringQueries", () => {
 });
 
 describe("newsPollRuns", () => {
+  it("refuses to start a run against another tenant's query", async () => {
+    const theirs = await dataSource.monitoringQueries.create(harbor.owner(), QUERY);
+
+    await expect(
+      dataSource.newsPollRuns.start(ushg.admin(), {
+        monitoringQueryId: theirs.id,
+        trigger: "manual",
+        actorUserId: ushg.admin().userId,
+      }),
+    ).rejects.toBeInstanceOf(DataError);
+  });
+
   it("refuses a second concurrent run for one query", async () => {
     const query = await dataSource.monitoringQueries.create(ushg.admin(), QUERY);
     await dataSource.newsPollRuns.start(ushg.admin(), {
@@ -142,5 +154,107 @@ describe("newsPollRuns", () => {
       "2026-01-01T00:00:00.000Z",
     );
     expect(spent).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("newsRejectedCandidates", () => {
+  it("records rejections and reads them back for the query", async () => {
+    const query = await dataSource.monitoringQueries.create(ushg.admin(), QUERY);
+    const run = await dataSource.newsPollRuns.start(ushg.admin(), {
+      monitoringQueryId: query.id,
+      trigger: "scheduled",
+      actorUserId: null,
+    });
+
+    await dataSource.newsRejectedCandidates.recordMany(ushg.admin(), [
+      {
+        monitoringQueryId: query.id,
+        newsPollRunId: run.id,
+        externalId: "article-1",
+        url: "https://example.com/article-1",
+        title: "A story that missed the bar",
+        publisherDomain: "example.com",
+        reason: "below_threshold",
+        score: 0.2,
+        publishedAt: "2026-08-01T10:00:00.000Z",
+      },
+    ]);
+
+    const rows = await dataSource.newsRejectedCandidates.listForQuery(
+      ushg.admin(),
+      query.id,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.organizationId).toBe(ushg.admin().organizationId);
+    expect(rows[0]?.reason).toBe("below_threshold");
+  });
+
+  it("does nothing on an empty batch", async () => {
+    await expect(
+      dataSource.newsRejectedCandidates.recordMany(ushg.admin(), []),
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses to record a rejection against another tenant's query", async () => {
+    const theirs = await dataSource.monitoringQueries.create(harbor.owner(), QUERY);
+
+    await expect(
+      dataSource.newsRejectedCandidates.recordMany(ushg.admin(), [
+        {
+          monitoringQueryId: theirs.id,
+          newsPollRunId: theirs.id,
+          externalId: "article-2",
+          url: "https://example.com/article-2",
+          title: "Not this tenant's story",
+          publisherDomain: "example.com",
+          reason: "domain_denied",
+          score: 0.1,
+          publishedAt: "2026-08-01T10:00:00.000Z",
+        },
+      ]),
+    ).rejects.toBeInstanceOf(DataError);
+  });
+
+  it("purges rows older than the cutoff and keeps newer ones", async () => {
+    const query = await dataSource.monitoringQueries.create(ushg.admin(), QUERY);
+    const run = await dataSource.newsPollRuns.start(ushg.admin(), {
+      monitoringQueryId: query.id,
+      trigger: "scheduled",
+      actorUserId: null,
+    });
+
+    await dataSource.newsRejectedCandidates.recordMany(ushg.admin(), [
+      {
+        monitoringQueryId: query.id,
+        newsPollRunId: run.id,
+        externalId: "article-3",
+        url: "https://example.com/article-3",
+        title: "Recorded on the seed clock",
+        publisherDomain: "example.com",
+        reason: "excluded_term",
+        score: 0.15,
+        publishedAt: "2026-08-01T10:00:00.000Z",
+      },
+    ]);
+
+    // Every row this test creates lands on the frozen demo clock, so a cutoff
+    // before it removes nothing and a cutoff after it removes everything.
+    const removedBeforeCutoff = await dataSource.newsRejectedCandidates.purgeOlderThan(
+      ushg.admin(),
+      "2000-01-01T00:00:00.000Z",
+    );
+    expect(removedBeforeCutoff).toBe(0);
+    expect(
+      await dataSource.newsRejectedCandidates.listForQuery(ushg.admin(), query.id),
+    ).toHaveLength(1);
+
+    const removedAfterCutoff = await dataSource.newsRejectedCandidates.purgeOlderThan(
+      ushg.admin(),
+      "2100-01-01T00:00:00.000Z",
+    );
+    expect(removedAfterCutoff).toBe(1);
+    expect(
+      await dataSource.newsRejectedCandidates.listForQuery(ushg.admin(), query.id),
+    ).toHaveLength(0);
   });
 });

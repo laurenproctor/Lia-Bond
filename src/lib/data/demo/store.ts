@@ -1,6 +1,5 @@
 import type {
   AnalysisRun,
-  MonitoringQuery,
   NewsPollRun,
   NewsRejectedCandidate,
   OAuthState,
@@ -72,14 +71,14 @@ interface RuntimeStore {
   analysisRuns: AnalysisRun[];
   analysisRunSequence: number;
   /**
-   * What Lia watches, and its poll history.
+   * News poll history and the rejections each poll produced.
    *
-   * Runtime-only for the same reason sync and analysis runs are: there is no
-   * seed fixture for news yet, so a query only exists here once a test or a
-   * user creates one.
+   * Runtime-only for the same reason sync and analysis runs are: a seeded
+   * poll run would claim Lia had already spent provider budget it never
+   * spent. `monitoringQueries` itself is standing configuration, not event
+   * history, so it lives in `SeedDataset` instead — see the doc comment
+   * there.
    */
-  monitoringQueries: MonitoringQuery[];
-  monitoringQuerySequence: number;
   newsPollRuns: NewsPollRun[];
   newsPollRunSequence: number;
   newsRejectedCandidates: NewsRejectedCandidate[];
@@ -95,8 +94,6 @@ function freshRuntimeStore(): RuntimeStore {
     syncRunSequence: 0,
     analysisRuns: [],
     analysisRunSequence: 0,
-    monitoringQueries: [],
-    monitoringQuerySequence: 0,
     newsPollRuns: [],
     newsPollRunSequence: 0,
     newsRejectedCandidates: [],

@@ -8,6 +8,7 @@ import type {
   Membership,
   Mention,
   MentionAnalysis,
+  MonitoringQuery,
   Organization,
   PlatformConnection,
   PlatformProfile,
@@ -52,6 +53,16 @@ export interface SeedDataset {
   escalations: Escalation[];
   automationRules: AutomationRule[];
   auditEvents: AuditEvent[];
+  /**
+   * What Lia watches.
+   *
+   * Standing configuration, the same category as `platformProfiles` and
+   * `automationRules` — not event history — so it belongs here rather than
+   * in the demo adapter's runtime-only store. Empty until a later task
+   * (seed data) attaches fixture queries; `generate-seed-sql.ts` needs this
+   * collection to exist here to ever render `news_monitoring_queries` rows.
+   */
+  monitoringQueries: MonitoringQuery[];
 }
 
 const CREATED = daysAgo(240);
@@ -1888,6 +1899,7 @@ export const SEED_DATASET: SeedDataset = {
   escalations,
   automationRules,
   auditEvents,
+  monitoringQueries: [],
 };
 
 export { REFERENCE_NOW };

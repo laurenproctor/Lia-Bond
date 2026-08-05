@@ -9,7 +9,7 @@ import {
   type NewsRejectedCandidate,
 } from "@/domain";
 import { notFound, PollRunInProgressError } from "@/lib/data/errors";
-import { demoRuntimeStore, replaceRow, scoped } from "@/lib/data/demo/store";
+import { demoRuntimeStore, demoStore, replaceRow, scoped } from "@/lib/data/demo/store";
 import {
   POLL_RUN_STALE_AFTER_MS,
   type MonitoringQueryRepository,
@@ -50,28 +50,30 @@ export function createMonitoringRepositories(): {
   return {
     monitoringQueries: {
       async list(scope) {
-        return orgRows(demoRuntimeStore().monitoringQueries, scope).sort((a, b) =>
+        return orgRows(demoStore().monitoringQueries, scope).sort((a, b) =>
           a.name.localeCompare(b.name),
         );
       },
 
       async get(scope, queryId) {
         return (
-          orgRows(demoRuntimeStore().monitoringQueries, scope).find(
-            (row) => row.id === queryId,
-          ) ?? null
+          orgRows(demoStore().monitoringQueries, scope).find((row) => row.id === queryId) ??
+          null
         );
       },
 
       async create(scope, input) {
         const value = createMonitoringQueryInputSchema.parse(input);
-        const runtime = demoRuntimeStore();
-        runtime.monitoringQuerySequence += 1;
+        const store = demoStore();
 
         const created: MonitoringQuery = monitoringQuerySchema.parse({
           ...value,
+          // Length-based rather than a dedicated counter: this collection is
+          // seed-backed configuration (see `SeedDataset`), not a runtime-only
+          // table with its own sequence, so it follows the `auditEvents`
+          // convention instead of the sync/analysis-run one.
           id: seedId(
-            `monitoring-query:${scope.organizationId}:${runtime.monitoringQuerySequence}`,
+            `monitoring-query:runtime:${scope.organizationId}:${store.monitoringQueries.length}`,
           ),
           organizationId: scope.organizationId,
           lastPolledAt: null,
@@ -79,12 +81,12 @@ export function createMonitoringRepositories(): {
           updatedAt: nowIso(),
         });
 
-        runtime.monitoringQueries.push(created);
+        store.monitoringQueries.push(created);
         return created;
       },
 
       async update(scope, queryId, input) {
-        const existing = orgRows(demoRuntimeStore().monitoringQueries, scope).find(
+        const existing = orgRows(demoStore().monitoringQueries, scope).find(
           (row) => row.id === queryId,
         );
         if (!existing) throw notFound("Monitoring query");
@@ -96,23 +98,23 @@ export function createMonitoringRepositories(): {
           updatedAt: nowIso(),
         });
 
-        return replaceRow(demoRuntimeStore().monitoringQueries, updated);
+        return replaceRow(demoStore().monitoringQueries, updated);
       },
 
       async remove(scope, queryId) {
-        const runtime = demoRuntimeStore();
-        const existing = orgRows(runtime.monitoringQueries, scope).find(
+        const store = demoStore();
+        const existing = orgRows(store.monitoringQueries, scope).find(
           (row) => row.id === queryId,
         );
         if (!existing) throw notFound("Monitoring query");
 
-        const keep = runtime.monitoringQueries.filter((row) => row.id !== queryId);
-        runtime.monitoringQueries.length = 0;
-        runtime.monitoringQueries.push(...keep);
+        const keep = store.monitoringQueries.filter((row) => row.id !== queryId);
+        store.monitoringQueries.length = 0;
+        store.monitoringQueries.push(...keep);
       },
 
       async markPolled(scope, queryId, polledAt) {
-        const existing = orgRows(demoRuntimeStore().monitoringQueries, scope).find(
+        const existing = orgRows(demoStore().monitoringQueries, scope).find(
           (row) => row.id === queryId,
         );
         if (!existing) throw notFound("Monitoring query");
@@ -122,7 +124,7 @@ export function createMonitoringRepositories(): {
           lastPolledAt: polledAt,
           updatedAt: nowIso(),
         };
-        return replaceRow(demoRuntimeStore().monitoringQueries, updated);
+        return replaceRow(demoStore().monitoringQueries, updated);
       },
 
       // Deliberately unscoped — see the doc comment on `listDue` in types.ts.
@@ -131,7 +133,7 @@ export function createMonitoringRepositories(): {
       async listDue(now, limit) {
         const nowMs = Date.parse(now);
 
-        return demoRuntimeStore()
+        return demoStore()
           .monitoringQueries.filter((row) => {
             if (!row.enabled) return false;
             if (row.lastPolledAt === null) return true;
@@ -149,6 +151,13 @@ export function createMonitoringRepositories(): {
 
     newsPollRuns: {
       async start(scope, input) {
+        const query = orgRows(demoStore().monitoringQueries, scope).find(
+          (row) => row.id === input.monitoringQueryId,
+        );
+        // The scope filter is what stops a caller opening a poll run against
+        // another organization's monitoring query by supplying its id.
+        if (!query) throw notFound("Monitoring query");
+
         const runtime = demoRuntimeStore();
         const now = nowIso();
         const nowMs = Date.parse(now);
@@ -166,7 +175,7 @@ export function createMonitoringRepositories(): {
           // forever, so a stale one is closed rather than honoured. Mirrors
           // the reclaim the Supabase adapter performs against the unique index.
           if (!isStale) {
-            throw new PollRunInProgressError(active.monitoringQueryId);
+            throw new PollRunInProgressError(active.id, active.monitoringQueryId);
           }
 
           replaceRow(runtime.newsPollRuns, {
@@ -250,6 +259,22 @@ export function createMonitoringRepositories(): {
 
     newsRejectedCandidates: {
       async recordMany(scope, candidates) {
+        // Nothing to check or write. Also avoids an insert-with-no-rows if
+        // this ever moves behind a real query, matching the Supabase adapter.
+        if (candidates.length === 0) return;
+
+        const ownedQueryIds = new Set(
+          orgRows(demoStore().monitoringQueries, scope).map((row) => row.id),
+        );
+        // The scope filter is what stops a caller recording a rejection
+        // against another organization's monitoring query by supplying its
+        // id, the same guard `newsPollRuns.start` applies.
+        for (const candidate of candidates) {
+          if (!ownedQueryIds.has(candidate.monitoringQueryId)) {
+            throw notFound("Monitoring query");
+          }
+        }
+
         const runtime = demoRuntimeStore();
         const now = nowIso();
 
