@@ -12,6 +12,7 @@ import { authorize } from "@/lib/actions/guard";
 import { runAction, type ActionResult } from "@/lib/actions/result";
 import { diff, recordAuditEvent } from "@/lib/audit/record";
 import { DataError, notFound } from "@/lib/data/errors";
+import type { OrganizationScope, LiaDataSource } from "@/lib/data/types";
 import { NEWS_ERROR_MESSAGES, pollMonitoringQuery, type PollOutcome } from "@/lib/monitoring/poll-service";
 import { createMonitoringQuery } from "@/lib/monitoring/query-service";
 import { NewsError } from "@/news/errors";
@@ -56,6 +57,29 @@ function resolveMonitor(): NewsMonitor {
   }
 }
 
+/**
+ * Resolve a caller-supplied `locationId` through the caller's own scope
+ * before it is bound to a monitoring query.
+ *
+ * RLS on `monitoring_queries` checks `organization_id` only, and the foreign
+ * key to `locations` does not enforce same-organization — so without this,
+ * org A can bind a query to org B's location id, and every mention that
+ * query ingests would inherit it. `locations.get()` filters by the caller's
+ * scope the same way `updateLocationManagerAction`
+ * (`src/app/actions/locations.ts`) already resolves a caller-supplied
+ * location before trusting it; this is the same check, made mandatory here
+ * because `monitoringQueries` is new in this branch and had never had it.
+ */
+async function assertLocationInScope(
+  dataSource: LiaDataSource,
+  scope: OrganizationScope,
+  locationId: string | null,
+): Promise<void> {
+  if (locationId === null) return;
+  const location = await dataSource.locations.get(scope, locationId);
+  if (!location) throw notFound("Location");
+}
+
 /* -------------------------------------------------------------------------- */
 /* Create                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -66,6 +90,7 @@ export async function createMonitoringQueryAction(
   return runAction("monitoring.manage_queries", async () => {
     const parsed = createMonitoringQueryInputSchema.parse(input);
     const context = await authorize("monitoring.manage_queries");
+    await assertLocationInScope(context.dataSource, context.scope, parsed.locationId);
     const monitor = resolveMonitor();
 
     const created = await createMonitoringQuery(
@@ -90,6 +115,14 @@ export async function updateMonitoringQueryAction(
   return runAction("monitoring.manage_queries", async () => {
     const { queryId, ...fields } = updateMonitoringQuerySchema.parse(input);
     const context = await authorize("monitoring.manage_queries");
+
+    // `locationId` is optional on an update (the field may be absent
+    // entirely, meaning "leave it alone"). Only validate when the caller
+    // actually supplied one — `undefined` skips the check, `null` (clearing
+    // to organization-wide) short-circuits inside the helper.
+    if (fields.locationId !== undefined) {
+      await assertLocationInScope(context.dataSource, context.scope, fields.locationId);
+    }
 
     const existing = await context.dataSource.monitoringQueries.get(context.scope, queryId);
     if (!existing) throw notFound("Monitoring query");
