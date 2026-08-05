@@ -59,6 +59,10 @@ create index monitoring_queries_due_idx
   on public.monitoring_queries (enabled, last_polled_at nulls first)
   where enabled;
 
+create trigger monitoring_queries_set_updated_at
+  before update on public.monitoring_queries
+  for each row execute function public.set_updated_at();
+
 create table public.news_poll_runs (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations (id) on delete cascade,
@@ -113,6 +117,10 @@ create index news_poll_runs_query_started_idx
 create index news_poll_runs_org_started_idx
   on public.news_poll_runs (organization_id, started_at desc);
 
+create trigger news_poll_runs_set_updated_at
+  before update on public.news_poll_runs
+  for each row execute function public.set_updated_at();
+
 create table public.news_rejected_candidates (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations (id) on delete cascade,
@@ -136,6 +144,10 @@ comment on table public.news_rejected_candidates is
 
 create index news_rejected_candidates_query_created_idx
   on public.news_rejected_candidates (monitoring_query_id, created_at desc);
+
+create trigger news_rejected_candidates_set_updated_at
+  before update on public.news_rejected_candidates
+  for each row execute function public.set_updated_at();
 
 -- ---------------------------------------------------------------------------
 -- Mentions gain four platform-neutral columns
