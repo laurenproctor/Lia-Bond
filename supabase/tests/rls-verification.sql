@@ -38,7 +38,19 @@ select
     where o.slug = 'harbor-and-vine'
       and m.role = 'owner'
       and m.status = 'active'
-    limit 1) as harbor_owner;
+    limit 1) as harbor_owner,
+  -- Neither `monitoring.manage_queries`/`monitoring.poll_now`
+  -- (owner/admin/communications_lead) nor `can_write_in_organization`
+  -- (owner/admin/communications_lead/location_manager/approver) include
+  -- analyst — it is the role section 8 below uses to prove the news-
+  -- monitoring write policies are gated by role, not merely membership.
+  (select m.user_id
+     from public.memberships m
+     join public.organizations o on o.id = m.organization_id
+    where o.slug = 'union-square-hospitality'
+      and m.role = 'analyst'
+      and m.status = 'active'
+    limit 1) as ushg_analyst;
 
 -- Impersonate an authenticated user. Supabase derives auth.uid() from the
 -- request JWT; setting the claim here reproduces that for a psql session.
@@ -307,6 +319,117 @@ begin
   select count(*) into theirs from public.news_rejected_candidates where organization_id = f.ushg_id;
   perform pg_temp.check(mine > 0,   'harbor owner can read their own rejected news candidates');
   perform pg_temp.check(theirs = 0, 'harbor owner cannot read ushg rejected news candidates');
+
+  reset role;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 8. News monitoring writes are gated by role, not just membership
+--    (fix-wave finding: 20260806000200_news_monitoring_rls.sql originally
+--    gated every write policy on these three tables with
+--    `is_organization_member`, which every active member — including a
+--    read-only `viewer` or `analyst` — satisfies. Corrected in
+--    20260807000500_news_monitoring_write_roles_rls.sql.)
+--
+-- A write attempted under RLS `with check` fails the whole statement with
+-- SQLSTATE 42501 (insufficient_privilege) rather than silently inserting
+-- zero rows, so each attempt below is wrapped to turn that exception into a
+-- boolean this harness can assert on.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  f record;
+  ushg_query_id uuid;
+  ushg_run_id uuid;
+  raised boolean;
+begin
+  select * into f from rls_fixtures;
+
+  -- Reuses the fixture rows section 7 planted as the connecting role.
+  select id into ushg_query_id
+    from public.monitoring_queries
+   where organization_id = f.ushg_id and name = 'rls fixture - ushg'
+   limit 1;
+  select id into ushg_run_id
+    from public.news_poll_runs
+   where organization_id = f.ushg_id and monitoring_query_id = ushg_query_id
+   limit 1;
+
+  perform pg_temp.become(f.ushg_analyst);
+
+  raised := false;
+  begin
+    insert into public.monitoring_queries (organization_id, name, query_type, keywords)
+    values (f.ushg_id, 'rls fixture - analyst denied', 'brand', array['denied']);
+  exception when insufficient_privilege then
+    raised := true;
+  end;
+  perform pg_temp.check(
+    raised,
+    'an analyst cannot insert a monitoring query (member of the org, but not owner/admin/communications_lead)'
+  );
+
+  raised := false;
+  begin
+    delete from public.monitoring_queries where id = ushg_query_id;
+  exception when insufficient_privilege then
+    raised := true;
+  end;
+  perform pg_temp.check(raised, 'an analyst cannot delete a monitoring query');
+
+  raised := false;
+  begin
+    insert into public.news_poll_runs (organization_id, monitoring_query_id)
+    values (f.ushg_id, ushg_query_id);
+  exception when insufficient_privilege then
+    raised := true;
+  end;
+  perform pg_temp.check(
+    raised,
+    'an analyst cannot insert a news poll run — the concrete path a viewer or analyst could otherwise use to exhaust the shared global request budget (D67) for every tenant'
+  );
+
+  raised := false;
+  begin
+    insert into public.news_rejected_candidates
+      (organization_id, monitoring_query_id, news_poll_run_id, external_id, url, reason, score, published_at)
+    values (
+      f.ushg_id, ushg_query_id, ushg_run_id,
+      'rls-fixture-analyst-denied', 'https://example.com/analyst-denied',
+      'below_threshold', 0.100, now()
+    );
+  exception when insufficient_privilege then
+    raised := true;
+  end;
+  perform pg_temp.check(raised, 'an analyst cannot insert a rejected news candidate either');
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  inserted_id uuid;
+  failed boolean := false;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.ushg_admin);
+
+  begin
+    insert into public.monitoring_queries (organization_id, name, query_type, keywords)
+    values (f.ushg_id, 'rls fixture - admin allowed', 'brand', array['allowed'])
+    returning id into inserted_id;
+  exception when insufficient_privilege then
+    failed := true;
+  end;
+  -- The negative checks above are only meaningful if the same policy also
+  -- lets the intended role through — otherwise a policy that denied
+  -- everyone, including owners and admins, would pass every check above too.
+  perform pg_temp.check(not failed and inserted_id is not null,
+    'an admin (in monitoring.manage_queries''s role set) can insert a monitoring query');
 
   reset role;
 end;
