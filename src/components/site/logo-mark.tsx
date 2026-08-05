@@ -9,6 +9,16 @@
  *
  * The bubble is the product's own idea in miniature: public speech, held and
  * handled. It reappears at full size as the testimonial motif.
+ *
+ * The i's stem is a drawn bar, not the dotless-ı character (U+0131). That
+ * character sits outside the Google Fonts "latin" subset that Geist is
+ * loaded with here, so the browser silently substituted a fallback system
+ * font for just that glyph — a different typeface with its own ascent and
+ * advance width. The visible symptom was the speech-bubble dot: positioned
+ * in em units relative to that fallback glyph's box, it floated well above
+ * and left of where it belonged. Drawing the stem ourselves removes the
+ * dependency on any particular font supporting that character, so the
+ * bubble's position (anchored to the stem) is exact at any size.
  */
 export function LogoMark({ className }: { className?: string }) {
   return (
@@ -18,12 +28,11 @@ export function LogoMark({ className }: { className?: string }) {
       aria-hidden="true"
     >
       l
-      <span className="relative">
-        {/* The stem of the i, dotless — the bubble below is its dot. */}
-        <span className="relative">ı</span>
+      <span className="relative ml-[0.24em] inline-block h-[0.52em] w-[0.1em] self-end rounded-[0.01em] bg-current">
+        {/* The stem of the i, drawn rather than typeset — see comment above. */}
         <svg
           viewBox="0 0 24 24"
-          className="absolute -top-[0.62em] left-1/2 h-[0.52em] w-[0.52em] -translate-x-1/2 overflow-visible"
+          className="absolute -top-[0.5em] left-1/2 h-[0.46em] w-[0.46em] -translate-x-1/2 overflow-visible"
           fill="none"
           aria-hidden="true"
         >
