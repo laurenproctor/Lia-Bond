@@ -73,8 +73,8 @@ All screens render inside one shell (`src/app/(app)/layout.tsx`).
 | `/api/integrations/google-business-profile/connect` | Starts OAuth (POST only) | — |
 | `/api/integrations/google-business-profile/callback` | OAuth callback | — |
 | `/api/integrations/google-business-profile/reviews/sync` | Manual review sync (POST only) | repositories + Google API |
-| `/api/cron/news-poll` | Scheduled poll sweep across every tenant (POST only, `CRON_SECRET`-guarded, bypasses the session gate — see Authentication) | repositories + GNews API |
-| `/api/cron/analyze-mentions` | Scheduled analysis sweep across every tenant (POST only, `CRON_SECRET`-guarded, bypasses the session gate — see Authentication) | repositories + Anthropic API |
+| `/api/cron/news-poll` | Scheduled poll sweep across every tenant (GET and POST, `CRON_SECRET`-guarded, bypasses the session gate — see Authentication) | repositories + GNews API |
+| `/api/cron/analyze-mentions` | Scheduled analysis sweep across every tenant (GET and POST, `CRON_SECRET`-guarded, bypasses the session gate — see Authentication) | repositories + Anthropic API |
 | `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
 | `/brand-voice` | Voice configuration | typed fixture (no table yet) |
 | `/settings` | Organization administration | repositories + typed fixture |
@@ -509,20 +509,38 @@ The rest are gaps, largely as the design spec predicted:
 - **No test renders any of the new UI** — the media detail screen or
   `/integrations/news-media`, in any state. Everything beyond the capability
   strings covered by unit tests is verified by reading only.
+- **`requestsSpentSince` builds a service-role client regardless of the data
+  source it was constructed from**, so a user-facing page render
+  (`news-media/page.tsx`) performs an unscoped cross-tenant read and depends
+  on `SUPABASE_SERVICE_ROLE_KEY` being set. The payload is a coarse global
+  integer that D67 arguably intends, but the mechanism is an ambient
+  privilege escalation inside a repository method, and the same escape hatch
+  makes `listDue` callable from any request path. Fixing it properly means
+  deciding how the repository layer expresses privilege — a design decision,
+  not a fix-wave edit.
+- **Manual polls bypass the shared budget entirely.** `MANUAL_RESERVE` is
+  subtracted from the scheduler's allowance but never enforced as a ceiling
+  on manual polling, so repeated "Poll now" clicks in one tenant can exhaust
+  the shared daily quota for all tenants.
 
-Two smaller items deferred during implementation are worth keeping at this
-level, since one is security-adjacent and the other is a deliberate choice
-someone could otherwise "fix" by mistake:
+One item deferred during implementation is worth keeping at this level, as a
+deliberate choice someone could otherwise "fix" by mistake:
 
-- **Pre-existing, both adapters:** `monitoringQueries` create/update accept a
-  caller-supplied `locationId` with no check that it belongs to the caller's
-  organization. Not introduced by this workflow, but real: mentions inherit
-  `locationId` from the query, and the foreign key does not enforce same-org.
 - `resolveNewsMode()` requires **both** `LIA_NEWS_MODE=live` and
   `GNEWS_API_KEY`, where the Google and Anthropic equivalents infer live mode
   from credential presence alone. Deliberate, not an inconsistency: for a
   metered provider on a shared daily budget (D67), a key appearing in the
   environment should not by itself start a cron spending quota.
+
+**Correction:** an earlier version of this section recorded the
+`monitoringQueries` cross-tenant `locationId` gap as "Pre-existing, both
+adapters." That was wrong — `monitoringQueries` is introduced by this
+branch, not carried over from an earlier one — and the gap itself has since
+been closed: `createMonitoringQueryAction` and `updateMonitoringQueryAction`
+(`src/app/actions/monitoring.ts`) now resolve a caller-supplied `locationId`
+through `locations.get(context.scope, locationId)` before trusting it, the
+same pattern `updateLocationManagerAction` already used, with a cross-tenant
+rejection pinned by `tests/monitoring-actions.test.ts`.
 
 A handful of smaller implementation nits — an unpinned `sourceCountry`
 validation, duplicated `rows()`/`fail()` adapter helpers, a missing `.limit()`
