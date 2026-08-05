@@ -1,0 +1,97 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
+
+/**
+ * The session gate, specifically for `/api/cron`.
+ *
+ * A route-handler unit test that imports `POST` and calls it directly proves
+ * nothing about reachability — it bypasses Next's routing and middleware
+ * entirely. Vercel Cron hits these routes over HTTP, with no session cookie,
+ * so the only way to catch "middleware redirects the request before the
+ * handler's own CRON_SECRET check ever runs" is to exercise `middleware()`
+ * itself against a request shaped the way Vercel Cron actually sends one:
+ * `POST`, no cookies, Supabase configured (the gate is a no-op in demo mode,
+ * so a demo-mode test would pass regardless of whether this bug exists).
+ */
+
+const { getUser } = vi.hoisted(() => ({ getUser: vi.fn() }));
+
+vi.mock("@supabase/ssr", () => ({
+  createServerClient: () => ({
+    auth: { getUser },
+  }),
+}));
+
+beforeEach(() => {
+  // A configured deployment, not demo mode — `middleware.ts` skips the gate
+  // entirely when these are absent, which would make every case here pass
+  // whether or not the redirect bug exists.
+  vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
+  vi.stubEnv(
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "anon-key-value-long-enough-to-pass-validation",
+  );
+  // No session, matching a scheduler's request exactly.
+  getUser.mockResolvedValue({ data: { user: null } });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.resetModules();
+  getUser.mockReset();
+});
+
+describe("middleware: /api/cron", () => {
+  it("does not redirect an unauthenticated POST to /api/cron/news-poll", async () => {
+    const { middleware } = await import("@/middleware");
+    const request = new NextRequest("https://lia.test/api/cron/news-poll", {
+      method: "POST",
+    });
+
+    const response = await middleware(request);
+
+    expect(response.status).not.toBe(307);
+    expect(response.status).not.toBe(308);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("does not redirect an unauthenticated POST to /api/cron/analyze-mentions", async () => {
+    const { middleware } = await import("@/middleware");
+    const request = new NextRequest("https://lia.test/api/cron/analyze-mentions", {
+      method: "POST",
+    });
+
+    const response = await middleware(request);
+
+    expect(response.status).not.toBe(307);
+    expect(response.status).not.toBe(308);
+    expect(response.headers.get("location")).toBeNull();
+  });
+});
+
+describe("middleware: everything else is still gated", () => {
+  it("still redirects an unauthenticated request to a protected page", async () => {
+    const { middleware } = await import("@/middleware");
+    const request = new NextRequest("https://lia.test/overview");
+
+    const response = await middleware(request);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/sign-in");
+  });
+
+  it("still redirects an unauthenticated request to a different API route", async () => {
+    // The bug this file exists to catch was specific to `/api/cron` needing
+    // to be public; every other API route must keep requiring a session.
+    const { middleware } = await import("@/middleware");
+    const request = new NextRequest(
+      "https://lia.test/api/integrations/google-business-profile/reviews/sync",
+      { method: "POST" },
+    );
+
+    const response = await middleware(request);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/sign-in");
+  });
+});

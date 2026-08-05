@@ -279,38 +279,33 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
 
       // Deliberately unscoped and run under the service-role client — see the
       // doc comment on `listWithUnanalyzedMentions` in types.ts and on
-      // `serviceClient` above. Mirrors `fetchAnalyzedMentionIds` /
-      // `listUnanalyzed`'s own selection ("no analysis row"), just read across
-      // every tenant instead of one `scope`.
+      // `serviceClient` above.
+      //
+      // Calls a database function (`supabase/migrations/…
+      // _analyze_mentions_organization_scan.sql`) rather than reading
+      // `mentions` and `mention_analyses` in full and folding the anti-join
+      // into application code, which was this method's first version. Both
+      // tables are unbounded — they grow with product usage — and a plain
+      // `.select()` with no `.range()` is capped by PostgREST at a fixed row
+      // count; past that cap the read truncates with no error, and an
+      // organization whose unanalysed mentions fell outside the returned page
+      // would simply stop being swept, silently, forever. The function moves
+      // the anti-join into Postgres so the result set this reads is
+      // organizations — small, bounded by tenant count — never mentions.
       async listWithUnanalyzedMentions() {
-        const [mentionsResult, analysesResult] = await Promise.all([
-          serviceClient().from("mentions").select("id, organization_id"),
-          serviceClient().from("mention_analyses").select("mention_id"),
-        ]);
-
-        if (mentionsResult.error) fail(mentionsResult.error, "load mentions");
-        if (analysesResult.error) {
-          fail(analysesResult.error, "load the analyzed mentions");
-        }
-
-        const analyzedIds = new Set(
-          rows(analysesResult.data).flatMap((row) =>
-            typeof row.mention_id === "string" ? [row.mention_id] : [],
-          ),
+        const { data, error } = await serviceClient().rpc(
+          "organizations_with_unanalyzed_mentions",
         );
 
-        const organizationIds = new Set<string>();
-        for (const row of rows(mentionsResult.data)) {
-          if (
-            typeof row.id === "string" &&
-            typeof row.organization_id === "string" &&
-            !analyzedIds.has(row.id)
-          ) {
-            organizationIds.add(row.organization_id);
-          }
-        }
+        if (error) fail(error, "find organizations with unanalysed mentions");
 
-        return [...organizationIds];
+        return [
+          ...new Set(
+            rows(data).flatMap((row) =>
+              typeof row.organization_id === "string" ? [row.organization_id] : [],
+            ),
+          ),
+        ];
       },
     },
 

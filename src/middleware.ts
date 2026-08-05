@@ -24,8 +24,19 @@ import { NextResponse, type NextRequest } from "next/server";
  * not insecure.
  */
 
-/** Routes reachable without a session. */
-const PUBLIC_PATHS = ["/sign-in", "/auth"];
+/**
+ * Routes reachable without a session.
+ *
+ * `/api/cron` is here deliberately, not by omission: Vercel Cron invokes
+ * these routes with no browser session at all, so gating them here would
+ * redirect every scheduled invocation to `/sign-in` and the route handler's
+ * own `CRON_SECRET` check would never run. These routes are authenticated —
+ * by a shared secret checked inside the handler (`isAuthorizedCronRequest`),
+ * not by a session cookie. Do not remove this to "re-protect" them; that
+ * would silently break every scheduled sweep in production, which is exactly
+ * what this comment exists to prevent.
+ */
+const PUBLIC_PATHS = ["/sign-in", "/auth", "/api/cron"];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some(

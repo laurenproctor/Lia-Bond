@@ -37,14 +37,27 @@ import { analyzeMentions } from "@/lib/analysis/analyze";
 export const dynamic = "force-dynamic";
 
 interface SweepTotals {
+  /** Organizations `analyzeMentions` actually ran for — the call did not throw. */
   organizations: number;
   /** Organizations whose analysis lock was already held; not attempted. */
   skipped: number;
   analyzed: number;
   heuristic: number;
   escalated: number;
-  /** Organizations where the call threw outside `analyzeMentions`'s own handling. */
-  failed: number;
+  /**
+   * Mentions that failed to classify, summed from `result.counts.failed`
+   * across every organization the sweep actually ran. Distinct from
+   * `erroredOrganizations`: a run can complete without throwing and still
+   * have failed some mentions (status `partial` or, if every mention failed,
+   * `failed`) — `organizations` increments either way, since the call itself
+   * succeeded and recorded a run. Reporting this separately is what stops an
+   * organization where every mention failed from reading identical to a
+   * clean sweep, the same principle `skippedForBudget` applies on the poll
+   * route.
+   */
+  mentionsFailed: number;
+  /** Organizations where the call threw something other than a lock conflict. */
+  erroredOrganizations: number;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -65,7 +78,8 @@ export async function POST(request: Request): Promise<Response> {
     analyzed: 0,
     heuristic: 0,
     escalated: 0,
-    failed: 0,
+    mentionsFailed: 0,
+    erroredOrganizations: 0,
   };
 
   try {
@@ -100,6 +114,8 @@ export async function POST(request: Request): Promise<Response> {
         totals.analyzed += result.counts.analyzed;
         totals.heuristic += result.counts.heuristic;
         totals.escalated += result.counts.escalated;
+        // Returned, not swallowed — see the field's own doc comment above.
+        totals.mentionsFailed += result.counts.failed;
       } catch (error) {
         // A conflict means another process already holds this organization's
         // analysis lock — not a failure of the sweep, the same reasoning
@@ -109,7 +125,7 @@ export async function POST(request: Request): Promise<Response> {
         if (error instanceof DataError && error.code === "conflict") {
           totals.skipped += 1;
         } else {
-          totals.failed += 1;
+          totals.erroredOrganizations += 1;
         }
       }
     }
@@ -122,7 +138,8 @@ export async function POST(request: Request): Promise<Response> {
         analyzed: totals.analyzed,
         heuristic: totals.heuristic,
         escalated: totals.escalated,
-        failed: totals.failed,
+        mentionsFailed: totals.mentionsFailed,
+        erroredOrganizations: totals.erroredOrganizations,
       },
       { status: 200 },
     );
