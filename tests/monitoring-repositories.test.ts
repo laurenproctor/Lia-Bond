@@ -129,14 +129,26 @@ describe("newsPollRuns", () => {
     expect(second.status).toBe("running");
   });
 
-  it("sums requests spent since an instant", async () => {
+  it("sums requests spent since an instant, and excludes a run that started before it", async () => {
+    // Demo writes stamp `startedAt` from the frozen seed clock
+    // (`REFERENCE_NOW`), not the real clock, so every run this test creates
+    // lands on the exact same instant. That is what makes the boundary
+    // itself testable with no other fixture data: a `since` at-or-before
+    // that instant must include the run, and a `since` one millisecond
+    // *after* it must exclude it. A version of `requestsSpentSince` that
+    // ignored `since` entirely — summing every run regardless of date, which
+    // is exactly the regression a deleted date predicate would produce —
+    // would pass the inclusive case but return the same total for the
+    // exclusive one instead of dropping to zero, so this fails against that
+    // defect where the previous assertion (`toBeGreaterThanOrEqual(4)`, true
+    // for any cutoff at all) did not.
     const query = await dataSource.monitoringQueries.create(ushg.admin(), QUERY);
     const run = await dataSource.newsPollRuns.start(ushg.admin(), {
       monitoringQueryId: query.id,
       trigger: "scheduled",
       actorUserId: null,
     });
-    await dataSource.newsPollRuns.finish(ushg.admin(), run.id, {
+    const finished = await dataSource.newsPollRuns.finish(ushg.admin(), run.id, {
       status: "completed",
       candidatesEvaluated: 1,
       acceptedCount: 1,
@@ -150,10 +162,14 @@ describe("newsPollRuns", () => {
       errorMessage: null,
     });
 
-    const spent = await dataSource.newsPollRuns.requestsSpentSince(
-      "2026-01-01T00:00:00.000Z",
+    const spentInclusive = await dataSource.newsPollRuns.requestsSpentSince(
+      finished.startedAt,
     );
-    expect(spent).toBeGreaterThanOrEqual(4);
+    expect(spentInclusive).toBeGreaterThanOrEqual(4);
+
+    const oneMsLater = new Date(Date.parse(finished.startedAt) + 1).toISOString();
+    const spentAfter = await dataSource.newsPollRuns.requestsSpentSince(oneMsLater);
+    expect(spentAfter).toBe(0);
   });
 });
 

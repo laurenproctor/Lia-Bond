@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_ARTICLES_PER_POLL } from "@/domain";
 import { newsCapabilities } from "@/lib/monitoring/capabilities";
 
 describe("newsCapabilities", () => {
@@ -18,7 +19,13 @@ describe("newsCapabilities", () => {
       .toLowerCase();
     expect(text).toContain("12 hours");
     expect(text).toContain("headline");
-    expect(text).toContain("10");
+    // Against the real constant, not a bare "10" substring — the previous
+    // assertion passed against a hardcoded, wrong "100 articles" in the
+    // detail text because "10" is itself a substring of "100". Asserting
+    // the actual cap word ("10 articles") pins the copy to
+    // MAX_ARTICLES_PER_POLL rather than to any string that happens to
+    // contain the digits.
+    expect(text).toContain(`${MAX_ARTICLES_PER_POLL} articles`);
   });
 
   it("reports nothing as enabled when the monitor is unconfigured", () => {

@@ -474,6 +474,13 @@ describe("pollMonitoringQuery", () => {
     const [run] = await dataSource.newsPollRuns.listForQuery(ushg.admin(), query.id, 1);
     expect(run?.gateScoreMax).toBeGreaterThan(0);
     expect(run?.gateScoreMin).toBe(0);
+    // Mean was previously asserted nowhere — replacing its computation with
+    // `null` in poll-service.ts left the suite green. "Gramercy Tavern
+    // reopens" matches the query's only keyword in the title (score 0.5);
+    // "City council debates parking" matches nothing (score 0, the
+    // below_threshold case). (0.5 + 0) / 2 = 0.25 pins the exact arithmetic,
+    // not just that a value exists.
+    expect(run?.gateScoreMean).toBe(0.25);
   });
 });
 
