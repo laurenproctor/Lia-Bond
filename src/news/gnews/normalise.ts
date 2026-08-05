@@ -12,7 +12,14 @@ export function buildGNewsQuery(query: NewsSearchQuery): string {
   const positive = query.keywords.map(quote).join(" OR ");
   if (query.exclusions.length === 0) return positive;
   const negative = query.exclusions.map((term) => `NOT ${quote(term)}`).join(" ");
-  return `${positive} ${negative}`;
+  // Parenthesised only when there is a disjunction to protect: with one
+  // keyword, `positive` is already a single term and grouping it would be
+  // inert. With several, an unparenthesised `"A" OR "B" NOT "C"` is at the
+  // mercy of the provider's operator precedence — if `NOT` binds tighter than
+  // `OR`, it silently narrows to "A, or B without C" instead of the intended
+  // "A or B, minus C," and nothing would surface the difference.
+  const grouped = query.keywords.length > 1 ? `(${positive})` : positive;
+  return `${grouped} ${negative}`;
 }
 
 function domainOf(url: string): string | null {

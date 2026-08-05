@@ -69,10 +69,17 @@ function classifyError(status: number): NewsError {
       true,
     );
   }
+  // Anything else that reaches here is an unmapped 4xx: a changed endpoint, a
+  // removed parameter, a plan-tier restriction GNews now enforces. That is far
+  // more likely permanent than transient, and the poll service retries on
+  // `retryable` — defaulting this to `true` would have it retry forever while
+  // reporting "temporarily unavailable," hiding a fixable configuration
+  // problem from the operator. `google-business-profile/client.ts`'s
+  // `classifyApiError` makes the same call for its own unmapped >=400 case.
   return new NewsError(
     "provider_error",
-    "News monitoring received an unexpected error from the provider.",
-    true,
+    "News monitoring received an unexpected error from the provider. Check the GNews integration configuration.",
+    false,
   );
 }
 

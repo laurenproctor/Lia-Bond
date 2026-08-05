@@ -50,6 +50,12 @@ describe("buildGNewsQuery", () => {
       buildGNewsQuery({ ...QUERY, keywords: ["Gramercy Tavern", "Maialino"], exclusions: [] }),
     ).toBe('"Gramercy Tavern" OR Maialino');
   });
+
+  it("groups a multi-keyword disjunction before negating, so NOT cannot bind to the last term alone", () => {
+    expect(
+      buildGNewsQuery({ ...QUERY, keywords: ["Gramercy Tavern", "Maialino"], exclusions: ["obituary"] }),
+    ).toBe('("Gramercy Tavern" OR Maialino) NOT obituary');
+  });
 });
 
 describe("normaliseGNewsArticle", () => {
@@ -105,6 +111,60 @@ describe("GNewsMonitor.search", () => {
     const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
 
     expect((await monitor.search(QUERY)).truncated).toBe(true);
+  });
+
+  it("throws not_configured before any request when the api key is missing", async () => {
+    vi.stubEnv("GNEWS_API_KEY", "");
+    const fetchStub = vi.fn();
+    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+
+    await expect(monitor.search(QUERY)).rejects.toMatchObject({
+      code: "not_configured",
+      retryable: false,
+    });
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("maps 400 to invalid_query and does not retry", async () => {
+    const fetchStub = stubFetch(400, { errors: ["invalid query syntax"] });
+    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+
+    await expect(monitor.search(QUERY)).rejects.toMatchObject({
+      code: "invalid_query",
+      retryable: false,
+    });
+  });
+
+  it("maps an unmapped 4xx status to a non-retryable error", async () => {
+    const fetchStub = stubFetch(404, { errors: ["not found"] });
+    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+
+    await expect(monitor.search(QUERY)).rejects.toMatchObject({
+      retryable: false,
+    });
+  });
+
+  it("wraps a rejected fetch as a retryable provider error without leaking its message", async () => {
+    const fetchStub = vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND gnews.io"));
+    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+
+    const error = await monitor.search(QUERY).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(NewsError);
+    expect((error as NewsError).code).toBe("provider_error");
+    expect((error as NewsError).retryable).toBe(true);
+    expect((error as NewsError).message).not.toContain("ENOTFOUND");
+    expect((error as NewsError).message).not.toContain("gnews.io");
+  });
+
+  it("treats a response that fails the envelope schema as a retryable provider error", async () => {
+    const fetchStub = stubFetch(200, { unexpected: "shape" });
+    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+
+    await expect(monitor.search(QUERY)).rejects.toMatchObject({
+      code: "provider_error",
+      retryable: true,
+    });
   });
 
   it("maps 401 to unauthorized and does not retry", async () => {
