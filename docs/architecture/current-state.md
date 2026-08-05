@@ -532,3 +532,20 @@ New in brand voice configuration:
   was verified against a demo-mode dev server, including the read-only render
   for a role without the permission: notice shown, all five sliders disabled,
   no save bar.
+- **The profile `name` is stored but unreachable.** `brand_voice_profiles.name`
+  is `not null`, is persisted by both adapters, and is one of the fields the
+  audit diff tracks — but no control on the screen edits it and nothing in the
+  interface renders it. A new organization is stamped with the default
+  `"Brand voice"` permanently, and the seeded `"Union Square Hospitality
+  voice"` is never shown. In practice `name` can therefore never appear in a
+  `brand_voice.updated` audit diff. It is either a field the screen should
+  surface or a column that should not exist; the question is open, and it
+  should be settled when response generation gives the name a consumer.
+- **The audit diff can record an empty change for a phrase edit.**
+  `auditShape` in `src/lib/brand-voice/save.ts` joins each phrase list with
+  `", "` before diffing. A change that only re-splits the same joined text —
+  turning the single phrase `"a, b"` into the two phrases `"a"` and `"b"` —
+  produces an identical joined string, so the version bumps while the
+  recorded diff is empty. The stored voice is correct; only the audit entry
+  is uninformative. A separator that cannot occur inside a phrase would fix
+  it.
