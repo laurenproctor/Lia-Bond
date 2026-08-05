@@ -1,7 +1,8 @@
 # Current state
 
 Factual snapshot of the Lia codebase after workflow 04 (AI provider layer and
-mention analysis) and the authentication work that followed it. Update this document whenever a workflow changes the stack,
+mention analysis), the authentication work that followed it, and brand voice
+configuration. Update this document whenever a workflow changes the stack,
 the tenancy model, or the data flow.
 
 ## Stack
@@ -76,7 +77,7 @@ All screens render inside one shell (`src/app/(app)/layout.tsx`).
 | `/forgot-password` | Requests a reset link. Outside the app shell. | Supabase Auth |
 | `/reset-password` | Sets a new password using the recovery session. Outside the app shell. | Supabase Auth |
 | `/auth/callback` | Where an emailed auth link lands; establishes the session | Supabase Auth |
-| `/brand-voice` | Voice configuration | typed fixture (no table yet) |
+| `/brand-voice` | Voice configuration | repositories |
 | `/settings` | Organization administration | repositories + typed fixture |
 
 ## Data flow
@@ -368,7 +369,7 @@ reachable without a session, so provider errors are logged and swallowed too.
 | --- | --- | --- |
 | D32 | Analysis before drafting | Every imported review read as `risk_level: low`, so the guards that say high-risk content must always be escalated were inert. Shipping drafting first would have landed customer-facing text generation in the same pass as its own safety inputs. |
 | D33 | Real Anthropic SDK plus a deterministic mock, chosen by env | The `GOOGLE_INTEGRATION_MODE` pattern, unchanged. Tests and local development run with no key; production refuses the mock at environment parse. |
-| D34 | Brand voice stays a typed fixture | Analysis does not read it. Promoting it now would ship a table nothing queries; it becomes real in workflow 05, where it drives generation. |
+| D34 | Brand voice stays a typed fixture | Analysis does not read it. Promoting it now would ship a table nothing queries; it becomes real in workflow 05, where it drives generation. **Superseded by D60.** |
 | D35 | `AiProvider` has one method | Same reasoning as D9. There is one thing Lia asks a model to do today, and extension points for a second caller that does not exist would be guessing at its requirements. |
 | D36 | One call per mention returning one combined analysis | `mention_analyses` is one row carrying all five results — the schema already said this. The fields are interdependent, so five calls would each re-read the review and still merge into one row. |
 | D37 | Analysis is its own run, with a partial unique index as the lock | Mirrors `platform_sync_runs`. An application check is two statements with a race between them, and serverless means two requests are routinely two processes. |
@@ -405,6 +406,21 @@ reachable without a session, so provider errors are logged and swallowed too.
 | D58 | Provisioning and acceptance are `SECURITY DEFINER` functions rather than relaxed policies | Both need to write rows the caller has no membership to authorise, and both need two rows to land together. A policy permissive enough to allow either would allow far more — inserting a membership for an arbitrary user. The functions read `auth.uid()` themselves, so a caller can only ever act as themselves. |
 | D59 | Invitations use the wall clock in demo mode, unlike every other record | Found by a test. `expiresAt` is computed by the action from `Date.now()`, and the demo adapter checked it against the frozen `REFERENCE_NOW` — two different clocks. The seed instant recedes further into the past every day, so a demo invitation would never expire. Seeded rows keep the frozen clock; nothing about an invitation is seeded. |
 
+## Decisions made building brand voice configuration
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D60 | Brand voice becomes a table now, superseding D34 | The screen already claims to be configuration and discards every edit. D34 correctly refused schema with no reader, but the cost it was weighed against — a dead screen — turned out to be the larger one. Generation still does not ship here. |
+| D61 | Organization-wide, one profile per organization | Matches the fixture, matches the screen, and keeps resolution trivial. A per-location override is a later `location_id` column and a resolution rule, neither of which this shape blocks. |
+| D62 | Named `smallint` axis columns, not `jsonb` | D7 established that invalid states are rejected at the database boundary. The five axes are a fixed taxonomy, not user data, so a `check (between 0 and 100)` per column is available where `jsonb` would accept anything. A sixth axis becomes a migration — correct, because it also changes the summary logic and the future prompt. |
+| D63 | `version` increments only on a real change | `response_drafts.brand_voice_version` has existed since the initial schema and is written null. Bumping per save makes a draft's provenance answerable. Bumping on a no-op save would invalidate the provenance of every existing draft because somebody clicked Save twice. |
+| D64 | Absence of a row means defaults, not an error | Existing organizations were provisioned without one. A pure `DEFAULT_BRAND_VOICE` constant avoids both a backfill migration and a change to `provision_organization` — the first save inserts. |
+| D65 | A new `brand_voice.update` permission, not a reused one | Reusing `response.decide` would conflate approving one response with setting the policy for all of them. Held by owner, admin, and communications lead, matching `automation_rule.toggle`: both change what the product says without a person in the loop, and the communications lead owns response policy. |
+| D66 | The voice summary is derived, never stored | Its stated purpose is "so anyone can check them". A stored summary that disagrees with the sliders defeats it entirely, and drift is a matter of when. A pure function cannot drift. |
+| D67 | Channel scope is read from connected integrations, read-only | `CLAUDE.md` requires platform capabilities stay explicit and forbids implying publishing where a source does not support it. An editable list lets somebody tick a platform Lia has no connector for, which is the exact implication the rule exists to prevent. |
+| D68 | A phrase in both lists is rejected at the schema | It reaches generation as an unresolvable instruction. Cheaper to refuse at the boundary than to define a precedence rule nobody will remember. |
+| D69 | "Preview responses" is removed rather than disabled | It cannot work — there is no generation — and a dead control on a screen about what Lia says is the same category of dishonesty D18 refused for capabilities. |
+
 ## Known gaps after workflow 04
 
 Carried over from workflow 01:
@@ -418,7 +434,9 @@ Carried over from workflow 01:
   overview, and mention detail run against real Postgres under RLS. The write
   paths — sync ingest, analysis, escalation creation — have still only run
   against the demo adapter.
-- Brand voice has no table; the screen still reads a typed fixture.
+- ~~Brand voice has no table; the screen still reads a typed fixture.~~
+  **Resolved.** `brand_voice_profiles` ships with RLS, both adapters, and an
+  audited action. Nothing generates text from it yet.
 - Insights aggregates are computed in the repository layer over the full mention
   set. They will need SQL aggregates or a materialized view at real volume.
 
@@ -486,5 +504,31 @@ New in workflow 04:
   one restaurant's backlog only.
 - No re-analysis surface. The table supports it (append-only, readers take the
   latest) but nothing in the product triggers it.
-- Brand voice still has no table. It arrives in workflow 05, where it first
-  drives generation.
+- ~~Brand voice still has no table. It arrives in workflow 05, where it first
+  drives generation.~~ **Resolved.** See "New in brand voice configuration"
+  below.
+
+New in brand voice configuration:
+
+- **Nothing reads the table.** Response generation does not exist, so the
+  settings change no output. This was D34's objection, accepted deliberately:
+  the alternative was leaving a screen whose controls discarded every edit.
+- **The Supabase write path has only run against the demo adapter**, the same
+  position the sync and analysis writes are in.
+- **A concurrent save can lose an edit.** `save` is read-then-write with no
+  transaction available (D17), so two simultaneous saves can both read version
+  *n* and both write *n+1*. The unique constraint still guarantees one row.
+  Acceptable for a screen edited rarely by a handful of people; a serialising
+  fix needs a stored procedure.
+- **The axis taxonomy is unvalidated.** Five paired sliders are inherited from
+  the fixture and the reference screens. Whether they are the right five is
+  unanswerable until a prompt consumes them.
+- `response_drafts.brand_voice_version` is still written null. Stamping it is
+  drafting's job.
+- **The screen's interactive behaviour has not been exercised in a browser.**
+  Slider dragging, the sticky save bar and Discard, Enter-adds-a-phrase, and
+  the end-to-end save round trip are covered by service and repository tests
+  and by code review, but no browser has driven them. Server-side rendering
+  was verified against a demo-mode dev server, including the read-only render
+  for a role without the permission: notice shown, all five sliders disabled,
+  no save bar.
