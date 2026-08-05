@@ -8,7 +8,10 @@
 -- src/domain/enums.ts.
 -- ---------------------------------------------------------------------------
 
-alter type audit_entity_type add value 'monitoring_query';
+-- `if not exists`: a partially-applied migration (this statement ran, the
+-- constraint rewrite below did not) must be safely re-runnable rather than
+-- failing on "value already exists" the second time.
+alter type audit_entity_type add value if not exists 'monitoring_query';
 
 alter table public.audit_events
   drop constraint audit_events_known_event_type;

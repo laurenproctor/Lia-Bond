@@ -37,6 +37,23 @@ function isoOrNull(value: unknown): string | null {
 }
 
 /**
+ * Length ceilings mirroring `mentionSchema`'s own bounds.
+ *
+ * GNews's `url` doubles as both the article's identity (`externalId`,
+ * `mentionSchema.externalId` is `max(300)`) and its permalink — a long slug
+ * with tracking parameters can clear 300 characters easily. Bounding here,
+ * where the length contract actually belongs, means an oversized value is a
+ * counted `malformedCount` like any other unparseable payload, rather than a
+ * `ZodError` thrown mid-batch by `mentions.ingest` — which would cost every
+ * other article in the same poll its own admission. Kept as local constants,
+ * not imported values, so a change to either schema's bound is a visible
+ * two-file diff rather than a silent one.
+ */
+const MAX_EXTERNAL_ID_LENGTH = 300;
+const MAX_TITLE_LENGTH = 400;
+const MAX_PUBLISHER_NAME_LENGTH = 200;
+
+/**
  * One GNews article to Lia's shape, or null.
  *
  * Null rather than throw: one unusable article must not cost a query its other
@@ -54,11 +71,16 @@ export function normaliseGNewsArticle(raw: unknown): ExternalArticle | null {
   const title = typeof article.title === "string" ? article.title.trim() : "";
   const publishedAt = isoOrNull(article.publishedAt);
   if (!url || !title || !publishedAt) return null;
+  if (url.length > MAX_EXTERNAL_ID_LENGTH) return null;
+  if (title.length > MAX_TITLE_LENGTH) return null;
 
   const source =
     typeof article.source === "object" && article.source !== null
       ? (article.source as Record<string, unknown>)
       : {};
+
+  const publisherName = typeof source.name === "string" ? source.name : null;
+  if (publisherName !== null && publisherName.length > MAX_PUBLISHER_NAME_LENGTH) return null;
 
   return {
     externalId: url,
@@ -68,7 +90,7 @@ export function normaliseGNewsArticle(raw: unknown): ExternalArticle | null {
       typeof article.description === "string" && article.description.trim()
         ? article.description.trim()
         : null,
-    publisherName: typeof source.name === "string" ? source.name : null,
+    publisherName,
     publisherDomain: domainOf(url),
     authorName: null,
     publishedAt,

@@ -390,10 +390,13 @@ const platformConnections: PlatformConnection[] = [
     externalAccountId: "news-monitor-ushg",
     externalAccountName: "News and media monitoring",
     status: "connected",
+    // Matches what the real connector honestly claims (`GNEWS_CAPABILITIES`
+    // in src/news/gnews/monitor.ts): search-only, free-tier GNews has no
+    // full-text bodies and no webhook push. This is aspirational mock data
+    // written before the connector existed; now that it is real, the seed
+    // must not contradict it.
     capabilities: capabilities({
       canReadMentions: true,
-      canReadFullText: true,
-      supportsWebhooks: true,
     }),
     tokenExpiresAt: null,
     lastSyncedAt: minutesAgo(9),

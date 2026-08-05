@@ -95,6 +95,32 @@ describe("normaliseGNewsArticle", () => {
     const result = normaliseGNewsArticle(ARTICLE);
     expect(JSON.stringify(result?.metadata)).not.toContain("truncated on the free tier");
   });
+
+  /**
+   * `url` doubles as `externalId`, and `mentionSchema.externalId` caps at
+   * 300 characters — a long slug with tracking parameters clears that
+   * easily. Returning null here, not throwing, is what stops one oversized
+   * URL from taking down `mentions.ingest` mid-poll and costing the rest of
+   * the batch its own admission.
+   */
+  it("returns null rather than throwing on a url longer than mentions.external_id allows", () => {
+    const longUrl = `https://example-paper.com/${"a".repeat(290)}`;
+    expect(longUrl.length).toBeGreaterThan(300);
+    expect(normaliseGNewsArticle({ ...ARTICLE, url: longUrl })).toBeNull();
+  });
+
+  it("returns null rather than throwing on a title longer than mentions.title allows", () => {
+    expect(normaliseGNewsArticle({ ...ARTICLE, title: "A".repeat(401) })).toBeNull();
+  });
+
+  it("returns null rather than throwing on a publisher name longer than the mention field allows", () => {
+    expect(
+      normaliseGNewsArticle({
+        ...ARTICLE,
+        source: { ...ARTICLE.source, name: "A".repeat(201) },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("GNewsMonitor.search", () => {
@@ -119,6 +145,20 @@ describe("GNewsMonitor.search", () => {
     const batch = await monitor.search(QUERY);
 
     expect(batch.articles).toHaveLength(1);
+    expect(batch.malformedCount).toBe(1);
+  });
+
+  it("counts an over-long url as malformed rather than surfacing it downstream", async () => {
+    const longUrl = `https://example-paper.com/${"a".repeat(290)}`;
+    const fetchStub = stubFetch(200, {
+      totalArticles: 1,
+      articles: [{ ...ARTICLE, url: longUrl }],
+    });
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
+
+    const batch = await monitor.search(QUERY);
+
+    expect(batch.articles).toHaveLength(0);
     expect(batch.malformedCount).toBe(1);
   });
 
