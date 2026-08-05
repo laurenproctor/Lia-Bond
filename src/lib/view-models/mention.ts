@@ -40,6 +40,12 @@ export interface MentionView {
   recommendedAction: MentionAnalysis["recommendedAction"] | null;
   topics: string[];
   summary: string | null;
+  /** The outlet's name, as the source reported it. Null off a news article. */
+  publisherName: string | null;
+  /** The outlet's domain, as the source reported it. Null off a news article. */
+  publisherDomain: string | null;
+  /** Set by the relevance gate (D68), never by a provider. Always false today. */
+  isSyndicated: boolean;
 }
 
 /** "John L." -> "JL", "u/foodie_nyc" -> "FN". */
@@ -105,10 +111,15 @@ export function toMentionView({
     ? (locationsById?.get(mention.locationId)?.name ?? "Unknown location")
     : "All locations";
 
-  // Reddit is best identified by its subreddit and media by its publication;
-  // both live in the preserved raw payload rather than a normalised column.
+  // Reddit is best identified by its subreddit, which lives only in the
+  // preserved raw payload. Media is best identified by its publisher, which —
+  // since workflow 06 — is a normalised, source-owned column rather than a
+  // raw-payload guess; a poll-ingested article's `rawPayload` is always `{}`
+  // (see `pollMonitoringQuery`), so falling back to `publication` there would
+  // silently stop working the moment real GNews traffic replaced seed data.
   const contextLabel =
     readRawString(mention.rawPayload, "subreddit") ??
+    mention.publisherName ??
     readRawString(mention.rawPayload, "publication") ??
     locationLabel;
 
@@ -132,6 +143,9 @@ export function toMentionView({
     recommendedAction: analysis?.recommendedAction ?? null,
     topics: analysis?.topics ?? [],
     summary: analysis?.relevanceExplanation ?? null,
+    publisherName: mention.publisherName,
+    publisherDomain: mention.publisherDomain,
+    isSyndicated: mention.isSyndicated,
   };
 }
 
