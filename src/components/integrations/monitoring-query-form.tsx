@@ -56,8 +56,20 @@ const FIELD_CLASSES =
 const KEYWORDS_HINT =
   "Required terms, pushed straight to the search. At least one. A short, single-word term of 8 characters or fewer (\"Nobu\", \"Zuma\") is treated as ambiguous and needs a second distinct keyword — or a publisher listed under allowed publishers below — before Lia admits a match on it alone.";
 
+// The final sentence used to claim "Also narrows results to these
+// publishers when set" — false at every layer: gate.ts uses allowedDomains
+// only additively (as corroboration and a scoring bonus), no code path
+// rejects a candidate for an absent publisher, poll-service.ts never
+// forwards it to the search request, NewsSearchQuery has no domain field at
+// all, and buildGNewsQuery sends no publisher parameter. A customer listing
+// eater.com expecting Eater-only results got every publisher clearing
+// threshold instead, with nothing in the rejection log explaining why.
+// Deleted; the corroboration sentence is the only one that is true.
 const ALLOWED_DOMAINS_HINT =
-  "Optional. A publisher listed here counts as corroboration for a short, single-word keyword on its own, so it does not need a second keyword to be admitted. Also narrows results to these publishers when set.";
+  "Optional. A publisher listed here counts as corroboration for a short, single-word keyword on its own, so it does not need a second keyword to be admitted.";
+
+const DENIED_DOMAINS_HINT =
+  "Optional. A candidate from one of these publishers is rejected outright, with \"Publisher domain not allowed\" recorded against it below.";
 
 /** Sensible default for a new query. Matches the seed data's own default. */
 const DEFAULT_RELEVANCE_THRESHOLD = 0.35;
@@ -176,6 +188,7 @@ export function QueryEditor(props: QueryEditorProps) {
   const [keywords, setKeywords] = useState<string[]>(query?.keywords ?? []);
   const [exclusions, setExclusions] = useState<string[]>(query?.exclusions ?? []);
   const [allowedDomains, setAllowedDomains] = useState<string[]>(query?.allowedDomains ?? []);
+  const [deniedDomains, setDeniedDomains] = useState<string[]>(query?.deniedDomains ?? []);
   const [relevanceThreshold, setRelevanceThreshold] = useState(
     String(query?.relevanceThreshold ?? DEFAULT_RELEVANCE_THRESHOLD),
   );
@@ -210,7 +223,7 @@ export function QueryEditor(props: QueryEditorProps) {
               keywords,
               exclusions,
               allowedDomains,
-              deniedDomains: [],
+              deniedDomains,
               sourceCountry: "us",
               language: null,
               relevanceThreshold: threshold,
@@ -225,6 +238,7 @@ export function QueryEditor(props: QueryEditorProps) {
               keywords,
               exclusions,
               allowedDomains,
+              deniedDomains,
               relevanceThreshold: threshold,
               pollIntervalMinutes: interval,
             });
@@ -291,6 +305,15 @@ export function QueryEditor(props: QueryEditorProps) {
         values={allowedDomains}
         onChange={setAllowedDomains}
         placeholder="Add a domain, e.g. eater.com"
+        disabled={pending}
+      />
+
+      <ChipField
+        label="Denied publishers"
+        hint={DENIED_DOMAINS_HINT}
+        values={deniedDomains}
+        onChange={setDeniedDomains}
+        placeholder="Add a domain to reject, e.g. spam-aggregator.example"
         disabled={pending}
       />
 

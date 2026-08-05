@@ -64,8 +64,15 @@ export function newsCapabilities(available: boolean): IntegrationCapability[] {
       // in the Google capabilities: monitoring the news changes nothing about
       // whether Lia can write to a newspaper. It cannot, connected or not.
       state: "unavailable",
+      // The third sentence used to read "Responses are prepared in Lia and
+      // sent by a person through their own channel" — true of Google's
+      // review_publishing, where it was copied from, but false here: there
+      // is no composer or draft generation on the media detail screen, and
+      // D72 says there never will be on this surface. Cut rather than
+      // reworded, because the two sentences above already say everything
+      // true about this capability.
       detail:
-        "Not built, and there is no publishing API to build it against. Lia cannot post or submit anything to a publication. Responses are prepared in Lia and sent by a person through their own channel.",
+        "Not built, and there is no publishing API to build it against. Lia cannot post or submit anything to a publication.",
     },
     {
       id: "comment_monitoring",
