@@ -276,6 +276,23 @@ describe("ambiguity corroboration", () => {
     expect(verdict.admitted).toBe(true);
   });
 
+  it("admits an ambiguous term corroborated by an allowed domain on a non-location query", () => {
+    // Unlike LOCAL_OUTLET_BONUS, locality corroboration is not gated on
+    // queryType === "location": an operator who explicitly allow-lists a
+    // publisher has given corroborating evidence regardless of query type.
+    const brandWithAllowedDomain: MonitoringQuery = {
+      ...QUERY,
+      queryType: "brand",
+      keywords: ["Bond"],
+      allowedDomains: ["paper.example"],
+    };
+    const verdict = evaluateCandidate(
+      article({ title: "Bond opens today", description: "A new spot opens." }),
+      context({ query: brandWithAllowedDomain }),
+    );
+    expect(verdict.admitted).toBe(true);
+  });
+
   it("reports a nonzero score for an ambiguity rejection, distinct from a true non-match", () => {
     const verdict = evaluateCandidate(
       article({ title: "Bond markets rally", description: "Yields fell." }),
@@ -352,6 +369,21 @@ describe("keyword text normalisation", () => {
     );
     expect(verdict.admitted).toBe(true);
   });
+
+  it("matches a keyword and a title using different Unicode normalisation forms", () => {
+    // Keyword is NFD (e + combining acute accent); title is NFC (precomposed
+    // é). Explicit escapes, not literal accented characters, so the two
+    // forms are unambiguous regardless of how this source file is encoded.
+    // Has an internal space, so this is independent of the ambiguity rule.
+    const nfdKeyword = "Café Loup";
+    const nfcTitleFragment = "Caf\u00e9 Loup";
+    const query: MonitoringQuery = { ...QUERY, keywords: [nfdKeyword] };
+    const verdict = evaluateCandidate(
+      article({ title: `${nfcTitleFragment} reopens downtown`, description: "" }),
+      context({ query }),
+    );
+    expect(verdict.admitted).toBe(true);
+  });
 });
 
 describe("exclusions", () => {
@@ -381,6 +413,43 @@ describe("exclusions", () => {
     const verdict = evaluateCandidate(article(), context({ query }));
     expect(verdict).toMatchObject({ admitted: false, reason: "excluded_term" });
   });
+
+  it("rejects an accented exclusion term next to non-word boundaries", () => {
+    // Regression for the ASCII-only `\b`: "é" is not an ASCII word character,
+    // so the old boundary check silently failed to match "café" at all.
+    const query: MonitoringQuery = { ...QUERY, exclusions: ["café"] };
+    const verdict = evaluateCandidate(
+      article({ title: "Gramercy Tavern café closes", description: "" }),
+      context({ query }),
+    );
+    expect(verdict).toMatchObject({ admitted: false, reason: "excluded_term" });
+  });
+
+  it("rejects a non-Latin exclusion term", () => {
+    const query: MonitoringQuery = { ...QUERY, exclusions: ["некролог"] };
+    const verdict = evaluateCandidate(
+      article({
+        title: "Gramercy Tavern некролог today",
+        description: "",
+      }),
+      context({ query }),
+    );
+    expect(verdict).toMatchObject({ admitted: false, reason: "excluded_term" });
+  });
+
+  it("rejects a punctuation-terminated exclusion term", () => {
+    const query: MonitoringQuery = { ...QUERY, exclusions: ["R.I.P."] };
+    const verdict = evaluateCandidate(
+      article({ title: "Gramercy Tavern founder R.I.P.", description: "" }),
+      context({ query }),
+    );
+    expect(verdict).toMatchObject({ admitted: false, reason: "excluded_term" });
+  });
+
+  // "bar"/"barbecue" and the "shut down" title/description join case are
+  // already covered above — the properties round 1 bought — and the whole
+  // block re-runs them under the round 2 Unicode-aware matcher, so no
+  // separate "regression" duplicates are needed here.
 });
 
 describe("domain suffix matching", () => {
@@ -431,7 +500,7 @@ describe("invalid timestamps", () => {
   it("throws rather than silently disabling syndication detection for an unparseable now", () => {
     expect(() =>
       evaluateCandidate(article(), context({ now: "not-a-timestamp" })),
-    ).toThrow();
+    ).toThrow(/context\.now is not a valid ISO timestamp/);
   });
 
   it("throws rather than silently disabling syndication detection for an unparseable seenAt", () => {
@@ -442,6 +511,6 @@ describe("invalid timestamps", () => {
           recentHeadlines: [{ headline: "whatever", seenAt: "not-a-timestamp" }],
         }),
       ),
-    ).toThrow();
+    ).toThrow(/recentHeadlines\[\]\.seenAt is not a valid ISO timestamp/);
   });
 });

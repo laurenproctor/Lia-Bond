@@ -106,14 +106,16 @@ const CURLY_DOUBLE_QUOTES = /[“”″]/g;
  * Deliberately lighter-touch than `normaliseHeadline`: it folds exactly the
  * differences that would otherwise cause a silent, indistinguishable-from-
  * "no match" drop — curly vs. straight quotes ("Lucali's" vs. "Lucali’s"),
- * doubled whitespace, and non-breaking spaces (`\s` in a JS regex already
- * matches U+00A0) — but keeps every other character. It does not strip
- * punctuation the way `normaliseHeadline` does, so "GRAMERCY TAVERN'S NEW
- * CHEF" still contains "gramercy tavern" as a substring, preserving the
- * existing case-insensitive substring behaviour.
+ * doubled whitespace, non-breaking spaces (`\s` in a JS regex already matches
+ * U+00A0), and composed vs. decomposed accents (`.normalize("NFC")`, the same
+ * reason `normaliseHeadline` calls it) — but keeps every other character. It
+ * does not strip punctuation the way `normaliseHeadline` does, so "GRAMERCY
+ * TAVERN'S NEW CHEF" still contains "gramercy tavern" as a substring,
+ * preserving the existing case-insensitive substring behaviour.
  */
 function normaliseForMatch(value: string): string {
   return value
+    .normalize("NFC")
     .toLowerCase()
     .replace(CURLY_SINGLE_QUOTES, "'")
     .replace(CURLY_DOUBLE_QUOTES, '"')
@@ -125,11 +127,27 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Whether `rawTerm` occurs in already-normalised `haystackNorm` as a whole word. */
+/**
+ * Whether `rawTerm` occurs in already-normalised `haystackNorm` as a whole
+ * word.
+ *
+ * Uses Unicode-aware lookarounds instead of `\b`: JavaScript's `\b` is
+ * defined against `[A-Za-z0-9_]` only, so a boundary next to an accented
+ * letter ("café"), a non-Latin letter ("некролог"), or a punctuation-
+ * terminated term ("R.I.P.") does not register as a boundary at all — the
+ * exclusion then fails to match, and fails *open*: the article is admitted
+ * and nothing in the rejection log explains why the operator's exclusion did
+ * nothing. `(?<![\p{L}\p{N}_])` / `(?![\p{L}\p{N}_])` treat any letter or
+ * digit in any script as a word character, closing that gap.
+ */
 function matchesWholeWord(haystackNorm: string, rawTerm: string): boolean {
   const needle = normaliseForMatch(rawTerm);
   if (needle.length === 0) return false;
-  return new RegExp(`\\b${escapeRegExp(needle)}\\b`).test(haystackNorm);
+  const pattern = new RegExp(
+    `(?<![\\p{L}\\p{N}_])${escapeRegExp(needle)}(?![\\p{L}\\p{N}_])`,
+    "u",
+  );
+  return pattern.test(haystackNorm);
 }
 
 /** Whether `rawTerm` occurs anywhere in already-normalised `haystackNorm`. */
@@ -267,6 +285,12 @@ export function evaluateCandidate(
   const [singleMatch] = matched;
   const onlyMatch = matched.size === 1 ? singleMatch : undefined;
   if (onlyMatch !== undefined && isAmbiguous(onlyMatch)) {
+    // Deliberately not gated on `query.queryType === "location"`, unlike
+    // `LOCAL_OUTLET_BONUS` above: an operator who explicitly allow-lists a
+    // publisher domain has given corroborating evidence regardless of what
+    // kind of query they set up, and this rejection has nothing to do with
+    // the location-outlet scoring bonus. Do not "fix" this to match
+    // `isLocalOutlet`'s condition — the asymmetry is intentional.
     const locallyCorroborated =
       query.allowedDomains.length > 0 && domainMatches(domain, query.allowedDomains);
     if (!locallyCorroborated) {
