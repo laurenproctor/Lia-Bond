@@ -385,6 +385,13 @@ export const AUDIT_EVENT_TYPES = [
   // never an article title, a URL, or a publisher name.
   "monitoring_query.polled",
   "monitoring_query.poll_failed",
+  // Monitoring query lifecycle — creating, editing, and removing what Lia
+  // watches. `newState`/`previousState` carry the query's own fields (keywords,
+  // domains, thresholds), never article content, which the query has no
+  // relationship to until a poll runs.
+  "monitoring_query.created",
+  "monitoring_query.updated",
+  "monitoring_query.deleted",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;

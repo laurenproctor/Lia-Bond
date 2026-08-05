@@ -7,13 +7,13 @@ import {
   type MonitoringQuery,
   type NewsPollRun,
   type NewsRejectedCandidate,
-  type PlatformConnection,
   type SyncTrigger,
 } from "@/domain";
 import { recordAuditEvent } from "@/lib/audit/record";
 import { DataError, PollRunInProgressError } from "@/lib/data/errors";
 import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
 import { remainingScheduledRequests } from "@/lib/monitoring/budget";
+import { ensureNewsConnection } from "@/lib/monitoring/connection";
 import {
   evaluateCandidate,
   normaliseHeadline,
@@ -61,8 +61,13 @@ import type { NewsMonitor, NewsSearchBatch, NewsSearchQuery } from "@/news/monit
 /**
  * Lia's own sentence for each provider failure. Never `error.message`, which
  * can quote a request URL or an API key — the reason this map exists at all.
+ *
+ * Exported so `src/app/actions/monitoring.ts` can translate a `NewsError`
+ * thrown by `getNewsMonitor()` (a manual poll against an unconfigured
+ * deployment) into the same wording a scheduled poll's stored run gets,
+ * rather than maintaining a second copy of this table.
  */
-const NEWS_ERROR_MESSAGES: Record<NewsErrorCode, string> = {
+export const NEWS_ERROR_MESSAGES: Record<NewsErrorCode, string> = {
   unauthorized:
     "The news provider rejected Lia's credentials. An administrator needs to check the configuration.",
   rate_limited:
@@ -104,76 +109,12 @@ function messageFor(error: unknown): string {
 }
 
 /* -------------------------------------------------------------------------- */
-/* The news_media connection                                                  */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Find, or create, the organization's `news_media` connection.
- *
- * `mentions.platform_connection_id` is `not null`, and news has no OAuth flow
- * or credential to hang a connection off (D61) — so it is created implicitly
- * the first time a poll needs the row, one per organization, status
- * `connected`, no credential row (D62). Capabilities come from
- * `monitor.capabilities()`, never a hand-written guess — the same "whatever
- * the connector honestly claims today" rule `connectGoogleAccount` follows,
- * so the integrations screen never advertises full-text reading or webhooks a
- * free-tier search API does not have.
- *
- * Attribution needs a real person: `connectedByUserId` is not nullable, and
- * the system actor sentinel used under cron must never reach a foreign key
- * (D70). A scheduled poll that finds no connection and no human behind it
- * cannot create one — it returns `null`, and the caller finishes the run as
- * failed rather than inventing an owner.
- */
-async function ensureNewsConnection(
-  dataSource: LiaDataSource,
-  scope: OrganizationScope,
-  monitor: NewsMonitor,
-  actorUserId: string | null,
-  now: string,
-): Promise<PlatformConnection | null> {
-  const existing = await dataSource.platformConnections.getByPlatform(scope, "news_media");
-  if (existing) return existing;
-  if (!actorUserId) return null;
-
-  const created = await dataSource.platformConnections.upsert(scope, {
-    platform: "news_media",
-    externalAccountId: `news-monitor-${scope.organizationId}`,
-    externalAccountName: "News and media monitoring",
-    status: "connected",
-    capabilities: monitor.capabilities(),
-    tokenExpiresAt: null,
-    grantedScopes: [],
-    providerMetadata: {},
-    connectedByUserId: actorUserId,
-    connectedAt: now,
-  });
-
-  // Every other connection creation records one (`connectGoogleAccount`); a
-  // `news_media` row appearing on the integrations screen with no audit trail
-  // of who created it or when would be the one silent exception.
-  await recordAuditEvent(
-    { dataSource, scope },
-    {
-      eventType: "integration.connected",
-      entityType: "platform_connection",
-      entityId: created.id,
-      previousState: null,
-      newState: {
-        platform: "news_media",
-        externalAccountId: created.externalAccountId,
-      },
-      metadata: {},
-      actorType: "user",
-    },
-  );
-
-  return created;
-}
-
-/* -------------------------------------------------------------------------- */
 /* One query                                                                   */
 /* -------------------------------------------------------------------------- */
+
+// `ensureNewsConnection` now lives in `./connection.ts` — the scheduled sweep
+// below and `createMonitoringQueryAction` both need it, and only one of those
+// two is in this file.
 
 export interface PollMonitoringQueryOptions {
   dataSource: LiaDataSource;
@@ -195,6 +136,13 @@ export interface PollOutcome {
   candidatesEvaluated: number;
   requestsSpent: number;
   errorCode: string | null;
+  /**
+   * Lia's own sentence for `errorCode`, mirroring `finished.errorMessage` —
+   * never a provider's text. Null on a clean run. A manual poll's caller
+   * (`pollMonitoringQueryAction`) surfaces this directly rather than
+   * re-deriving a message from `errorCode` a second time.
+   */
+  errorMessage: string | null;
 }
 
 /** A fresh object per call — nothing shared for a caller to mutate. */
@@ -207,6 +155,7 @@ function skippedOutcome(): PollOutcome {
     candidatesEvaluated: 0,
     requestsSpent: 0,
     errorCode: "poll_in_progress",
+    errorMessage: "Another poll for this query is already running.",
   };
 }
 
@@ -546,6 +495,7 @@ export async function pollMonitoringQuery(
     candidatesEvaluated: evaluated,
     requestsSpent,
     errorCode: finished.errorCode,
+    errorMessage: finished.errorMessage,
   };
 }
 

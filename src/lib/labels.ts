@@ -243,6 +243,9 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "escalation.created_from_analysis": "Escalation raised by analysis",
   "monitoring_query.polled": "News query polled",
   "monitoring_query.poll_failed": "News poll failed",
+  "monitoring_query.created": "News query created",
+  "monitoring_query.updated": "News query updated",
+  "monitoring_query.deleted": "News query deleted",
 };
 
 /** Sync-run outcomes, as a person would describe them. */

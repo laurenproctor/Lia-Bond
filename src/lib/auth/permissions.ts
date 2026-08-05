@@ -26,6 +26,8 @@ export const PERMISSIONS = [
   "integration.test_connection",
   "integration.sync_reviews",
   "integration.disconnect",
+  "monitoring.manage_queries",
+  "monitoring.poll_now",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -105,6 +107,15 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // there is no per-location scoping to limit them to.
   "integration.sync_reviews": ["owner", "admin", "communications_lead"],
   "integration.disconnect": ["owner", "admin"],
+
+  // News monitoring.
+  //
+  // Deciding what Lia watches is the same class of decision as deciding which
+  // locations it syncs, which is why these match `integration.manage_profiles`
+  // and `integration.sync_reviews` exactly. There is no read permission, per
+  // D19 — reading a query is governed by membership, not this table.
+  "monitoring.manage_queries": ["owner", "admin", "communications_lead"],
+  "monitoring.poll_now": ["owner", "admin", "communications_lead"],
 };
 
 export function can(role: MembershipRole, permission: Permission): boolean {
