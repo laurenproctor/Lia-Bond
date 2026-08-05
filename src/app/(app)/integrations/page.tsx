@@ -14,6 +14,7 @@ import { CAPABILITY_LABELS, PLATFORM_LABELS } from "@/lib/labels";
 import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
 import { isGoogleConnectorAvailable } from "@/integrations/registry";
+import { isNewsMonitorAvailable } from "@/news/registry";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
 import { resolvePublishingMode, type PlatformConnection } from "@/domain";
 
@@ -26,6 +27,7 @@ const PUBLISHING_COPY = {
 } as const;
 
 const GOOGLE = "google_business_profile";
+const NEWS = "news_media";
 
 function CapabilityList({ connection }: { connection: PlatformConnection }) {
   const entries = Object.entries(connection.capabilities) as [string, boolean][];
@@ -77,6 +79,14 @@ export default async function IntegrationsPage({
   const googleConnected = google !== undefined && google.status !== "disconnected";
   const mayConnect = can(role, "integration.connect");
   const connectorAvailable = isGoogleConnectorAvailable();
+
+  // News has no OAuth handshake to complete here: its connection is
+  // provisioned implicitly the first time a monitoring query is saved, on the
+  // detail screen itself. So there is nothing to find in `connections` for an
+  // organization that has never added a query, and the entry point below has
+  // to work whether or not that row exists yet.
+  const newsConnection = connections.find((connection) => connection.platform === NEWS) ?? null;
+  const newsAvailable = isNewsMonitorAvailable();
 
   return (
     <PageBody>
@@ -145,6 +155,7 @@ export default async function IntegrationsPage({
           {connections.map((connection) => {
             const publishing = resolvePublishingMode(connection.capabilities);
             const isGoogle = connection.platform === GOOGLE;
+            const isNews = connection.platform === NEWS;
 
             return (
               <Card key={connection.id}>
@@ -191,14 +202,18 @@ export default async function IntegrationsPage({
                 </dl>
 
                 {/*
-                  Google is the one connector with a real detail screen. The
-                  others render the summary card and say so, rather than
-                  offering buttons that do nothing.
+                  Google and news are the connectors with a real detail
+                  screen. The others render the summary card and say so,
+                  rather than offering buttons that do nothing.
                 */}
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  {isGoogle ? (
+                  {isGoogle || isNews ? (
                     <Link
-                      href="/integrations/google-business-profile"
+                      href={
+                        isGoogle
+                          ? "/integrations/google-business-profile"
+                          : "/integrations/news-media"
+                      }
                       className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-2.5 text-[13px] font-medium whitespace-nowrap text-gray-700 transition-colors hover:bg-gray-50 hover:text-gray-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
                     >
                       Manage
@@ -215,6 +230,41 @@ export default async function IntegrationsPage({
           })}
         </div>
       )}
+
+      {/*
+        News has no connect button of its own — the entry point is always
+        this card, whether or not a connection row exists yet. A brand-new
+        organization would otherwise have no way to reach the screen that
+        creates one.
+      */}
+      {newsConnection === null ? (
+        <Card>
+          <CardHeader
+            title={
+              <span className="inline-flex items-center gap-2">
+                <PlatformGlyph platform="news_media" size="md" />
+                {PLATFORM_LABELS.news_media}
+              </span>
+            }
+            description="Search news coverage for terms you define, and see it in the same inbox as your reviews."
+            actions={<ConnectionStatusBadge status="disconnected" />}
+          />
+          <p className="mt-3 text-[13px] text-gray-700">
+            {newsAvailable
+              ? "Add a monitoring query to start. Lia provisions this connection the first time you save one."
+              : "News monitoring is not configured on this server. Your administrator needs to set the GNews API key before a query can be polled."}
+          </p>
+          <div className="mt-4">
+            <Link
+              href="/integrations/news-media"
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-2.5 text-[13px] font-medium whitespace-nowrap text-gray-700 transition-colors hover:bg-gray-50 hover:text-gray-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
+            >
+              Set up news and media
+              <ArrowRight className="size-4 shrink-0" aria-hidden />
+            </Link>
+          </div>
+        </Card>
+      ) : null}
 
       <SectionPlaceholder
         title="Available integrations"
