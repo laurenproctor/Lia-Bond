@@ -32,6 +32,12 @@ import { analyzeMentions } from "@/lib/analysis/analyze";
  * to `analyzeMentions` — so one organization's already-running analysis, or
  * one organization's unexpected failure, costs the sweep that organization
  * and nothing else, the same isolation `pollDueQueries` applies per query.
+ *
+ * Exported as both GET and POST. Vercel Cron invokes scheduled routes with
+ * GET, so GET is the one that matters in production — without it every
+ * scheduled invocation 405s and this route never runs, the same defect the
+ * news-poll route carried. POST stays exported for a manual trigger. Both
+ * share one function so the two methods cannot drift in behaviour.
  */
 
 export const dynamic = "force-dynamic";
@@ -60,7 +66,7 @@ interface SweepTotals {
   erroredOrganizations: number;
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function handleAnalyzeMentions(request: Request): Promise<Response> {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -157,3 +163,6 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 }
+
+export const GET = handleAnalyzeMentions;
+export const POST = handleAnalyzeMentions;

@@ -7,15 +7,25 @@ import { pollDueQueries } from "@/lib/monitoring/poll-service";
 /**
  * Scheduled news polling.
  *
- * POST only, and guarded by a shared secret rather than a session: cron has no
- * user. That makes this the first write path in the codebase where RLS is not
- * the backstop, which is why the poll service constructs a scope per query row
+ * Guarded by a shared secret rather than a session: cron has no user. That
+ * makes this the first write path in the codebase where RLS is not the
+ * backstop, which is why the poll service constructs a scope per query row
  * rather than relying on anything ambient (D70).
+ *
+ * Exported as both GET and POST. Vercel Cron invokes scheduled routes with
+ * GET — see "Secure Cron Jobs with Next.js Route Handlers" in Vercel's own
+ * docs, where every example is `export function GET(...)` — so GET is the
+ * one that actually matters in production; without it every scheduled
+ * invocation 405s and this route never runs. POST stays exported too, for a
+ * manual trigger (a deploy hook, an on-call `curl -X POST`, or a future
+ * "poll now for every tenant" admin action) that should not have to imitate
+ * a GET to reach the same, equally side-effect-bearing handler. Both share
+ * one function so the two methods cannot drift in behaviour.
  */
 
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request): Promise<Response> {
+async function handleNewsPoll(request: Request): Promise<Response> {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -65,3 +75,6 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 }
+
+export const GET = handleNewsPoll;
+export const POST = handleNewsPoll;
