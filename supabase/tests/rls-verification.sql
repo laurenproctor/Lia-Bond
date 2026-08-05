@@ -231,4 +231,85 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- 7. News monitoring tables isolate tenants (workflow 06).
+--
+-- None of the three tables carry seed data, unlike mentions above, so this
+-- section plants one row per tenant first. Inserted before any impersonation
+-- in this block, which means it runs as the connecting role and bypasses RLS
+-- the same way supabase/seed.sql does.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  f record;
+  ushg_query_id uuid;
+  ushg_run_id uuid;
+  harbor_query_id uuid;
+  harbor_run_id uuid;
+begin
+  select * into f from rls_fixtures;
+
+  insert into public.monitoring_queries (organization_id, name, query_type, keywords)
+  values (f.ushg_id, 'rls fixture - ushg', 'brand', array['union square hospitality'])
+  returning id into ushg_query_id;
+
+  insert into public.news_poll_runs (organization_id, monitoring_query_id)
+  values (f.ushg_id, ushg_query_id)
+  returning id into ushg_run_id;
+
+  insert into public.news_rejected_candidates
+    (organization_id, monitoring_query_id, news_poll_run_id, external_id, url, reason, score, published_at)
+  values
+    (f.ushg_id, ushg_query_id, ushg_run_id, 'rls-fixture-ushg', 'https://example.com/ushg', 'below_threshold', 0.100, now());
+
+  insert into public.monitoring_queries (organization_id, name, query_type, keywords)
+  values (f.harbor_id, 'rls fixture - harbor', 'brand', array['harbor and vine'])
+  returning id into harbor_query_id;
+
+  insert into public.news_poll_runs (organization_id, monitoring_query_id)
+  values (f.harbor_id, harbor_query_id)
+  returning id into harbor_run_id;
+
+  insert into public.news_rejected_candidates
+    (organization_id, monitoring_query_id, news_poll_run_id, external_id, url, reason, score, published_at)
+  values
+    (f.harbor_id, harbor_query_id, harbor_run_id, 'rls-fixture-harbor', 'https://example.com/harbor', 'below_threshold', 0.100, now());
+end;
+$$;
+
+-- The mine>0 half of each pair below is not incidental: without it, a policy
+-- broken so badly that it hides an organization's own rows would still make
+-- theirs=0 pass, and the harness would report success while RLS denied
+-- everyone everything. Checks 1 and 2 rely on the same pairing against seeded
+-- mentions; this block plants its own rows above because these tables start
+-- empty.
+do $$
+declare
+  f record;
+  mine integer;
+  theirs integer;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.harbor_owner);
+
+  select count(*) into mine   from public.monitoring_queries where organization_id = f.harbor_id;
+  select count(*) into theirs from public.monitoring_queries where organization_id = f.ushg_id;
+  perform pg_temp.check(mine > 0,   'harbor owner can read their own monitoring queries');
+  perform pg_temp.check(theirs = 0, 'harbor owner cannot read ushg monitoring queries');
+
+  select count(*) into mine   from public.news_poll_runs where organization_id = f.harbor_id;
+  select count(*) into theirs from public.news_poll_runs where organization_id = f.ushg_id;
+  perform pg_temp.check(mine > 0,   'harbor owner can read their own news poll runs');
+  perform pg_temp.check(theirs = 0, 'harbor owner cannot read ushg news poll runs');
+
+  select count(*) into mine   from public.news_rejected_candidates where organization_id = f.harbor_id;
+  select count(*) into theirs from public.news_rejected_candidates where organization_id = f.ushg_id;
+  perform pg_temp.check(mine > 0,   'harbor owner can read their own rejected news candidates');
+  perform pg_temp.check(theirs = 0, 'harbor owner cannot read ushg rejected news candidates');
+
+  reset role;
+end;
+$$;
+
 rollback;
