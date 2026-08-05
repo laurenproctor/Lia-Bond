@@ -2435,7 +2435,20 @@ describe("monitoring permissions", () => {
     expect(can("analyst", "monitoring.manage_queries")).toBe(false);
   });
 
-  it("grants poll_now to exactly the roles that hold sync_reviews", () => {
+  it("grants poll_now to exactly three roles", () => {
+    expect(can("owner", "monitoring.poll_now")).toBe(true);
+    expect(can("admin", "monitoring.poll_now")).toBe(true);
+    expect(can("communications_lead", "monitoring.poll_now")).toBe(true);
+    expect(can("location_manager", "monitoring.poll_now")).toBe(false);
+    expect(can("approver", "monitoring.poll_now")).toBe(false);
+    expect(can("analyst", "monitoring.poll_now")).toBe(false);
+  });
+
+  // Asserted separately from the explicit list above, and deliberately not
+  // instead of it: this pins the *intent* (poll_now tracks sync_reviews) while
+  // the list pins the actual roles. On its own it would pass if both matrices
+  // were wrong in the same direction.
+  it("keeps poll_now aligned with integration.sync_reviews", () => {
     for (const role of [
       "owner",
       "admin",
