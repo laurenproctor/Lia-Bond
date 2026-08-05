@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ExternalLink, Mail, Repeat } from "lucide-react";
+import { ExternalLink, Repeat } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
 import { MentionDetailCard } from "@/components/mentions/mention-detail-card";
 import { WorkspaceQueue } from "@/components/mentions/workspace-queue";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DetailField } from "@/components/ui/detail-panel";
 import { PageHeader } from "@/components/ui/page-header";
@@ -48,20 +47,17 @@ export default async function MediaWorkspacePage({ params }: PageProps) {
         title="News and media"
         description="Assess coverage and check claims against the source. Lia cannot publish to a publication."
         actions={
-          <>
-            {sourceUrl ? (
-              <a
-                href={sourceUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-purple-600 bg-purple-600 px-3 text-[13px] font-medium whitespace-nowrap text-white transition-colors hover:bg-purple-500 active:bg-purple-600"
-              >
-                Read at source
-                <ExternalLink className="size-4 shrink-0" aria-hidden />
-              </a>
-            ) : null}
-            <Button icon={Mail}>Draft journalist email</Button>
-          </>
+          sourceUrl ? (
+            <a
+              href={sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-purple-600 bg-purple-600 px-3 text-[13px] font-medium whitespace-nowrap text-white transition-colors hover:bg-purple-500 active:bg-purple-600"
+            >
+              Read at source
+              <ExternalLink className="size-4 shrink-0" aria-hidden />
+            </a>
+          ) : null
         }
       />
 
@@ -75,6 +71,14 @@ export default async function MediaWorkspacePage({ params }: PageProps) {
 
         <div className="flex flex-col gap-4 xl:col-span-4">
           <MentionDetailCard mention={selected} analysis={detail.analysis} />
+          {selected.sourceType === "news_article" ? (
+            <p className="text-[12.5px] leading-relaxed text-gray-500">
+              Lia holds the headline and summary above, not the full article —
+              the free tier truncates article bodies, and a truncated copy
+              stored as if it were complete would be quoted back as fact. Read
+              the full story at the source before responding to it.
+            </p>
+          ) : null}
           <SectionPlaceholder
             title="Article comments"
             description="Comments on this article that mention the brand."
@@ -86,7 +90,7 @@ export default async function MediaWorkspacePage({ params }: PageProps) {
           <Card>
             <CardHeader
               title="Article source"
-              description="What Lia holds, and where the rest of the story lives."
+              description="Where the rest of the story lives."
             />
             <dl className="mt-4 grid grid-cols-2 gap-4">
               <DetailField label="Publisher">
@@ -102,13 +106,6 @@ export default async function MediaWorkspacePage({ params }: PageProps) {
             ) : null}
 
             <p className="mt-4 text-[13px] leading-relaxed text-gray-700">
-              Lia holds the headline and summary the news provider returned,
-              not the full article — the free tier truncates article bodies,
-              and a truncated copy stored as if it were complete would be
-              quoted back as fact. Read the full story at the source before
-              responding to it.
-            </p>
-            <p className="mt-2 text-[13px] leading-relaxed text-gray-700">
               Media sources have no publishing API, so there is no response
               composer here. Reach out to the journalist by email or another
               channel Lia does not control.

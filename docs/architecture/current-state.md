@@ -510,25 +510,10 @@ The rest are gaps, largely as the design spec predicted:
   `/integrations/news-media`, in any state. Everything beyond the capability
   strings covered by unit tests is verified by reading only.
 
-Smaller items deferred during implementation, carried here rather than fixed
-silently:
+Two smaller items deferred during implementation are worth keeping at this
+level, since one is security-adjacent and the other is a deliberate choice
+someone could otherwise "fix" by mistake:
 
-- The monitoring-query editor's top four fields lost their two-column grid
-  when the editor was extracted into its own component; they now stack
-  full-width on desktop. A visual regression, not confirmed by rendering.
-- The inline query editor renders inside a `DataTable` cell, which has no
-  fixed layout or column constraints. A seven-field editor in one cell is
-  plausibly lopsided; flagged as plausible, not confirmed, since it cannot be
-  checked without rendering.
-- `sourceCountry` validation on a monitoring query is correct but pinned only
-  by manual verification, not an automated test.
-- The Supabase adapter's `rows()`/`fail()` helpers are duplicated from
-  `index.ts` rather than shared, to avoid a circular import. Documented; would
-  want a shared `helpers.ts` if the duplication drifts.
-- `MonitoringQueryRepository.listDue` has no `.limit()` on its underlying
-  query; the due-check runs in application code after an unbounded
-  `enabled = true` scan. Parity with the demo adapter today; matters past "a
-  handful" of queries.
 - **Pre-existing, both adapters:** `monitoringQueries` create/update accept a
   caller-supplied `locationId` with no check that it belongs to the caller's
   organization. Not introduced by this workflow, but real: mentions inherit
@@ -538,3 +523,10 @@ silently:
   from credential presence alone. Deliberate, not an inconsistency: for a
   metered provider on a shared daily budget (D67), a key appearing in the
   environment should not by itself start a cron spending quota.
+
+A handful of smaller implementation nits — an unpinned `sourceCountry`
+validation, duplicated `rows()`/`fail()` adapter helpers, a missing `.limit()`
+on `listDue`'s underlying query, and two UI regressions in the monitoring-query
+editor (a lost two-column grid; an inline edit form inside an unconstrained
+`DataTable` cell) — are tracked in `progress.md` rather than repeated here;
+they sit an abstraction level below what an architecture scan needs.
