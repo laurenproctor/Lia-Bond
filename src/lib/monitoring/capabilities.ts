@@ -47,7 +47,7 @@ export function newsCapabilities(available: boolean): IntegrationCapability[] {
       label: "Relevance filtering",
       state: available ? "enabled" : "not_configured",
       detail: available
-        ? "A deterministic gate scores every candidate against the query's keywords, exclusions, and allowed domains before it becomes a mention. Candidates the gate refuses are kept, with the reason, so the gate can be checked rather than trusted blindly."
+        ? "A deterministic gate scores every candidate against the query's keywords, exclusions, allowed publishers, and admission threshold — all four are yours to set when you create or edit a query. Candidates the gate refuses are kept, with the reason, so the gate can be checked and tuned rather than trusted blindly."
         : "Configure news monitoring to filter candidates before they reach the inbox.",
     },
     {

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowRight, Check, Minus } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
 import { ConnectGoogleForm } from "@/components/integrations/connect-google-form";
+import { NewsEntryCard } from "@/components/integrations/news-entry-card";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -237,34 +238,7 @@ export default async function IntegrationsPage({
         organization would otherwise have no way to reach the screen that
         creates one.
       */}
-      {newsConnection === null ? (
-        <Card>
-          <CardHeader
-            title={
-              <span className="inline-flex items-center gap-2">
-                <PlatformGlyph platform="news_media" size="md" />
-                {PLATFORM_LABELS.news_media}
-              </span>
-            }
-            description="Search news coverage for terms you define, and see it in the same inbox as your reviews."
-            actions={<ConnectionStatusBadge status="disconnected" />}
-          />
-          <p className="mt-3 text-[13px] text-gray-700">
-            {newsAvailable
-              ? "Add a monitoring query to start. Lia provisions this connection the first time you save one."
-              : "News monitoring is not configured on this server. Your administrator needs to set the GNews API key before a query can be polled."}
-          </p>
-          <div className="mt-4">
-            <Link
-              href="/integrations/news-media"
-              className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-2.5 text-[13px] font-medium whitespace-nowrap text-gray-700 transition-colors hover:bg-gray-50 hover:text-gray-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
-            >
-              Set up news and media
-              <ArrowRight className="size-4 shrink-0" aria-hidden />
-            </Link>
-          </div>
-        </Card>
-      ) : null}
+      {newsConnection === null ? <NewsEntryCard available={newsAvailable} /> : null}
 
       <SectionPlaceholder
         title="Available integrations"

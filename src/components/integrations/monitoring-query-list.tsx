@@ -3,9 +3,9 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import {
   MonitoringQueryForm,
-  MonitoringQueryRowActions,
   type MonitoringLocationOption,
 } from "@/components/integrations/monitoring-query-form";
+import { MonitoringQueryRowActions } from "@/components/integrations/monitoring-query-row-actions";
 import { formatDuration, formatRelativeShort } from "@/lib/format";
 import { MONITORING_QUERY_TYPE_LABELS } from "@/lib/labels";
 import type { MonitoringQuery } from "@/domain";
@@ -15,9 +15,9 @@ import type { MonitoringQuery } from "@/domain";
  *
  * A server component: it queries nothing itself — `queries` and `locations`
  * arrive as props from the page — and renders no interactivity of its own.
- * The add form and the per-row toggle/poll/delete controls are all
- * `MonitoringQueryForm` / `MonitoringQueryRowActions`, the one client
- * component on this screen; this file only lays out the table around them,
+ * The add form and the per-row toggle/poll/edit/delete controls are
+ * `MonitoringQueryForm` and `MonitoringQueryRowActions`, the two client
+ * components on this screen; this file only lays out the table around them,
  * the same split `RulesPage` makes with `RuleToggle`.
  */
 
@@ -32,6 +32,7 @@ export interface MonitoringQueryListProps {
 
 function buildColumns(
   locationNamesById: Record<string, string>,
+  locations: MonitoringLocationOption[],
   canManage: boolean,
   canPoll: boolean,
   connectorAvailable: boolean,
@@ -107,6 +108,7 @@ function buildColumns(
       cell: (query) => (
         <MonitoringQueryRowActions
           query={query}
+          locations={locations}
           canManage={canManage}
           canPoll={canPoll}
           connectorAvailable={connectorAvailable}
@@ -136,7 +138,13 @@ export function MonitoringQueryList({
         />
         <DataTable
           caption="Monitoring queries"
-          columns={buildColumns(locationNamesById, canManage, canPoll, connectorAvailable)}
+          columns={buildColumns(
+            locationNamesById,
+            locations,
+            canManage,
+            canPoll,
+            connectorAvailable,
+          )}
           rows={queries}
           rowKey={(query) => query.id}
           emptyTitle="No monitoring queries yet"
