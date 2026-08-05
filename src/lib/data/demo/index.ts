@@ -50,6 +50,7 @@ import {
   rankByUrgency,
 } from "@/lib/data/metrics";
 import { demoRuntimeStore, demoStore, replaceRow, scoped } from "@/lib/data/demo/store";
+import { createMonitoringRepositories } from "@/lib/data/demo/monitoring";
 import {
   AnalysisRunInProgressError,
   SyncRunInProgressError,
@@ -124,6 +125,7 @@ export function createDemoDataSource(): LiaDataSource {
 
   return {
     kind: "demo",
+    ...createMonitoringRepositories(),
 
     organizations: {
       async listForUser(userId) {

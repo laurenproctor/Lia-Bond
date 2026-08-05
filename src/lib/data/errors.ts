@@ -51,6 +51,25 @@ export function conflict(message: string): DataError {
   return new DataError("conflict", message);
 }
 
+/**
+ * A poll is already open for this monitoring query.
+ *
+ * Raised by the partial unique index, not by a read-then-write check. Its own
+ * type rather than a generic conflict, for the same reason
+ * `SyncRunInProgressError` is: the caller has to be able to tell "somebody
+ * else is already doing this" — which is fine and needs no remediation — from
+ * every other reason a run could fail to open.
+ */
+export class PollRunInProgressError extends Error {
+  readonly monitoringQueryId: string;
+
+  constructor(monitoringQueryId: string) {
+    super(`A poll is already running for monitoring query ${monitoringQueryId}.`);
+    this.name = "PollRunInProgressError";
+    this.monitoringQueryId = monitoringQueryId;
+  }
+}
+
 const FALLBACK_MESSAGES: Record<DataErrorCode, string> = {
   not_authenticated: "Sign in to continue.",
   not_a_member: "You don't have access to this organization.",

@@ -1,4 +1,11 @@
-import type { AnalysisRun, OAuthState, PlatformSyncRun } from "@/domain";
+import type {
+  AnalysisRun,
+  MonitoringQuery,
+  NewsPollRun,
+  NewsRejectedCandidate,
+  OAuthState,
+  PlatformSyncRun,
+} from "@/domain";
 import type { SealedCredentialRecord } from "@/lib/data/types";
 import type { SeedDataset } from "@/lib/seed/dataset";
 import { SEED_DATASET } from "@/lib/seed/dataset";
@@ -64,6 +71,19 @@ interface RuntimeStore {
    */
   analysisRuns: AnalysisRun[];
   analysisRunSequence: number;
+  /**
+   * What Lia watches, and its poll history.
+   *
+   * Runtime-only for the same reason sync and analysis runs are: there is no
+   * seed fixture for news yet, so a query only exists here once a test or a
+   * user creates one.
+   */
+  monitoringQueries: MonitoringQuery[];
+  monitoringQuerySequence: number;
+  newsPollRuns: NewsPollRun[];
+  newsPollRunSequence: number;
+  newsRejectedCandidates: NewsRejectedCandidate[];
+  newsRejectedCandidateSequence: number;
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -75,6 +95,12 @@ function freshRuntimeStore(): RuntimeStore {
     syncRunSequence: 0,
     analysisRuns: [],
     analysisRunSequence: 0,
+    monitoringQueries: [],
+    monitoringQuerySequence: 0,
+    newsPollRuns: [],
+    newsPollRunSequence: 0,
+    newsRejectedCandidates: [],
+    newsRejectedCandidateSequence: 0,
   };
 }
 
