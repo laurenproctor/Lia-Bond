@@ -94,4 +94,22 @@ describe("middleware: everything else is still gated", () => {
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toContain("/sign-in");
   });
+
+  it("still redirects a route that only shares the /api/cron prefix, not the path", async () => {
+    // Pins `isPublic`'s exact-segment matching (`pathname === path ||
+    // pathname.startsWith(\`${path}/\`)`), not just its current behaviour on
+    // the two real cron routes. If someone later loosened the check to a bare
+    // `pathname.startsWith(path)`, `/api/cronxyz` — a route that merely
+    // starts with the same characters, sharing no path segment with
+    // `/api/cron` — would silently become public too. This is the case that
+    // would catch that regression; neither test above exercises it, since
+    // both real cron paths are legitimately under `/api/cron/`.
+    const { middleware } = await import("@/middleware");
+    const request = new NextRequest("https://lia.test/api/cronxyz", { method: "POST" });
+
+    const response = await middleware(request);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/sign-in");
+  });
 });

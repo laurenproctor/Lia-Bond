@@ -88,11 +88,22 @@ function emptyCounts(overrides: Partial<{
 
 describe("POST /api/cron/analyze-mentions: per-organization isolation", () => {
   it("does not let one organization's lock conflict or failure stop the sweep", async () => {
-    listWithUnanalyzedMentions.mockResolvedValue(["org-conflict", "org-broken", "org-clean"]);
+    // Asymmetric on purpose: two conflicts and one error means `skipped` and
+    // `erroredOrganizations` land on different numbers (2 vs 1). If the two
+    // branches at the route's catch site were ever swapped — a lock conflict
+    // counted as an error, or the reverse — the previous, symmetric version
+    // of this test (one of each) produced an identical body either way and
+    // could not have caught that. This version can.
+    listWithUnanalyzedMentions.mockResolvedValue([
+      "org-conflict-1",
+      "org-conflict-2",
+      "org-broken",
+      "org-clean",
+    ]);
 
     analyzeMentionsMock.mockImplementation(
       async (context: { scope: OrganizationScope }) => {
-        if (context.scope.organizationId === "org-conflict") {
+        if (context.scope.organizationId.startsWith("org-conflict")) {
           throw new DataError(
             "conflict",
             "An analysis is already running. Wait for it to finish before starting another.",
@@ -115,18 +126,18 @@ describe("POST /api/cron/analyze-mentions: per-organization isolation", () => {
     const response = await POST(authorizedRequest("/api/cron/analyze-mentions"));
     const body = await response.json();
 
-    // All three organizations were attempted — the throw on the second did
-    // not stop the loop from reaching the third. This is the assertion that
-    // actually pins isolation; a route with no try/catch inside the loop
-    // would fail here (either a 500 with only org-conflict's result recorded,
-    // or org-clean never attempted at all).
-    expect(analyzeMentionsMock).toHaveBeenCalledTimes(3);
+    // All four organizations were attempted — neither throw stopped the loop
+    // from reaching the rest. This is the assertion that actually pins
+    // isolation; a route with no try/catch inside the loop would fail here
+    // (a 500 with only the first result recorded, and the later
+    // organizations never attempted).
+    expect(analyzeMentionsMock).toHaveBeenCalledTimes(4);
 
     expect(response.status).toBe(200);
     expect(body).toEqual({
       status: "ok",
       organizations: 1, // only org-clean's call returned normally
-      skipped: 1, // org-conflict
+      skipped: 2, // org-conflict-1, org-conflict-2
       analyzed: 2,
       heuristic: 1,
       escalated: 1,
