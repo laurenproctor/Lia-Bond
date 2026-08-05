@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GNewsMonitor } from "@/news/gnews/monitor";
+import type { GNewsMonitor as GNewsMonitorType } from "@/news/gnews/monitor";
 import { buildGNewsQuery, normaliseGNewsArticle } from "@/news/gnews/normalise";
 import { NewsError } from "@/news/errors";
 
@@ -39,6 +39,25 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
+
+/**
+ * `src/news/gnews/client.ts` reads the API key from the validated `env`
+ * singleton (`src/lib/env.ts`), which parses `process.env` once per module
+ * graph rather than per call. `vi.stubEnv` alone cannot reach a `GNewsMonitor`
+ * imported statically at file load, before the stub exists — so every case
+ * that cares about the key's value resets the module graph and re-imports
+ * fresh, the same idiom `news-mock-mode.test.ts` and `google-mock-mode.test.ts`
+ * use for the same reason.
+ */
+async function createMonitor(
+  fetchImpl: typeof fetch,
+  apiKey: string = "test-key",
+): Promise<GNewsMonitorType> {
+  vi.stubEnv("GNEWS_API_KEY", apiKey);
+  vi.resetModules();
+  const { GNewsMonitor } = await import("@/news/gnews/monitor");
+  return new GNewsMonitor(fetchImpl);
+}
 
 describe("buildGNewsQuery", () => {
   it("quotes multi-word keywords and negates exclusions", () => {
@@ -81,7 +100,7 @@ describe("normaliseGNewsArticle", () => {
 describe("GNewsMonitor.search", () => {
   it("returns normalised articles and counts one request", async () => {
     const fetchStub = stubFetch(200, { totalArticles: 1, articles: [ARTICLE] });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     const batch = await monitor.search(QUERY);
 
@@ -95,7 +114,7 @@ describe("GNewsMonitor.search", () => {
       totalArticles: 2,
       articles: [ARTICLE, { title: "no url here" }],
     });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     const batch = await monitor.search(QUERY);
 
@@ -108,15 +127,16 @@ describe("GNewsMonitor.search", () => {
       totalArticles: 57,
       articles: Array.from({ length: 10 }, () => ARTICLE),
     });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     expect((await monitor.search(QUERY)).truncated).toBe(true);
   });
 
   it("throws not_configured before any request when the api key is missing", async () => {
-    vi.stubEnv("GNEWS_API_KEY", "");
     const fetchStub = vi.fn();
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    // Passing `undefined` explicitly would still hit `createMonitor`'s default
+    // parameter and stub "test-key" — the empty string is what actually clears it.
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch, "");
 
     await expect(monitor.search(QUERY)).rejects.toMatchObject({
       code: "not_configured",
@@ -127,7 +147,7 @@ describe("GNewsMonitor.search", () => {
 
   it("maps 400 to invalid_query and does not retry", async () => {
     const fetchStub = stubFetch(400, { errors: ["invalid query syntax"] });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     await expect(monitor.search(QUERY)).rejects.toMatchObject({
       code: "invalid_query",
@@ -137,7 +157,7 @@ describe("GNewsMonitor.search", () => {
 
   it("maps an unmapped 4xx status to a non-retryable error", async () => {
     const fetchStub = stubFetch(404, { errors: ["not found"] });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     await expect(monitor.search(QUERY)).rejects.toMatchObject({
       retryable: false,
@@ -146,11 +166,16 @@ describe("GNewsMonitor.search", () => {
 
   it("wraps a rejected fetch as a retryable provider error without leaking its message", async () => {
     const fetchStub = vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND gnews.io"));
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     const error = await monitor.search(QUERY).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(NewsError);
+    // `createMonitor` resets the module graph, so the thrown error's `NewsError`
+    // is a different class instance than the one imported statically at the top
+    // of this file — re-import from the now-fresh (and no-longer-reset) cache
+    // so `instanceof` compares against the class that actually threw.
+    const { NewsError: FreshNewsError } = await import("@/news/errors");
+    expect(error).toBeInstanceOf(FreshNewsError);
     expect((error as NewsError).code).toBe("provider_error");
     expect((error as NewsError).retryable).toBe(true);
     expect((error as NewsError).message).not.toContain("ENOTFOUND");
@@ -159,7 +184,7 @@ describe("GNewsMonitor.search", () => {
 
   it("treats a response that fails the envelope schema as a retryable provider error", async () => {
     const fetchStub = stubFetch(200, { unexpected: "shape" });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     await expect(monitor.search(QUERY)).rejects.toMatchObject({
       code: "provider_error",
@@ -169,7 +194,7 @@ describe("GNewsMonitor.search", () => {
 
   it("maps 401 to unauthorized and does not retry", async () => {
     const fetchStub = stubFetch(401, { errors: ["invalid api key"] });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     await expect(monitor.search(QUERY)).rejects.toMatchObject({
       code: "unauthorized",
@@ -180,7 +205,7 @@ describe("GNewsMonitor.search", () => {
 
   it("maps 429 to rate_limited and marks it retryable", async () => {
     const fetchStub = stubFetch(429, { errors: ["too many requests"] });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     await expect(monitor.search(QUERY)).rejects.toMatchObject({
       code: "rate_limited",
@@ -190,10 +215,13 @@ describe("GNewsMonitor.search", () => {
 
   it("never puts the api key in the error message", async () => {
     const fetchStub = stubFetch(500, { errors: ["boom"] });
-    const monitor = new GNewsMonitor(fetchStub as unknown as typeof fetch);
+    const monitor = await createMonitor(fetchStub as unknown as typeof fetch);
 
     const error = await monitor.search(QUERY).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(NewsError);
+    // See the comment above: the module graph was reset inside `createMonitor`,
+    // so compare against a `NewsError` re-imported from the same fresh cache.
+    const { NewsError: FreshNewsError } = await import("@/news/errors");
+    expect(error).toBeInstanceOf(FreshNewsError);
     expect((error as NewsError).message).not.toContain("test-key");
     expect((error as NewsError).message).not.toContain("boom");
   });

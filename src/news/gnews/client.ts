@@ -1,6 +1,7 @@
 import "server-only";
 
 import { z } from "zod";
+import { env } from "@/lib/env";
 import { NewsError } from "@/news/errors";
 import type { NewsSearchQuery } from "@/news/monitor";
 import { buildGNewsQuery } from "@/news/gnews/normalise";
@@ -95,10 +96,10 @@ export async function searchGNews(
   query: NewsSearchQuery,
   fetchImpl: typeof fetch,
 ): Promise<GNewsSearchResult> {
-  // Task 8 moves this into the validated environment schema in `src/lib/env.ts`.
-  // Read directly here for now, at call time, so a build with no key configured
-  // still succeeds — only an actual search attempt fails.
-  const apiKey = process.env.GNEWS_API_KEY;
+  // Read from the validated environment rather than `process.env` directly, at
+  // call time rather than module load, so a build with no key configured still
+  // succeeds — only an actual search attempt fails.
+  const apiKey = env.GNEWS_API_KEY;
   if (!apiKey) {
     throw new NewsError(
       "not_configured",
