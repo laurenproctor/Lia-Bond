@@ -383,3 +383,35 @@ export const AUDIT_EVENT_TYPES = [
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Monitoring                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What a monitoring query is looking for.
+ *
+ * Not decoration: the relevance gate weights signals differently per type. A
+ * location query weights publisher locality heavily; a brand query does not.
+ */
+export const monitoringQueryTypeSchema = z.enum([
+  "brand",
+  "location",
+  "person",
+  "topic",
+]);
+export type MonitoringQueryType = z.infer<typeof monitoringQueryTypeSchema>;
+
+/**
+ * Why the gate refused a candidate.
+ *
+ * Lia's own vocabulary. No provider ever supplies one of these, and the reason
+ * is what makes the gate tunable rather than a black box (D64).
+ */
+export const gateRejectionReasonSchema = z.enum([
+  "excluded_term",
+  "probable_syndication",
+  "domain_denied",
+  "below_threshold",
+]);
+export type GateRejectionReason = z.infer<typeof gateRejectionReasonSchema>;

@@ -20,3 +20,4 @@ export * from "@/domain/entities/response";
 export * from "@/domain/entities/escalation";
 export * from "@/domain/entities/automation";
 export * from "@/domain/entities/audit";
+export * from "@/domain/entities/monitoring";
