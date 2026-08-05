@@ -154,12 +154,26 @@ sections.push(
     "profileUrl", "status", "verificationState", "providerMetadata",
     "lastConfirmedAt", "syncCursor", "lastSyncedAt", "createdAt", "updatedAt",
   ]),
+  // Must precede `mentions`: a seeded mention's monitoring_query_id (below)
+  // references this table, and generation order is insertion order.
+  insert("monitoring_queries", SEED_DATASET.monitoringQueries, [
+    "id", "organizationId", "locationId", "name", "queryType", "keywords",
+    "exclusions", "allowedDomains", "deniedDomains", "sourceCountry",
+    "language", "relevanceThreshold", "enabled", "pollIntervalMinutes",
+    "lastPolledAt", "createdAt", "updatedAt",
+  ]),
   insert("mentions", SEED_DATASET.mentions, [
     "id", "organizationId", "locationId", "platformConnectionId",
     "platformProfileId", "sourceType", "externalId", "externalParentId",
     "sourceUrl", "title", "content", "authorName", "authorExternalId", "rating",
     "language", "publishedAt", "receivedAt", "status", "sentiment", "riskLevel",
-    "relevanceScore", "engagementScore", "rawPayload", "createdAt", "updatedAt",
+    "relevanceScore", "engagementScore", "rawPayload",
+    // News fields (workflow 06): omitted here until now, which silently
+    // dropped every mention's publisher/monitoring-query attribution from
+    // the generated SQL even though the TypeScript object carried it —
+    // the exact drift `generate-seed-sql.ts` exists to prevent.
+    "publisherName", "publisherDomain", "isSyndicated", "monitoringQueryId",
+    "createdAt", "updatedAt",
   ]),
   insert("mention_analyses", SEED_DATASET.mentionAnalyses, [
     "id", "organizationId", "mentionId", "modelProvider", "modelName",
@@ -210,4 +224,4 @@ const total = Object.values(SEED_DATASET).reduce(
   (sum, rows) => sum + (rows as unknown[]).length,
   0,
 );
-console.log(`Wrote ${outputPath} (${total} rows across 13 tables).`);
+console.log(`Wrote ${outputPath} (${total} rows across 14 tables).`);

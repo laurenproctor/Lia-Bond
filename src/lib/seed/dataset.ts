@@ -422,6 +422,13 @@ const platformConnections: PlatformConnection[] = [
     tokenExpiresAt: daysFromNow(60),
     lastSyncedAt: hoursAgo(1),
   }),
+  // Deliberately no `news_media` connection for Harbor & Vine: it is the one
+  // seeded tenant with a monitoring query (MQ_HARBOR_BRAND, below) but no
+  // connection yet, which is exactly the "implicit creation" precondition
+  // `tests/news-poll-service.test.ts`'s `ensureNewsConnection` suite depends
+  // on — see that file's comment on the same point. Giving Harbor a
+  // connection here would silently make that branch untestable against real
+  // seed data.
 ];
 
 function profile(
@@ -465,6 +472,114 @@ const platformProfiles: PlatformProfile[] = [
 ];
 
 /* -------------------------------------------------------------------------- */
+/* Monitoring queries                                                          */
+/*                                                                            */
+/* What Lia watches for news. Unlike a Google or Yelp listing, a news article */
+/* arrives bound to no location and no per-source profile — the real poller   */
+/* (`src/lib/monitoring/poll-service.ts`) always sets a created mention's      */
+/* `platformProfileId` to `null` and derives `locationId` straight from the   */
+/* query's own `locationId` — so a query, not a profile, is the anchor here,  */
+/* and a location-type query's `locationId` must agree with the `locationId`  */
+/* already on any seeded mention attributed to it.                           */
+/* -------------------------------------------------------------------------- */
+
+export const MQ_USHG_BRAND = seedId("mq:ushg-brand");
+export const MQ_USHG_GRAMERCY = seedId("mq:ushg-gramercy");
+export const MQ_HARBOR_BRAND = seedId("mq:harbor-brand");
+
+interface MonitoringQuerySeed {
+  id: string;
+  organizationId: string;
+  locationId: string | null;
+  name: string;
+  queryType: MonitoringQuery["queryType"];
+  keywords: string[];
+  exclusions?: string[];
+  allowedDomains?: string[];
+  sourceCountry?: string | null;
+  relevanceThreshold?: number;
+  pollIntervalMinutes?: number;
+  lastPolledAt: string | null;
+}
+
+function monitoringQuery(seed: MonitoringQuerySeed): MonitoringQuery {
+  return {
+    id: seed.id,
+    organizationId: seed.organizationId,
+    locationId: seed.locationId,
+    name: seed.name,
+    queryType: seed.queryType,
+    keywords: seed.keywords,
+    exclusions: seed.exclusions ?? [],
+    allowedDomains: seed.allowedDomains ?? [],
+    deniedDomains: [],
+    sourceCountry: seed.sourceCountry ?? "us",
+    language: "en",
+    relevanceThreshold: seed.relevanceThreshold ?? 0.35,
+    enabled: true,
+    pollIntervalMinutes: seed.pollIntervalMinutes ?? 360,
+    lastPolledAt: seed.lastPolledAt,
+    createdAt: CREATED,
+    updatedAt: daysAgo(2),
+  };
+}
+
+const monitoringQueries: MonitoringQuery[] = [
+  monitoringQuery({
+    id: MQ_USHG_BRAND,
+    organizationId: ORG_USHG,
+    locationId: null,
+    name: "Maison Laurent brand watch",
+    queryType: "brand",
+    // "USHG" is exactly the short, space-less term
+    // src/lib/monitoring/gate.ts::isAmbiguous treats as ambiguous: alone it
+    // shares a name with nothing in particular, so a candidate matching only
+    // "USHG" needs one of the other two distinct keywords to also match (or
+    // an allowed-domains hit) before the gate admits it. The other two
+    // keywords are the exact phrases the two seeded group-wide news mentions
+    // below actually use.
+    keywords: ["Maison Laurent", "Union Square Hospitality Group", "USHG"],
+    exclusions: ["obituary"],
+    pollIntervalMinutes: 240,
+    lastPolledAt: minutesAgo(9),
+  }),
+  monitoringQuery({
+    id: MQ_USHG_GRAMERCY,
+    organizationId: ORG_USHG,
+    // Bound to SoHo, matching `locationId` on the two SoHo news mentions
+    // below — a real poll always sets a new mention's locationId from the
+    // query's, so the two must agree for the seed to depict a state the real
+    // system could have produced.
+    locationId: LOC_SOHO,
+    name: "Gramercy Tavern (SoHo) watch",
+    queryType: "location",
+    // "Gramercy Tavern" is this codebase's own canonical location-query
+    // fixture (every monitoring test uses it — see tests/relevance-gate.test.ts,
+    // tests/gnews-client.test.ts, tests/news-poll-service.test.ts, etc.);
+    // kept here as a second keyword alongside the brand name so this query
+    // would plausibly have found the SoHo articles it is attributed to.
+    keywords: ["Maison Laurent SoHo", "Gramercy Tavern"],
+    // A publisher on this list also earns LOCAL_OUTLET_BONUS in the gate —
+    // both outlets below already cover this SoHo location.
+    allowedDomains: ["eater.com", "timeout.com"],
+    lastPolledAt: minutesAgo(9),
+  }),
+  monitoringQuery({
+    id: MQ_HARBOR_BRAND,
+    organizationId: ORG_HARBOR,
+    locationId: null,
+    name: "Harbor & Vine brand watch",
+    queryType: "brand",
+    keywords: ["Harbor & Vine"],
+    pollIntervalMinutes: 720,
+    // Never polled: Harbor & Vine has no news_media connection yet (see the
+    // comment on platformConnections above) — a query can exist before its
+    // first poll ever provisions one implicitly.
+    lastPolledAt: null,
+  }),
+];
+
+/* -------------------------------------------------------------------------- */
 /* Mentions                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -489,6 +604,12 @@ interface MentionSeed {
   sourceUrl?: string;
   externalParentId?: string | null;
   rawPayload?: Record<string, string | number | boolean | null>;
+  // News fields (workflow 06). Optional because only `news_article` mentions
+  // carry them; every other source keeps `NEW_MENTION_DEFAULTS`' null/false.
+  monitoringQueryId?: string | null;
+  publisherName?: string | null;
+  publisherDomain?: string | null;
+  isSyndicated?: boolean;
 }
 
 function mention(seed: MentionSeed): Mention {
@@ -523,6 +644,13 @@ function mention(seed: MentionSeed): Mention {
     // instant or an owner reply would make the demo tenant look like it had run
     // an import that never happened.
     ...NEW_MENTION_DEFAULTS,
+    // Overridden per-seed rather than folded into NEW_MENTION_DEFAULTS above:
+    // these four are only ever non-default on a news_article fixture, so most
+    // callers never pass them and correctly fall back to null/false.
+    monitoringQueryId: seed.monitoringQueryId ?? null,
+    publisherName: seed.publisherName ?? null,
+    publisherDomain: seed.publisherDomain ?? null,
+    isSyndicated: seed.isSyndicated ?? false,
     createdAt: seed.publishedAt,
     updatedAt: seed.publishedAt,
   };
@@ -868,6 +996,10 @@ const mentions: Mention[] = [
     relevanceScore: 0.93,
     engagementScore: 0.68,
     rawPayload: { publication: "Eater New York", authority_score: 0.88, estimated_reach: 310000, comment_count: 24 },
+    monitoringQueryId: MQ_USHG_GRAMERCY,
+    publisherName: "Eater New York",
+    publisherDomain: "eater.com",
+    isSyndicated: false,
   }),
   mention({
     label: MENTION_LABELS.newsWages,
@@ -887,6 +1019,10 @@ const mentions: Mention[] = [
     relevanceScore: 0.96,
     engagementScore: 0.79,
     rawPayload: { publication: "Metro Tribune", authority_score: 0.79, estimated_reach: 540000, comment_count: 118 },
+    monitoringQueryId: MQ_USHG_BRAND,
+    publisherName: "Metro Tribune",
+    publisherDomain: "metrotribune.com",
+    isSyndicated: false,
   }),
   mention({
     label: MENTION_LABELS.newsListicle,
@@ -906,6 +1042,10 @@ const mentions: Mention[] = [
     relevanceScore: 0.8,
     engagementScore: 0.44,
     rawPayload: { publication: "Time Out New York", authority_score: 0.74, estimated_reach: 190000, comment_count: 9 },
+    monitoringQueryId: MQ_USHG_GRAMERCY,
+    publisherName: "Time Out New York",
+    publisherDomain: "timeout.com",
+    isSyndicated: false,
   }),
   mention({
     label: MENTION_LABELS.commentVegetarian,
@@ -1902,7 +2042,7 @@ export const SEED_DATASET: SeedDataset = {
   escalations,
   automationRules,
   auditEvents,
-  monitoringQueries: [],
+  monitoringQueries,
 };
 
 export { REFERENCE_NOW };

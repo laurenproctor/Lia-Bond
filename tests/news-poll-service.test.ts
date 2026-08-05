@@ -543,6 +543,22 @@ describe("ensureNewsConnection", () => {
 /* -------------------------------------------------------------------------- */
 
 describe("pollDueQueries", () => {
+  // Task 13 seeded a handful of enabled monitoring queries so the demo has
+  // something to show. `pollDueQueries` sweeps every organization with no
+  // scope of its own (see MonitoringQueryRepository.listDue's own comment),
+  // so at `now: "2026-08-04T12:00:00.000Z"` those seeded queries are legitimately
+  // "due" too, and would throw off every exact `polled`/`skippedForBudget`
+  // count below. Clearing them restores the "nothing exists yet but what
+  // this test creates" precondition the counts are written against.
+  beforeEach(async () => {
+    for (const scope of [ushg.admin(), harbor.owner()]) {
+      const existing = await dataSource.monitoringQueries.list(scope);
+      for (const query of existing) {
+        await dataSource.monitoringQueries.remove(scope, query.id);
+      }
+    }
+  });
+
   it("never writes SYSTEM_ACTOR_ID to a stored row", async () => {
     const query = await dataSource.monitoringQueries.create(ushg.admin(), QUERY_INPUT);
 

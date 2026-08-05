@@ -9,6 +9,7 @@ import {
   membershipSchema,
   mentionAnalysisSchema,
   mentionSchema,
+  monitoringQuerySchema,
   organizationSchema,
   platformConnectionSchema,
   platformProfileSchema,
@@ -52,6 +53,7 @@ describe("seed dataset validation", () => {
     ["platformProfiles", platformProfileSchema, SEED_DATASET.platformProfiles],
     ["mentions", mentionSchema, SEED_DATASET.mentions],
     ["mentionAnalyses", mentionAnalysisSchema, SEED_DATASET.mentionAnalyses],
+    ["monitoringQueries", monitoringQuerySchema, SEED_DATASET.monitoringQueries],
     ["responseDrafts", responseDraftSchema, SEED_DATASET.responseDrafts],
     ["approvals", approvalSchema, SEED_DATASET.approvals],
     ["escalations", escalationSchema, SEED_DATASET.escalations],
@@ -148,6 +150,21 @@ describe("seed dataset coverage", () => {
     }
     expect([...counts.values()].some((count) => count > 1)).toBe(true);
   });
+
+  it("seeds monitoring queries for both tenants", () => {
+    const orgs = new Set(SEED_DATASET.monitoringQueries.map((q) => q.organizationId));
+    expect(orgs.size).toBeGreaterThanOrEqual(2);
+    expect(SEED_DATASET.monitoringQueries.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("attaches every seeded news mention to a seeded monitoring query", () => {
+    const ids = new Set(SEED_DATASET.monitoringQueries.map((q) => q.id));
+    const news = SEED_DATASET.mentions.filter((m) => m.sourceType === "news_article");
+    expect(news.length).toBeGreaterThan(0);
+    for (const mention of news) {
+      expect(ids.has(mention.monitoringQueryId ?? "")).toBe(true);
+    }
+  });
 });
 
 describe("seed dataset referential integrity", () => {
@@ -172,6 +189,7 @@ describe("seed dataset referential integrity", () => {
       ...SEED_DATASET.escalations,
       ...SEED_DATASET.automationRules,
       ...SEED_DATASET.auditEvents,
+      ...SEED_DATASET.monitoringQueries,
     ];
     for (const row of owned) {
       expect(organizationIds.has(row.organizationId)).toBe(true);
@@ -200,6 +218,30 @@ describe("seed dataset referential integrity", () => {
     }
   });
 
+  it("resolves every monitoring query's location, and every mention's monitoringQueryId", () => {
+    const monitoringQueryIds = new Set(SEED_DATASET.monitoringQueries.map((row) => row.id));
+    for (const row of SEED_DATASET.monitoringQueries) {
+      if (row.locationId) expect(locationIds.has(row.locationId)).toBe(true);
+    }
+    for (const row of SEED_DATASET.mentions) {
+      if (row.monitoringQueryId) expect(monitoringQueryIds.has(row.monitoringQueryId)).toBe(true);
+    }
+  });
+
+  it("agrees a location-bound monitoring query's locationId with any mention it found", () => {
+    // Mirrors src/lib/monitoring/poll-service.ts, which sets a new mention's
+    // locationId from its query's locationId — so a seeded mention and the
+    // query it is attributed to must not disagree about which location a
+    // real poll would have produced.
+    const queryLocation = new Map(
+      SEED_DATASET.monitoringQueries.map((row) => [row.id, row.locationId]),
+    );
+    for (const row of SEED_DATASET.mentions) {
+      if (!row.monitoringQueryId) continue;
+      expect(queryLocation.get(row.monitoringQueryId)).toBe(row.locationId);
+    }
+  });
+
   it("resolves every mention and draft reference", () => {
     for (const row of SEED_DATASET.mentionAnalyses) expect(mentionIds.has(row.mentionId)).toBe(true);
     for (const row of SEED_DATASET.responseDrafts) expect(mentionIds.has(row.mentionId)).toBe(true);
@@ -214,6 +256,14 @@ describe("seed dataset referential integrity", () => {
     }
     for (const row of SEED_DATASET.escalations) {
       expect(mentionOrg.get(row.mentionId)).toBe(row.organizationId);
+    }
+    const queryOrg = new Map(
+      SEED_DATASET.monitoringQueries.map((row) => [row.id, row.organizationId]),
+    );
+    for (const row of SEED_DATASET.mentions) {
+      if (row.monitoringQueryId) {
+        expect(queryOrg.get(row.monitoringQueryId)).toBe(row.organizationId);
+      }
     }
   });
 
