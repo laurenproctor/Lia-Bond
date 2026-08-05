@@ -1216,6 +1216,10 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
               source_reply_updated_at: value.sourceReplyUpdatedAt,
               source_metadata: value.sourceMetadata,
               last_synced_at: value.lastSyncedAt,
+              publisher_name: value.publisherName,
+              publisher_domain: value.publisherDomain,
+              is_syndicated: value.isSyndicated,
+              monitoring_query_id: value.monitoringQueryId,
             },
             { onConflict: "platform_connection_id,source_type,external_id" },
           )
@@ -1286,6 +1290,8 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           source_reply_updated_at: value.sourceReplyUpdatedAt,
           source_metadata: value.sourceMetadata,
           last_synced_at: value.syncedAt,
+          publisher_name: value.publisherName,
+          publisher_domain: value.publisherDomain,
         };
 
         if (existing) {
@@ -1313,6 +1319,10 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
               // First sight, so this genuinely is when Lia received it. The
               // update path above never touches it again.
               received_at: value.syncedAt,
+              // Set only on creation, mirroring `received_at` above: the
+              // query that first found this article keeps the attribution
+              // even if a second query later matches the same story.
+              monitoring_query_id: value.monitoringQueryId,
               ...sourceOwned,
             },
             { onConflict: "platform_connection_id,source_type,external_id" },

@@ -1067,6 +1067,14 @@ export function createDemoDataSource(): LiaDataSource {
           sourceReplyUpdatedAt: value.sourceReplyUpdatedAt,
           sourceMetadata: value.sourceMetadata,
           lastSyncedAt: value.syncedAt,
+          publisherName: value.publisherName,
+          publisherDomain: value.publisherDomain,
+          // Set by the gate, not by this ingest — no candidate arrives here
+          // already flagged as syndicated.
+          isSyndicated: false,
+          // Only a brand-new mention attributes to the query that found it;
+          // `applySourceFields` (the update branch above) never touches this.
+          monitoringQueryId: value.monitoringQueryId,
           createdAt: nowIso(),
           updatedAt: nowIso(),
         };

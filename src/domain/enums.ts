@@ -333,6 +333,7 @@ export const AUDIT_ENTITY_TYPES = [
   "approval",
   "escalation",
   "automation_rule",
+  "monitoring_query",
 ] as const;
 export const auditEntityTypeSchema = vocabulary(AUDIT_ENTITY_TYPES).schema;
 export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>;
@@ -380,6 +381,10 @@ export const AUDIT_EVENT_TYPES = [
   "mention.analyzed",
   "mention.analysis_failed",
   "escalation.created_from_analysis",
+  // News polling. Metadata carries counts and a normalised error code —
+  // never an article title, a URL, or a publisher name.
+  "monitoring_query.polled",
+  "monitoring_query.poll_failed",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;

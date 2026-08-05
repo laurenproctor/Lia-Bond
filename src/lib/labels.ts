@@ -241,6 +241,8 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   // Named for who raised it. An escalation nobody chose to raise is a
   // different thing to explain than one a person opened.
   "escalation.created_from_analysis": "Escalation raised by analysis",
+  "monitoring_query.polled": "News query polled",
+  "monitoring_query.poll_failed": "News poll failed",
 };
 
 /** Sync-run outcomes, as a person would describe them. */
