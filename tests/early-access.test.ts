@@ -87,6 +87,37 @@ describe("earlyAccessSchema", () => {
       earlyAccessSchema.parse({ ...VALID, sourcePath: "https://evil.example" }),
     ).toThrow();
   });
+
+  it("rejects a protocol-relative source path", () => {
+    // "//evil" has neither a `:` nor a `.`, so it slips past a check aimed
+    // only at strings shaped like "scheme://host". Browsers resolve
+    // "//host/path" against the current protocol, so a bare double slash is
+    // still a way off this site — dot-free hosts like a bare hostname or
+    // "localhost" are exactly the case a dot-based check would miss.
+    expect(() =>
+      earlyAccessSchema.parse({ ...VALID, sourcePath: "//evil" }),
+    ).toThrow();
+  });
+
+  it("treats an empty source path as absent, like the other optional fields", () => {
+    // A browser `FormData` yields "" for an unfilled field, never `undefined`,
+    // so this is the value Task 10's form actually sends when the referring
+    // page wasn't tracked — it must mean "absent," not fail validation.
+    const parsed = earlyAccessSchema.parse({ ...VALID, sourcePath: "" });
+    expect(parsed.sourcePath).toBeNull();
+  });
+
+  it("strips control characters from the business name", () => {
+    // Assert the property directly — no control character survives into the
+    // parsed value — rather than a side effect like a line count on the
+    // composed body. That value is what the composer trusts unquestioningly,
+    // so the guarantee has to live here.
+    const parsed = earlyAccessSchema.parse({
+      ...VALID,
+      businessName: "Real Cafe\n\nFAKE LINE: Reply to: attacker@evil.example",
+    });
+    expect(parsed.businessName).not.toMatch(/[\u0000-\u001F\u007F]/);
+  });
 });
 
 describe("composeEarlyAccessNotification", () => {
