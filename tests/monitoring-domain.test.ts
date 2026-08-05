@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { gateRejectionReasonSchema } from "@/domain/enums";
 import {
   createMonitoringQueryInputSchema,
   monitoringQuerySchema,
   newsPollRunSchema,
+  newsRejectedCandidateSchema,
+  updateMonitoringQueryInputSchema,
 } from "@/domain/entities/monitoring";
 
 const BASE = {
@@ -57,6 +60,16 @@ describe("createMonitoringQueryInputSchema", () => {
   });
 });
 
+describe("updateMonitoringQueryInputSchema", () => {
+  it("strips lastPolledAt: only the poll service may advance the cursor", () => {
+    const parsed = updateMonitoringQueryInputSchema.parse({
+      ...BASE,
+      lastPolledAt: "2026-08-04T00:00:00.000Z",
+    });
+    expect(parsed).not.toHaveProperty("lastPolledAt");
+  });
+});
+
 describe("newsPollRunSchema", () => {
   it("rejects negative counters", () => {
     expect(() =>
@@ -83,5 +96,44 @@ describe("newsPollRunSchema", () => {
         updatedAt: BASE.updatedAt,
       }),
     ).toThrow();
+  });
+});
+
+describe("newsRejectedCandidateSchema", () => {
+  it("rejects a score outside 0 to 1", () => {
+    expect(() =>
+      newsRejectedCandidateSchema.parse({
+        id: BASE.id,
+        organizationId: BASE.organizationId,
+        monitoringQueryId: BASE.id,
+        newsPollRunId: BASE.id,
+        externalId: "article-123",
+        url: "https://example.com/article",
+        title: "A headline",
+        publisherDomain: "example.com",
+        reason: "below_threshold",
+        score: 1.5,
+        publishedAt: BASE.createdAt,
+        createdAt: BASE.createdAt,
+        updatedAt: BASE.updatedAt,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("gateRejectionReasonSchema", () => {
+  it("accepts each of the four valid reasons", () => {
+    for (const reason of [
+      "excluded_term",
+      "probable_syndication",
+      "domain_denied",
+      "below_threshold",
+    ] as const) {
+      expect(gateRejectionReasonSchema.parse(reason)).toBe(reason);
+    }
+  });
+
+  it("rejects an unknown reason", () => {
+    expect(() => gateRejectionReasonSchema.parse("made_up_reason")).toThrow();
   });
 });

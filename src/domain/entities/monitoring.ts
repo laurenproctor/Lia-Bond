@@ -58,7 +58,12 @@ export const monitoringQuerySchema = z
     allowedDomains: z.array(domainSchema).max(200),
     deniedDomains: z.array(domainSchema).max(200),
     /** ISO 3166-1 alpha-2. What GNews actually filters on. */
-    sourceCountry: z.string().length(2).toLowerCase().nullable(),
+    sourceCountry: z
+      .string()
+      .length(2)
+      .regex(/^[A-Za-z]{2}$/, "Use a two-letter country code.")
+      .toLowerCase()
+      .nullable(),
     language: languageTagSchema.nullable(),
     /** Gate admission floor. Tuned against `news_rejected_candidates`. */
     relevanceThreshold: unitScoreSchema,
