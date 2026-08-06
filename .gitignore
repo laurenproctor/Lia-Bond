@@ -15,3 +15,8 @@ next-env.d.ts
 
 # Supabase CLI link state — machine-local, contains no secrets but no value in git
 supabase/.temp/
+
+# Worktrees created by the harness. Git-ignored scratch: the branch inside
+# carries the work, and an unignored worktree directory is how an entire
+# second checkout gets committed into the repository by a stray `git add -A`.
+.claude/worktrees/
