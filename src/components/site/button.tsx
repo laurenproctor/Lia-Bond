@@ -41,7 +41,7 @@ export function SecondaryButton({
   return (
     <Link
       href={href}
-      className={`inline-flex items-center justify-center rounded-[10px] border border-site-blue-edge px-5 py-3 text-[14px] font-semibold text-site-blue transition-colors hover:bg-[#eff5ff] ${className ?? ""}`}
+      className={`inline-flex items-center justify-center rounded-[10px] border border-site-blue-edge px-5 py-3 text-[14px] font-semibold text-site-blue transition-colors hover:bg-site-blue-tint ${className ?? ""}`}
     >
       {children}
     </Link>

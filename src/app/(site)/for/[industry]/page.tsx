@@ -57,13 +57,15 @@ export default async function IndustryPage({ params }: Params) {
   return (
     <>
       <header className="relative mx-auto w-full max-w-[1200px] px-[clamp(24px,6vw,106px)] pt-[clamp(48px,8vw,108px)] pb-[clamp(28px,4vw,48px)]">
-        <SpeechBubble
-          quote={content.quote.text}
-          attribution={content.quote.attribution}
-          tone="blue"
-          float="a"
-          className="pointer-events-none absolute top-1/2 right-[clamp(10px,3vw,40px)] hidden w-[196px] -translate-y-1/2 lg:block"
-        />
+        <div className="pointer-events-none absolute top-1/2 right-[clamp(10px,3vw,40px)] hidden -translate-y-1/2 lg:block">
+          <SpeechBubble
+            quote={content.quote.text}
+            attribution={content.quote.attribution}
+            tone="blue"
+            float="a"
+            className="w-[196px]"
+          />
+        </div>
 
         <Eyebrow>Lia for {label.toLowerCase()}</Eyebrow>
         <PageHeading className="mb-6 max-w-[620px]">

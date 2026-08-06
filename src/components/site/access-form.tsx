@@ -143,18 +143,22 @@ export function AccessSection({
   return (
     <section id="access" className="relative bg-white">
       <div className="relative mx-auto w-full max-w-[1200px] px-[clamp(24px,6vw,106px)] py-[clamp(64px,8vw,110px)]">
-        <SpeechBubble
-          quote="Live in an afternoon."
-          attribution="New customer"
-          tone="amber"
-          className="absolute -top-7 left-[clamp(8px,4vw,54px)] z-10 hidden w-[186px] -rotate-[5deg] lg:block"
-        />
-        <SpeechBubble
-          quote="Worth every penny."
-          attribution="Owner"
-          tone="plain"
-          className="absolute -bottom-7 right-[clamp(8px,4vw,50px)] z-10 hidden w-[172px] rotate-[5deg] lg:block"
-        />
+        <div className="pointer-events-none absolute -top-7 left-[clamp(8px,4vw,54px)] z-10 hidden lg:block">
+          <SpeechBubble
+            quote="Live in an afternoon."
+            attribution="New customer"
+            tone="amber"
+            className="w-[186px] -rotate-[5deg]"
+          />
+        </div>
+        <div className="pointer-events-none absolute -bottom-7 right-[clamp(8px,4vw,50px)] z-10 hidden lg:block">
+          <SpeechBubble
+            quote="Worth every penny."
+            attribution="Owner"
+            tone="plain"
+            className="w-[172px] rotate-[5deg]"
+          />
+        </div>
 
         <div className="mx-auto max-w-[620px] text-center">
           <SectionHeading>

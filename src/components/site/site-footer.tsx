@@ -18,7 +18,7 @@ export function SiteFooter() {
           <div className="mb-4 text-[#f3efe6]">
             <LogoMark className="text-[34px]" />
           </div>
-          <p className="mb-2 max-w-[260px] text-[18px] leading-[1.4] text-[#e6eaf0]">
+          <p className="mb-2 max-w-[260px] text-[18px] leading-[1.4] text-site-border">
             Public feedback, handled with care.
           </p>
           <p className="text-[13px] text-site-muted-dark">Lia.bond</p>
@@ -34,7 +34,7 @@ export function SiteFooter() {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="text-[14px] text-[#e6eaf0] transition-colors hover:text-white"
+                  className="text-[14px] text-site-border transition-colors hover:text-white"
                 >
                   {link.label}
                 </Link>
@@ -44,7 +44,7 @@ export function SiteFooter() {
         ))}
       </div>
 
-      <div className="mx-auto flex w-full max-w-[1200px] flex-wrap items-center justify-between gap-4 border-t border-[#3a4454] px-[clamp(24px,6vw,106px)] pt-4.5 pb-7">
+      <div className="mx-auto flex w-full max-w-[1200px] flex-wrap items-center justify-between gap-4 border-t border-site-body px-[clamp(24px,6vw,106px)] pt-4.5 pb-7">
         <span className="text-[12.5px] text-site-muted-dark">
           © 2026 Lia Bond. All rights reserved.
         </span>

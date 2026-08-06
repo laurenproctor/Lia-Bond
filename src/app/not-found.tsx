@@ -32,13 +32,15 @@ export default function NotFound() {
       <SiteNav />
       <main id="main" className="flex-1">
         <div className="relative mx-auto w-full max-w-[1200px] px-[clamp(24px,6vw,106px)] py-[clamp(64px,10vw,140px)]">
-          <SpeechBubble
-            quote="Nothing to see here."
-            attribution="This page"
-            tone="amber"
-            float="b"
-            className="pointer-events-none absolute top-[clamp(24px,6vw,80px)] right-[clamp(10px,4vw,60px)] hidden w-[176px] lg:block"
-          />
+          <div className="pointer-events-none absolute top-[clamp(24px,6vw,80px)] right-[clamp(10px,4vw,60px)] hidden lg:block">
+            <SpeechBubble
+              quote="Nothing to see here."
+              attribution="This page"
+              tone="amber"
+              float="b"
+              className="w-[176px]"
+            />
+          </div>
           <div className="max-w-[560px]">
             <p className="mb-5 text-[13px] font-semibold tracking-[0.16em] text-site-muted uppercase">
               404
