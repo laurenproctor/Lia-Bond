@@ -2,21 +2,25 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Download } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
+import { ResponseDetailPane } from "@/components/responses/response-detail-pane";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
-import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import { SelectFilter } from "@/components/ui/select-filter";
 import { ResponseStatusBadge } from "@/components/ui/status-badge";
+import { can } from "@/lib/auth/permissions";
 import { formatRelativeShort } from "@/lib/format";
 import { GENERATED_BY_LABELS, RESPONSE_TYPE_LABELS } from "@/lib/labels";
 import { getDataSource } from "@/lib/data";
-import { getOrganizationScope } from "@/lib/tenancy/organization-context";
+import { resolveSelection } from "@/lib/selection";
+import { getOrganizationContext } from "@/lib/tenancy/organization-context";
+import { approvalTimelineEntries } from "@/lib/view-models/response";
 import { excerptFrom, workspacePathFor } from "@/lib/view-models/mention";
+import { resolvePublishingMode } from "@/domain";
 import type { Mention, ResponseDraft } from "@/domain";
 
 export const metadata: Metadata = { title: "Responses" };
@@ -35,7 +39,7 @@ const COLUMNS: DataTableColumn<ResponseRow>[] = [
       row.mention ? (
         <Link
           href={workspacePathFor(row.mention)}
-          className="font-medium text-gray-950 hover:text-purple-600 hover:underline"
+          className="relative font-medium text-gray-950 hover:text-purple-600 hover:underline"
         >
           {row.mention.title ?? excerptFrom(row.mention.content, 60)}
         </Link>
@@ -75,8 +79,13 @@ const COLUMNS: DataTableColumn<ResponseRow>[] = [
   },
 ];
 
-export default async function ResponsesPage() {
-  const scope = await getOrganizationScope();
+interface ResponsesPageProps {
+  searchParams: Promise<{ selected?: string }>;
+}
+
+export default async function ResponsesPage({ searchParams }: ResponsesPageProps) {
+  const { selected: selectedParam } = await searchParams;
+  const { scope, role } = await getOrganizationContext();
   const dataSource = await getDataSource();
 
   const [drafts, mentions, members] = await Promise.all([
@@ -95,6 +104,19 @@ export default async function ResponsesPage() {
       ? (namesById.get(draft.assignedUserId) ?? null)
       : null,
   }));
+
+  const selectedRow = resolveSelection(rows, selectedParam, (row) => row.draft.id);
+
+  const [approvals, selectedDetail] = selectedRow
+    ? await Promise.all([
+        dataSource.responseDrafts.listApprovals(scope, selectedRow.draft.id),
+        dataSource.mentions.getDetail(scope, selectedRow.draft.mentionId),
+      ])
+    : [[], null];
+
+  const publishing = selectedDetail?.connection
+    ? resolvePublishingMode(selectedDetail.connection.capabilities)
+    : "unavailable";
 
   const countOf = (status: ResponseDraft["status"]) =>
     drafts.filter((draft) => draft.status === status).length;
@@ -189,16 +211,28 @@ export default async function ResponsesPage() {
           columns={COLUMNS}
           rows={rows}
           rowKey={(row) => row.draft.id}
+          rowHref={(row) => `/responses?selected=${row.draft.id}`}
+          rowLabel={(row) =>
+            row.mention
+              ? (row.mention.title ?? excerptFrom(row.mention.content, 60))
+              : "Response draft"
+          }
+          selectedKey={selectedRow?.draft.id ?? null}
           emptyTitle="No responses yet"
           emptyDescription="Drafts appear here as soon as anyone writes one."
         />
       </Card>
 
-      <SectionPlaceholder
-        title="Selected response"
-        description="Original mention, AI draft, final text, human edit summary, publishing metadata, quality checks, and the activity timeline."
-        shape="lines"
-      />
+      {selectedRow ? (
+        <ResponseDetailPane
+          draft={selectedRow.draft}
+          mention={selectedRow.mention}
+          publishing={publishing}
+          canDecide={can(role, "response.decide")}
+          assigneeName={selectedRow.assigneeName}
+          approvalEntries={approvalTimelineEntries(approvals, namesById)}
+        />
+      ) : null}
     </PageBody>
   );
 }
