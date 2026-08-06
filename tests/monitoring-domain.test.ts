@@ -23,6 +23,7 @@ const BASE = {
   relevanceThreshold: 0.35,
   enabled: true,
   pollIntervalMinutes: 360,
+  origin: "user",
   lastPolledAt: null,
   createdAt: "2026-08-04T00:00:00.000Z",
   updatedAt: "2026-08-04T00:00:00.000Z",

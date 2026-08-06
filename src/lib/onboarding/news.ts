@@ -21,25 +21,28 @@ import type { NewsMonitor } from "@/news/monitor";
  * watch 2", so this module owns the one question the wizard has to answer
  * deterministically: *which* persisted query does onboarding manage?
  *
- * `monitoring_queries` carries no origin column, and adding one for a badge
- * would be a migration in service of bookkeeping. The identification is
- * therefore structural: **the oldest organization-wide brand query** —
- * `queryType = 'brand'` and `locationId IS NULL`, which are persisted,
- * validated fields rather than a display name somebody can edit. That is
- * also semantically the right row to edit: an organization has one brand,
- * and a second organization-wide brand watch is a duplicate whether the
- * wizard or a person created it. A query the user has since renamed, paused,
- * or re-keyed is still that same row, so onboarding edits their version
- * rather than shadowing it with a fresh one. The limitation — a brand query
- * created by hand on the News screen is indistinguishable from one created
- * here — is documented in `docs/onboarding.md`.
+ * The identification is the persisted `origin` column first — the exact
+ * marker, written when the wizard creates a query — with a structural
+ * fallback for rows that predate it: **the oldest organization-wide brand
+ * query** (`queryType = 'brand'`, `locationId IS NULL`), persisted and
+ * validated fields rather than a display name somebody can edit. The
+ * fallback is also semantically right: an organization has one brand, and a
+ * second organization-wide brand watch is a duplicate whether the wizard or
+ * a person created it — so a hand-created brand query is *adopted* (edited)
+ * rather than shadowed with a fresh row. A query the user has since renamed,
+ * paused, or re-keyed is still that same row.
  */
 
 /**
  * The persisted query Step 2 edits, or null when the organization has none.
  *
- * Deterministic: oldest `createdAt` wins, id as the tiebreak, so two calls
- * over the same rows always name the same query regardless of list order.
+ * Candidates are organization-wide brand queries; among them the wizard's
+ * own (`origin: "onboarding"`) wins outright, then the oldest by
+ * `createdAt`, id as the tiebreak — so two calls over the same rows always
+ * name the same query regardless of list order. An onboarding-created query
+ * that a person has since rebound to a location or retyped is no longer a
+ * candidate: it stopped being an organization-wide brand watch, and editing
+ * it from the wizard would undo their decision.
  */
 export function findOnboardingNewsQuery(
   queries: readonly MonitoringQuery[],
@@ -48,7 +51,9 @@ export function findOnboardingNewsQuery(
     .filter((query) => query.queryType === "brand" && query.locationId === null)
     .sort(
       (a, b) =>
-        Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id),
+        Number(b.origin === "onboarding") - Number(a.origin === "onboarding") ||
+        Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+        a.id.localeCompare(b.id),
     );
   return candidates[0] ?? null;
 }
@@ -119,6 +124,7 @@ export async function saveOnboardingNewsQuery(
     deniedDomains: [],
     relevanceThreshold: DEFAULT_RELEVANCE_THRESHOLD,
     pollIntervalMinutes: DEFAULT_POLL_INTERVAL_MINUTES,
+    origin: "onboarding",
   });
 
   return createMonitoringQuery(context, createInput, monitor, now);
@@ -167,6 +173,111 @@ function consistentValue(values: readonly (string | null)[]): string | null {
   const set = new Set(values);
   if (set.size !== 1) return null;
   return values[0] ?? null;
+}
+
+/**
+ * What step 3's best-effort location-query pass did, for logging.
+ */
+export interface LocationQueryOutcome {
+  created: number;
+  skipped: number;
+  failed: number;
+}
+
+/**
+ * Create one News query per newly configured location — safely, or not at
+ * all.
+ *
+ * Runs after step 3 maps or creates locations, and only when the
+ * organization opted into News monitoring at step 2: an **enabled**
+ * onboarding-managed brand query is the opt-in signal. Without one, this
+ * creates nothing — somebody who skipped the News card must not find
+ * monitoring queries (and an implicit `news_media` connection) they never
+ * asked for.
+ *
+ * The idempotence and no-overwrite rules, in order of precedence:
+ *
+ * - A location that already has *any* location-bound query is skipped —
+ *   whether a person created it or a previous run of this pass did. This is
+ *   what makes a retried step-3 submission safe, and what guarantees a
+ *   user-edited or user-paused query is never touched, re-enabled, or
+ *   duplicated: existing rows are never written at all.
+ * - Each location id is resolved through the caller's scope before use, the
+ *   same rule `assertLocationInScope` enforces on the public action.
+ * - Keywords are the location's persisted name, plus its persisted city when
+ *   that adds a distinct term. Nothing invented.
+ * - Language and country are inherited from the brand query, so the
+ *   organization's queries agree; everything else takes the documented
+ *   defaults, `origin: "onboarding"`.
+ *
+ * Failures are per location and never propagate: the locations step has
+ * already succeeded, and a monitoring-query hiccup must not un-succeed it.
+ */
+export async function ensureOnboardingLocationQueries(
+  context: OnboardingNewsServiceContext,
+  locationIds: readonly string[],
+  monitor: NewsMonitor,
+  now: string,
+): Promise<LocationQueryOutcome> {
+  const outcome: LocationQueryOutcome = { created: 0, skipped: 0, failed: 0 };
+  if (locationIds.length === 0) return outcome;
+
+  const queries = await context.dataSource.monitoringQueries.list(context.scope);
+  const brand = findOnboardingNewsQuery(queries);
+  if (!brand || !brand.enabled) {
+    outcome.skipped = locationIds.length;
+    return outcome;
+  }
+
+  const covered = new Set(
+    queries
+      .map((query) => query.locationId)
+      .filter((locationId): locationId is string => locationId !== null),
+  );
+
+  for (const locationId of new Set(locationIds)) {
+    if (covered.has(locationId)) {
+      outcome.skipped += 1;
+      continue;
+    }
+
+    try {
+      const location = await context.dataSource.locations.get(context.scope, locationId);
+      if (!location) {
+        outcome.skipped += 1;
+        continue;
+      }
+
+      const keywords = [location.name];
+      const city = location.city.trim();
+      if (city.length >= 2 && !keywords.includes(city)) keywords.push(city);
+
+      const createInput = createMonitoringQueryInputSchema.parse({
+        name: `${location.name} watch`.slice(0, 120),
+        queryType: "location",
+        locationId: location.id,
+        keywords,
+        exclusions: [],
+        allowedDomains: [],
+        deniedDomains: [],
+        sourceCountry: brand.sourceCountry,
+        language: brand.language,
+        relevanceThreshold: DEFAULT_RELEVANCE_THRESHOLD,
+        pollIntervalMinutes: DEFAULT_POLL_INTERVAL_MINUTES,
+        enabled: true,
+        origin: "onboarding",
+      });
+
+      await createMonitoringQuery(context, createInput, monitor, now);
+      covered.add(location.id);
+      outcome.created += 1;
+    } catch (error) {
+      console.error("[onboarding:news] location query not created", error);
+      outcome.failed += 1;
+    }
+  }
+
+  return outcome;
 }
 
 /**

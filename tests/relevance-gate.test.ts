@@ -20,6 +20,7 @@ const QUERY: MonitoringQuery = {
   relevanceThreshold: 0.35,
   enabled: true,
   pollIntervalMinutes: 360,
+  origin: "user",
   lastPolledAt: null,
   createdAt: NOW,
   updatedAt: NOW,

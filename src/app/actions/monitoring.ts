@@ -95,7 +95,9 @@ export async function createMonitoringQueryAction(
 
     const created = await createMonitoringQuery(
       context,
-      parsed,
+      // Origin is provenance, not a preference: whatever the browser sent, a
+      // query created through the public action was created by a person.
+      { ...parsed, origin: "user" },
       monitor,
       new Date().toISOString(),
     );

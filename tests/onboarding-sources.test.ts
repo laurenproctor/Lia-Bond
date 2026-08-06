@@ -7,17 +7,19 @@ import {
   DEFAULT_RELEVANCE_THRESHOLD,
   NO_CAPABILITIES,
   onboardingNewsMonitoringInputSchema,
+  updateMonitoringQueryInputSchema,
   type MonitoringQuery,
 } from "@/domain";
 import { getConnector } from "@/integrations/registry";
 import { ConfigurationError } from "@/lib/env";
 import {
+  ensureOnboardingLocationQueries,
   findOnboardingNewsQuery,
   lastSuccessfulNewsPollAt,
   saveOnboardingNewsQuery,
   summarizeNewsMonitoring,
 } from "@/lib/onboarding/news";
-import { MQ_HARBOR_BRAND } from "@/lib/seed/dataset";
+import { LOC_HARBOR_HOUSE, LOC_SOHO, MQ_HARBOR_BRAND } from "@/lib/seed/dataset";
 import type { NewsMonitor } from "@/news/monitor";
 import { freshDataSource, harbor, ushg } from "./helpers/scope";
 
@@ -90,6 +92,7 @@ describe("findOnboardingNewsQuery", () => {
       relevanceThreshold: 0.35,
       enabled: true,
       pollIntervalMinutes: 240,
+      origin: "user",
       lastPolledAt: null,
       createdAt: "2026-08-01T00:00:00.000Z",
       updatedAt: "2026-08-01T00:00:00.000Z",
@@ -134,6 +137,31 @@ describe("findOnboardingNewsQuery", () => {
     // is what stops a second "Brand watch" appearing beside it.
     const renamed = query({ name: "Something my admin typed" });
     expect(findOnboardingNewsQuery([renamed])?.id).toBe(renamed.id);
+  });
+
+  it("prefers the persisted origin marker over age", () => {
+    // The exact marker beats the structural heuristic: the wizard's own
+    // query wins even when a hand-created brand query is older.
+    const older = query({
+      id: "00000000-0000-4000-8000-000000000006",
+      createdAt: "2026-06-01T00:00:00.000Z",
+    });
+    const wizards = query({
+      id: "00000000-0000-4000-8000-000000000007",
+      origin: "onboarding",
+    });
+    expect(findOnboardingNewsQuery([older, wizards])?.id).toBe(wizards.id);
+  });
+
+  it("drops a wizard query the user rebound or retyped", () => {
+    // Rebinding to a location, or changing the type, is a person's decision;
+    // the wizard must not keep editing that row over it.
+    const rebound = query({
+      id: "00000000-0000-4000-8000-000000000008",
+      origin: "onboarding",
+      locationId: "00000000-0000-4000-8000-0000000000cc",
+    });
+    expect(findOnboardingNewsQuery([rebound])).toBeNull();
   });
 });
 
@@ -183,6 +211,7 @@ describe("saveOnboardingNewsQuery", () => {
     );
 
     expect(created.queryType).toBe("brand");
+    expect(created.origin).toBe("onboarding");
     expect(created.locationId).toBeNull();
     expect(created.allowedDomains).toEqual([]);
     expect(created.deniedDomains).toEqual([]);
@@ -325,6 +354,166 @@ describe("saveOnboardingNewsQuery", () => {
         sourceCountry: "usa",
       }).success,
     ).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Location queries after step 3                                               */
+/* -------------------------------------------------------------------------- */
+
+describe("ensureOnboardingLocationQueries", () => {
+  it("creates one query per uncovered location, inheriting the brand query's market", async () => {
+    const dataSource = freshDataSource();
+    const scope = harbor.owner();
+
+    const outcome = await ensureOnboardingLocationQueries(
+      { dataSource, scope },
+      [LOC_HARBOR_HOUSE],
+      fakeMonitor(),
+      NOW,
+    );
+
+    expect(outcome).toEqual({ created: 1, skipped: 0, failed: 0 });
+    const queries = await dataSource.monitoringQueries.list(scope);
+    const locationQuery = queries.find((query) => query.locationId === LOC_HARBOR_HOUSE);
+    expect(locationQuery).toBeDefined();
+    expect(locationQuery?.queryType).toBe("location");
+    expect(locationQuery?.origin).toBe("onboarding");
+    // The persisted location's own name and city — nothing invented.
+    expect(locationQuery?.name).toBe("Harbor House watch");
+    expect(locationQuery?.keywords).toEqual(["Harbor House", "San Francisco"]);
+    // Inherited from the seeded brand query, so the organization's queries
+    // agree on where and in which language to search.
+    const brand = queries.find((query) => query.id === MQ_HARBOR_BRAND);
+    expect(locationQuery?.sourceCountry).toBe(brand?.sourceCountry);
+    expect(locationQuery?.language).toBe(brand?.language);
+  });
+
+  it("is idempotent: a retried step 3 creates nothing new", async () => {
+    const dataSource = freshDataSource();
+    const scope = harbor.owner();
+
+    await ensureOnboardingLocationQueries({ dataSource, scope }, [LOC_HARBOR_HOUSE], fakeMonitor(), NOW);
+    const second = await ensureOnboardingLocationQueries(
+      { dataSource, scope },
+      [LOC_HARBOR_HOUSE],
+      fakeMonitor(),
+      NOW,
+    );
+
+    expect(second).toEqual({ created: 0, skipped: 1, failed: 0 });
+    const queries = await dataSource.monitoringQueries.list(scope);
+    expect(queries.filter((query) => query.locationId === LOC_HARBOR_HOUSE)).toHaveLength(1);
+  });
+
+  it("never touches a location a person already covered", async () => {
+    // USHG's SoHo location has a hand-created query. The pass must neither
+    // duplicate it nor edit it — including its enabled flag.
+    const dataSource = freshDataSource();
+    const scope = ushg.owner();
+    const before = (await dataSource.monitoringQueries.list(scope)).find(
+      (query) => query.locationId === LOC_SOHO,
+    );
+    expect(before).toBeDefined();
+
+    const outcome = await ensureOnboardingLocationQueries(
+      { dataSource, scope },
+      [LOC_SOHO],
+      fakeMonitor(),
+      NOW,
+    );
+
+    expect(outcome).toEqual({ created: 0, skipped: 1, failed: 0 });
+    const after = (await dataSource.monitoringQueries.list(scope)).filter(
+      (query) => query.locationId === LOC_SOHO,
+    );
+    expect(after).toHaveLength(1);
+    expect(after[0]).toEqual(before);
+  });
+
+  it("creates nothing without the step-2 opt-in", async () => {
+    // No enabled organization-wide brand query means the person never
+    // configured News monitoring — the pass must not configure it for them.
+    const dataSource = freshDataSource();
+    const scope = harbor.owner();
+    await dataSource.monitoringQueries.remove(scope, MQ_HARBOR_BRAND);
+
+    const outcome = await ensureOnboardingLocationQueries(
+      { dataSource, scope },
+      [LOC_HARBOR_HOUSE],
+      fakeMonitor(),
+      NOW,
+    );
+
+    expect(outcome).toEqual({ created: 0, skipped: 1, failed: 0 });
+    expect(await dataSource.monitoringQueries.list(scope)).toHaveLength(0);
+  });
+
+  it("respects a paused brand query the same way", async () => {
+    const dataSource = freshDataSource();
+    const scope = harbor.owner();
+    await dataSource.monitoringQueries.update(scope, MQ_HARBOR_BRAND, { enabled: false });
+
+    const outcome = await ensureOnboardingLocationQueries(
+      { dataSource, scope },
+      [LOC_HARBOR_HOUSE],
+      fakeMonitor(),
+      NOW,
+    );
+
+    expect(outcome.created).toBe(0);
+  });
+
+  it("refuses a location outside the caller's organization", async () => {
+    // A location id from another tenant resolves to nothing through the
+    // caller's scope, so no query is created for it.
+    const dataSource = freshDataSource();
+    const scope = harbor.owner();
+
+    const outcome = await ensureOnboardingLocationQueries(
+      { dataSource, scope },
+      [LOC_SOHO],
+      fakeMonitor(),
+      NOW,
+    );
+
+    expect(outcome).toEqual({ created: 0, skipped: 1, failed: 0 });
+    const queries = await dataSource.monitoringQueries.list(scope);
+    expect(queries.some((query) => query.locationId === LOC_SOHO)).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Origin is provenance, not a preference                                      */
+/* -------------------------------------------------------------------------- */
+
+describe("query origin", () => {
+  it("cannot be set through the public update input", () => {
+    const parsed = updateMonitoringQueryInputSchema.parse({ origin: "onboarding" });
+    expect("origin" in parsed).toBe(false);
+  });
+
+  it("is forced to user by the public create action", () => {
+    const actions = source("src/app/actions/monitoring.ts");
+    expect(actions).toContain('origin: "user"');
+  });
+
+  it("defaults to user for callers that predate it", () => {
+    const parsed = createMonitoringQueryInputSchema.parse({
+      locationId: null,
+      name: "Hand-made",
+      queryType: "topic",
+      keywords: ["tasting menu"],
+      exclusions: [],
+      allowedDomains: [],
+      deniedDomains: [],
+      sourceCountry: null,
+      language: null,
+      relevanceThreshold: 0.35,
+      enabled: true,
+      pollIntervalMinutes: 240,
+    });
+    expect(parsed.origin).toBe("user");
   });
 });
 

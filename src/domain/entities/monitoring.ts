@@ -46,6 +46,19 @@ export const SYNDICATION_WINDOW_MS = 72 * 60 * 60 * 1000;
  */
 export const REJECTION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * Who created a query.
+ *
+ * `user` is a person on the News & Media screen; `onboarding` is the setup
+ * wizard. Provenance, not behaviour — polling and gating never read it. It
+ * exists so the wizard can be idempotent: step 2 edits *its* brand query
+ * rather than guessing by position, and step 3 can see that a location's
+ * query was created by a person and leave it alone.
+ */
+export const MONITORING_QUERY_ORIGINS = ["user", "onboarding"] as const;
+export const monitoringQueryOriginSchema = z.enum(MONITORING_QUERY_ORIGINS);
+export type MonitoringQueryOrigin = z.infer<typeof monitoringQueryOriginSchema>;
+
 const termSchema = z.string().trim().min(2).max(120);
 const domainSchema = z
   .string()
@@ -79,6 +92,7 @@ export const monitoringQuerySchema = z
     relevanceThreshold: unitScoreSchema,
     enabled: z.boolean(),
     pollIntervalMinutes: z.number().int().min(MIN_POLL_INTERVAL_MINUTES).max(10_080),
+    origin: monitoringQueryOriginSchema,
     /** Doubles as the incremental cursor: `publishedAfter` (D84). */
     lastPolledAt: timestampSchema.nullable(),
   })
@@ -90,21 +104,38 @@ export type MonitoringQuery = z.infer<typeof monitoringQuerySchema>;
 /**
  * `organizationId` is absent on purpose: the tenant comes from the caller's
  * verified scope, never from the payload. Same rule as `CreateMentionInput`.
+ *
+ * `origin` defaults to `user` so every pre-existing caller keeps meaning
+ * what it meant; only the onboarding services pass `onboarding`, and the
+ * public create action overrides whatever the browser sent — a client must
+ * not be able to label its own query as the wizard's.
  */
-export const createMonitoringQueryInputSchema = monitoringQuerySchema.omit({
-  id: true,
-  organizationId: true,
-  createdAt: true,
-  updatedAt: true,
-  lastPolledAt: true,
-});
-export type CreateMonitoringQueryInput = z.infer<
+export const createMonitoringQueryInputSchema = monitoringQuerySchema
+  .omit({
+    id: true,
+    organizationId: true,
+    createdAt: true,
+    updatedAt: true,
+    lastPolledAt: true,
+    origin: true,
+  })
+  .extend({ origin: monitoringQueryOriginSchema.default("user") });
+/**
+ * `z.input`, not `z.infer`: `origin` is defaulted by the schema, so a caller
+ * that has nothing to say about provenance — every pre-existing one — may
+ * omit it and gets `user` after parsing.
+ */
+export type CreateMonitoringQueryInput = z.input<
   typeof createMonitoringQueryInputSchema
 >;
 
-/** `lastPolledAt` is absent: only the poll service advances the cursor. */
-export const updateMonitoringQueryInputSchema =
-  createMonitoringQueryInputSchema.partial();
+/**
+ * `lastPolledAt` is absent: only the poll service advances the cursor.
+ * `origin` is absent: provenance is set at creation and never edited.
+ */
+export const updateMonitoringQueryInputSchema = createMonitoringQueryInputSchema
+  .omit({ origin: true })
+  .partial();
 export type UpdateMonitoringQueryInput = z.infer<
   typeof updateMonitoringQueryInputSchema
 >;

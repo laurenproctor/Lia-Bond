@@ -620,6 +620,8 @@ export function toMonitoringQuery(row: Row): MonitoringQuery {
       relevanceThreshold: num(row.relevance_threshold) ?? 0,
       enabled: row.enabled,
       pollIntervalMinutes: Number(row.poll_interval_minutes),
+      // `?? "user"` covers a row read before the origin migration applied.
+      origin: row.origin ?? "user",
       lastPolledAt: isoOrNull(row.last_polled_at),
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),

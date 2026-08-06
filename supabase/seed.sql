@@ -84,10 +84,10 @@ on conflict (id) do nothing;
 -- Must precede `mentions`: a seeded mention's monitoring_query_id
 -- references this table, and insertion order is what satisfies it.
 -- monitoring_queries (3 rows)
-insert into public.monitoring_queries (id, organization_id, location_id, name, query_type, keywords, exclusions, allowed_domains, denied_domains, source_country, language, relevance_threshold, enabled, poll_interval_minutes, last_polled_at, created_at, updated_at) values
-  ('ccb708fb-8648-5049-a2ed-f691743ec5f2', '2e10c03b-59de-5083-b50b-c2878784ebaa', null, 'Maison Laurent brand watch', 'brand', '{"Maison Laurent","Union Square Hospitality Group","USHG"}', '{"obituary"}', '{}', '{}', 'us', 'en', 0.35, true, 240, '2026-08-01T17:51:00.000Z', '2025-12-04T18:00:00.000Z', '2026-07-30T18:00:00.000Z'),
-  ('92af3e26-1944-5449-9f94-3c2f6d98d87a', '2e10c03b-59de-5083-b50b-c2878784ebaa', '6b7d60f5-f486-5f24-91fd-a3070ff0dd72', 'Maison Laurent SoHo watch', 'location', '{"Laurent","Prince Street"}', '{}', '{"eater.com","timeout.com"}', '{}', 'us', 'en', 0.35, true, 360, '2026-08-01T17:51:00.000Z', '2025-12-04T18:00:00.000Z', '2026-07-30T18:00:00.000Z'),
-  ('26e85c18-ea94-5f3a-acc6-b270d028ee0a', '2cfb101c-667c-588b-a37e-d52a0f6209ba', null, 'Harbor & Vine brand watch', 'brand', '{"Harbor & Vine"}', '{}', '{}', '{}', 'us', 'en', 0.35, true, 720, null, '2025-12-04T18:00:00.000Z', '2026-07-30T18:00:00.000Z')
+insert into public.monitoring_queries (id, organization_id, location_id, name, query_type, keywords, exclusions, allowed_domains, denied_domains, source_country, language, relevance_threshold, enabled, poll_interval_minutes, origin, last_polled_at, created_at, updated_at) values
+  ('ccb708fb-8648-5049-a2ed-f691743ec5f2', '2e10c03b-59de-5083-b50b-c2878784ebaa', null, 'Maison Laurent brand watch', 'brand', '{"Maison Laurent","Union Square Hospitality Group","USHG"}', '{"obituary"}', '{}', '{}', 'us', 'en', 0.35, true, 240, 'user', '2026-08-01T17:51:00.000Z', '2025-12-04T18:00:00.000Z', '2026-07-30T18:00:00.000Z'),
+  ('92af3e26-1944-5449-9f94-3c2f6d98d87a', '2e10c03b-59de-5083-b50b-c2878784ebaa', '6b7d60f5-f486-5f24-91fd-a3070ff0dd72', 'Maison Laurent SoHo watch', 'location', '{"Laurent","Prince Street"}', '{}', '{"eater.com","timeout.com"}', '{}', 'us', 'en', 0.35, true, 360, 'user', '2026-08-01T17:51:00.000Z', '2025-12-04T18:00:00.000Z', '2026-07-30T18:00:00.000Z'),
+  ('26e85c18-ea94-5f3a-acc6-b270d028ee0a', '2cfb101c-667c-588b-a37e-d52a0f6209ba', null, 'Harbor & Vine brand watch', 'brand', '{"Harbor & Vine"}', '{}', '{}', '{}', 'us', 'en', 0.35, true, 720, 'user', null, '2025-12-04T18:00:00.000Z', '2026-07-30T18:00:00.000Z')
 on conflict (id) do nothing;
 
 -- mentions (25 rows)

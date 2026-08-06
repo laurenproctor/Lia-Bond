@@ -41,7 +41,11 @@ import {
   saveGoogleLocationMappings,
   saveMappingsInputSchema,
 } from "@/lib/integrations/google-mapping";
-import { saveOnboardingNewsQuery } from "@/lib/onboarding/news";
+import {
+  ensureOnboardingLocationQueries,
+  saveOnboardingNewsQuery,
+} from "@/lib/onboarding/news";
+import { can } from "@/lib/auth/permissions";
 import { NEWS_ERROR_MESSAGES } from "@/lib/monitoring/poll-service";
 import { NewsError } from "@/news/errors";
 import type { NewsMonitor } from "@/news/monitor";
@@ -203,6 +207,42 @@ export async function saveOnboardingNewsMonitoringAction(
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Best-effort News coverage for the locations step 3 just configured.
+ *
+ * A side effect of the locations step, never a gate on it: by the time this
+ * runs the step has already completed, and no outcome here — including the
+ * news monitor being unconfigured on this deployment, or the caller's role
+ * lacking the monitoring permission — may surface as a step failure. The
+ * real rules (opt-in via the enabled onboarding brand query, one query per
+ * uncovered location, never touching existing rows) live in
+ * `ensureOnboardingLocationQueries`.
+ */
+async function ensureLocationMonitoring(
+  context: Awaited<ReturnType<typeof authorize>>,
+  locationIds: readonly string[],
+): Promise<void> {
+  if (locationIds.length === 0) return;
+  if (!can(context.role, "monitoring.manage_queries")) return;
+
+  try {
+    const monitor = getNewsMonitor();
+    const outcome = await ensureOnboardingLocationQueries(
+      context,
+      locationIds,
+      monitor,
+      new Date().toISOString(),
+    );
+    if (outcome.created > 0) revalidatePath("/integrations/news-media");
+  } catch (error) {
+    // Unconfigured news monitoring arrives here as a NewsError; anything
+    // else is logged the same way. Either way the locations step stands.
+    if (!(error instanceof NewsError)) {
+      console.error("[action:onboarding.locations] location monitoring skipped", error);
+    }
+  }
+}
+
+/**
  * Save Google location mappings and mark step 3 complete.
  *
  * Delegates the whole mapping to `saveGoogleLocationMappings`, which is the
@@ -248,6 +288,15 @@ export async function saveOnboardingLocationsAction(
 
     await completeLocationsStep(context, { mapped, created });
 
+    // After the step is settled: News queries for the locations that just
+    // arrived, when the organization opted into News monitoring at step 2.
+    await ensureLocationMonitoring(context, [
+      ...result.createdLocations.map((location) => location.id),
+      ...result.mappedProfiles
+        .map((profile) => profile.locationId)
+        .filter((locationId): locationId is string => locationId !== null),
+    ]);
+
     revalidateOnboarding();
     revalidatePath("/locations");
     revalidatePath("/integrations/google-business-profile");
@@ -291,6 +340,8 @@ export async function createOnboardingLocationAction(
     });
 
     await completeLocationsStep(context, { mapped: 0, created: 1 });
+
+    await ensureLocationMonitoring(context, [location.id]);
 
     revalidateOnboarding();
     revalidatePath("/locations");

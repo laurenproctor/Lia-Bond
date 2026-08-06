@@ -233,16 +233,19 @@ parallel write path.
   same audit events a save from the News & Media screen records. The action
   requires `monitoring.manage_queries`, the same permission that screen
   requires.
-- **Which query onboarding manages** is decided by `findOnboardingNewsQuery`:
-  the **oldest organization-wide brand query** (`queryType = 'brand'`,
-  `locationId IS NULL`, ordered by `createdAt` then id). Structural, persisted
-  fields — never the display name, which anybody can edit. Repeated saves
-  therefore edit one row rather than accreting "Brand watch" copies, and a
-  brand query created by hand is edited rather than shadowed. The known
-  limitation: a hand-created organization-wide brand query is
-  indistinguishable from an onboarding-created one, because
-  `monitoring_queries` has no origin column and a migration for bookkeeping
-  was not worth it.
+- **Which query onboarding manages** is decided by `findOnboardingNewsQuery`
+  over the persisted `origin` column (`20260808000300_monitoring_query_origin`):
+  among organization-wide brand queries, the wizard's own
+  (`origin = 'onboarding'`) wins outright, then the oldest by `createdAt`
+  (id as tiebreak) as the fallback for rows that predate the column — never
+  the display name, which anybody can edit. Repeated saves therefore edit
+  one row rather than accreting "Brand watch" copies, and a hand-created
+  brand query is adopted rather than shadowed. A wizard query the user has
+  since rebound to a location or retyped stops being a candidate: that was a
+  person's decision and step 2 does not undo it. `origin` is provenance, not
+  behaviour — polling never reads it, it is absent from the public update
+  input, and the public create action forces `user` regardless of what the
+  browser sent.
 - **Prefill** comes from real organization data only: the organization's name
   as the first keyword, its website host as a one-press suggestion. No
   fabricated aliases, people, or location names — step 3 has not chosen
@@ -253,10 +256,24 @@ parallel write path.
   country only when every enabled query agrees, and the last **completed**
   poll's time — otherwise "Not checked yet". The badge says *Configured*, not
   *Active*.
-- **Location queries are not auto-created after step 3.** The data model
-  cannot distinguish onboarding-generated queries from user-created ones
-  without a migration, so automatic per-location monitoring is left to the
-  full News & Media screen and recorded here as a limitation.
+- **Step 3 creates one location query per newly configured location** —
+  `ensureOnboardingLocationQueries`, called best-effort from both step-3
+  actions after the step has completed, so no monitoring outcome can fail
+  the step. The rules, in order:
+  - **Opt-in**: it runs only when an *enabled* onboarding-managed brand
+    query exists. Somebody who skipped the News card must not find queries
+    (and an implicit `news_media` connection) they never asked for.
+  - **Never writes an existing row**: a location that already has any
+    location-bound query is skipped — which is what makes a retried
+    submission idempotent and guarantees a user-edited or user-paused query
+    is never overwritten, re-enabled, or duplicated.
+  - Keywords are the location's persisted name plus its persisted city when
+    distinct; language and country are inherited from the brand query; all
+    other fields take the documented defaults, `origin: 'onboarding'`.
+  - Each creation goes through `createMonitoringQuery`, so the normal
+    `monitoring_query.created` audit event is recorded.
+  - Location ids resolve through the caller's scope before use, and the
+    pass runs only for roles holding `monitoring.manage_queries`.
 
 ### 7.3 Reddit
 
@@ -456,7 +473,7 @@ Eight suites, all against the demo adapter and the real source:
 | `onboarding-ready.test.ts` | quick-win hierarchy end to end, import status from real runs, no percentage field |
 | `onboarding-permissions.test.ts` | permission matrix, RLS policy text, OAuth allowlist, audit vocabulary, no credentials in client code, mock mode |
 | `onboarding-accessibility.test.ts` | `aria-current`, labels, sliders, hidden decoration, the disabled Reddit control's explanation, the configurator's focus and announcement behaviour, heading order, no product palette |
-| `onboarding-sources.test.ts` | step 2's three-source model: deterministic onboarding-query selection, dedupe-safe News saves through the real service, schema-compliant defaults, truthful summaries, Reddit's absent capability, Google-only completion |
+| `onboarding-sources.test.ts` | step 2's three-source model and the origin marker: onboarding-query selection (marker first, structure as fallback), dedupe-safe News saves, schema-compliant defaults, truthful summaries, Reddit's absent capability, Google-only completion, step-3 location queries (opt-in, idempotence, no-overwrite, tenancy), origin immutability |
 | `onboarding-activation.test.ts` | the overview banner appears only while its condition holds, and disappears |
 
 `supabase/tests/rls-verification.sql` gained a section 9 covering
@@ -532,13 +549,12 @@ column list matches the new table's real columns.
 8. **Reddit monitoring does not exist.** The step-2 card says so; nothing in
    this repository ingests, persists, or polls Reddit. See
    `docs/architecture/current-state.md`.
-9. **No automatic location News queries after step 3.** `monitoring_queries`
-   cannot distinguish onboarding-generated queries from user-created ones, so
-   per-location monitoring stays a manual step on the News & Media screen
-   rather than risking duplicate or overwritten queries on retries.
-10. **A hand-created organization-wide brand query is adopted by step 2.**
-    `findOnboardingNewsQuery` identifies the onboarding-managed query
-    structurally (oldest org-wide brand query), which is also how it avoids
-    duplicates — the trade-off is that the wizard edits such a query rather
-    than creating a second one, which is the intended behaviour but worth
-    knowing.
+9. **A hand-created organization-wide brand query is adopted by step 2.**
+   When no `origin = 'onboarding'` query exists, `findOnboardingNewsQuery`
+   falls back to the oldest org-wide brand query — so the wizard edits such
+   a query rather than creating a duplicate beside it. Intended behaviour,
+   but worth knowing.
+10. **Location queries are created only during onboarding's step 3.** A
+    location added later from `/locations` gets no automatic News query —
+    the pass is deliberately scoped to the wizard, and later coverage is a
+    decision for the News & Media screen.

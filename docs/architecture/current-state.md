@@ -311,8 +311,14 @@ Step 2 (`/onboarding/connect-sources`) is a three-source screen: Google
 Business Profile (the prerequisite, real OAuth, returns to step 2 and the
 callback settles the source step for onboarding-originated grants), News &
 Media (optional configuration written through the **existing**
-monitoring-query service — `saveOnboardingNewsQuery` edits the oldest
-organization-wide brand query rather than creating duplicates), and Reddit.
+monitoring-query service — `saveOnboardingNewsQuery` edits the wizard's own
+query, identified by the persisted `monitoring_queries.origin` column with
+the oldest org-wide brand query as the pre-column fallback), and Reddit.
+After step 3 maps or creates locations, `ensureOnboardingLocationQueries`
+creates at most one `origin = 'onboarding'` location query per newly covered
+location — only when an enabled onboarding brand query shows the person
+opted into News monitoring, and never writing a row that already exists, so
+retries are idempotent and user edits are never overwritten.
 
 **Reddit monitoring is not implemented.** `reddit` exists as platform-enum
 vocabulary, seed/demo fixture data, and a presentation route
