@@ -421,6 +421,19 @@ reachable without a session, so provider errors are logged and swallowed too.
 | D68 | A phrase in both lists is rejected at the schema | It reaches generation as an unresolvable instruction. Cheaper to refuse at the boundary than to define a precedence rule nobody will remember. |
 | D69 | "Preview responses" is removed rather than disabled | It cannot work — there is no generation — and a dead control on a screen about what Lia says is the same category of dishonesty D18 refused for capabilities. |
 
+## Decisions made adding brand voice autosave
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D70 | Autosave replaces explicit save; Save and Discard are removed | With changes persisting themselves there is nothing to discard, and a Save button that is never the thing that saves is a lie about how the screen works. The cost is audit volume, taken knowingly. |
+| D71 | Save on interaction end, then 800 ms idle | A drag is one decision, not forty `onChange` events. Committing on release matches what the control means; the idle window coalesces a burst of separate edits into one request. |
+| D72 | Exactly one request in flight; a change during a save is sent when it lands | This is the client half of the concurrent-save race recorded below. Autosave is precisely what would start triggering it regularly, so the client must not race itself. The lock is held across the drain loop rather than released between sends. |
+| D73 | No automatic retry | Autosave surfaces validation failures — a phrase in both lists — as you type rather than on submit. Automatic retry would loop on them forever. Retry is a button. |
+| D74 | The status rules live in a pure module, not in the hook | `vitest.config.mts` runs `environment: "node"` and the repo has no testing-library dependency. Testing a hook would mean adding jsdom and a dependency; extracting the rules tests what is worth testing without changing the project's test setup. |
+| D75 | Nothing renders until the first save | Showing "Saved" on arrival claims something that never happened. |
+| D76 | `pending` is removed from the controls' `disabled` | Left in, every autosave would freeze the form mid-edit — the quickest way to make the feature feel broken. Serialisation happens in the hook instead. |
+| D77 | The status renders as the form's first row, not inside `PageHeader` | `PageHeader` is server-rendered by the page while the state lives in the client form — the same cross-component problem that put Save in a sticky bar originally. A context provider for one string is not worth the indirection. |
+
 ## Known gaps after workflow 04
 
 Carried over from workflow 01:
@@ -526,12 +539,22 @@ New in brand voice configuration:
 - `response_drafts.brand_voice_version` is still written null. Stamping it is
   drafting's job.
 - **The screen's interactive behaviour has not been exercised in a browser.**
-  Slider dragging, the sticky save bar and Discard, Enter-adds-a-phrase, and
-  the end-to-end save round trip are covered by service and repository tests
-  and by code review, but no browser has driven them. Server-side rendering
-  was verified against a demo-mode dev server, including the read-only render
-  for a role without the permission: notice shown, all five sliders disabled,
-  no save bar.
+  Slider dragging, the autosave settling window, the status transitions, the
+  retry path, Enter-adds-a-phrase, and the end-to-end save round trip are
+  covered by the status-machine tests, the service and repository tests, and
+  code review — but no browser has driven them. Server-side rendering was
+  verified against a demo-mode dev server for both roles: an editor gets five
+  sliders and the status live region; a role without the permission gets the
+  notice, every control disabled, and no status region.
+- **Autosave multiplies audit events and version bumps.** Every save that
+  changes something writes a `brand_voice.updated` event and increments
+  `version`, and changes now save themselves. One tuning session that used to
+  be a single Save press is several requests, so it leaves several audit rows
+  and advances `version` by several. Accepted deliberately (D70): the client
+  coalesces — a slider saves on release, then an 800 ms idle window batches a
+  burst — but the volume is still higher than an explicit Save produced.
+  Merging the events server-side is not available: `audit_events` grants no
+  UPDATE or DELETE, by design.
 - **The profile `name` is stored but unreachable.** `brand_voice_profiles.name`
   is `not null`, is persisted by both adapters, and is one of the fields the
   audit diff tracks — but no control on the screen edits it and nothing in the

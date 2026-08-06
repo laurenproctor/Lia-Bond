@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useTransition, type ReactNode } from "react";
-import { Loader2, Save } from "lucide-react";
+import { useCallback, useState, type ReactNode } from "react";
+import { RotateCw } from "lucide-react";
 import { updateBrandVoiceAction } from "@/app/actions/brand-voice";
 import { AxisSlider } from "@/components/brand-voice/axis-slider";
 import { PhraseEditor } from "@/components/brand-voice/phrase-editor";
+import { SaveStatus } from "@/components/brand-voice/save-status";
+import { useAutosave } from "@/components/brand-voice/use-autosave";
 import { VoiceSummary } from "@/components/brand-voice/voice-summary";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -19,63 +21,66 @@ export interface VoiceFormProps {
   preview: ReactNode;
 }
 
-function isDirty(a: UpdateBrandVoiceInput, b: UpdateBrandVoiceInput): boolean {
-  return JSON.stringify(a) !== JSON.stringify(b);
-}
-
 /**
  * The editable brand voice.
  *
- * Save lives in a sticky bar inside the form rather than in the page header,
- * because the header cannot observe this component's dirty state without
- * lifting it out of the one place that uses it. A configuration screen that
- * cannot say "you have unsaved changes" is the more common failure anyway.
+ * Changes save themselves: a slider on release, a phrase immediately, then an
+ * idle window so a burst of edits becomes one request. There is no Save button
+ * and no Discard — with nothing held back there is nothing to discard, and the
+ * screen says whether the current state is on the server instead.
  *
- * On failure the edits stay on screen. Losing somebody's tuning because a
- * request failed is not an acceptable outcome for a screen whose whole purpose
- * is accumulating small adjustments.
+ * Controls are never disabled while a save runs. Disabling them would freeze
+ * the form every time it autosaved, which is the quickest way to make this feel
+ * broken; the request is serialised in `useAutosave` instead.
+ *
+ * A failure keeps the edits on screen. Losing somebody's tuning because a
+ * request failed is not acceptable on a screen whose whole purpose is
+ * accumulating small adjustments.
  */
 export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormProps) {
-  const [saved, setSaved] = useState(initial);
   const [value, setValue] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [pending, startTransition] = useTransition();
 
-  const dirty = isDirty(value, saved);
-
-  function submit() {
+  const handleSaved = useCallback((saved: UpdateBrandVoiceInput) => {
     setError(null);
     setFieldErrors({});
-
-    startTransition(async () => {
-      const result = await updateBrandVoiceAction(value);
-
-      if (!result.ok) {
-        setError(result.error);
-        setFieldErrors(result.fieldErrors ?? {});
-        return;
-      }
-
-      const next: UpdateBrandVoiceInput = {
-        name: result.data.name,
-        axes: result.data.axes,
-        approvedPhrases: result.data.approvedPhrases,
-        prohibitedPhrases: result.data.prohibitedPhrases,
-      };
-      setSaved(next);
-      setValue(next);
+    // Re-seeded from the server so its normalisation — trimming, dedupe — is
+    // what the form holds. Without this the screen keeps a value the database
+    // does not have.
+    setValue({
+      name: saved.name,
+      axes: saved.axes,
+      approvedPhrases: saved.approvedPhrases,
+      prohibitedPhrases: saved.prohibitedPhrases,
     });
+  }, []);
+
+  const handleFailed = useCallback(
+    (message: string, fields: Record<string, string>) => {
+      setError(message);
+      setFieldErrors(fields);
+    },
+    [],
+  );
+
+  const { status, commit, retry } = useAutosave(value, {
+    save: updateBrandVoiceAction,
+    onSaved: handleSaved,
+    onFailed: handleFailed,
+    enabled: !readOnly,
+  });
+
+  /** Change the value and treat the edit as complete. */
+  function edit(update: (current: UpdateBrandVoiceInput) => UpdateBrandVoiceInput) {
+    setValue(update);
+    commit();
   }
 
   return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        submit();
-      }}
-      className="flex flex-col gap-4"
-    >
+    <div className="flex flex-col gap-4">
+      {readOnly ? null : <SaveStatus status={status} />}
+
       <div className="grid gap-4 xl:grid-cols-12">
         <div className="flex flex-col gap-4 xl:col-span-7">
           <Card>
@@ -89,13 +94,16 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
                   key={axis.key}
                   axis={axis}
                   value={value.axes[axis.key]}
-                  disabled={readOnly || pending}
+                  disabled={readOnly}
+                  // The summary follows every frame of the drag; only the
+                  // release starts a save.
                   onChange={(next) =>
                     setValue((current) => ({
                       ...current,
                       axes: { ...current.axes, [axis.key]: next },
                     }))
                   }
+                  onCommit={commit}
                 />
               ))}
             </ul>
@@ -111,10 +119,10 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
               legend="Add an approved phrase"
               tone="approved"
               phrases={value.approvedPhrases}
-              disabled={readOnly || pending}
+              disabled={readOnly}
               error={fieldErrors.approvedPhrases}
               onChange={(next) =>
-                setValue((current) => ({ ...current, approvedPhrases: next }))
+                edit((current) => ({ ...current, approvedPhrases: next }))
               }
             />
           </Card>
@@ -129,10 +137,10 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
               legend="Add a prohibited phrase"
               tone="prohibited"
               phrases={value.prohibitedPhrases}
-              disabled={readOnly || pending}
+              disabled={readOnly}
               error={fieldErrors.prohibitedPhrases}
               onChange={(next) =>
-                setValue((current) => ({ ...current, prohibitedPhrases: next }))
+                edit((current) => ({ ...current, prohibitedPhrases: next }))
               }
             />
           </Card>
@@ -147,32 +155,16 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
       </div>
 
       {error ? (
-        <p
+        <div
           role="alert"
-          className="rounded-lg border border-red-600/30 bg-red-100 px-3 py-2 text-[13px] text-red-600"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-600/30 bg-red-100 px-3 py-2 text-[13px] text-red-600"
         >
-          {error}
-        </p>
-      ) : null}
-
-      {!readOnly && dirty ? (
-        <div className="sticky bottom-4 flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-card">
-          <span className="text-[13px] text-gray-700">Unsaved changes</span>
-          <span className="flex items-center gap-2">
-            <Button type="button" disabled={pending} onClick={() => setValue(saved)}>
-              Discard
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              icon={pending ? Loader2 : Save}
-              disabled={pending}
-            >
-              {pending ? "Saving" : "Save changes"}
-            </Button>
-          </span>
+          <span>{error} Your changes are still here.</span>
+          <Button type="button" size="sm" icon={RotateCw} onClick={retry}>
+            Retry
+          </Button>
         </div>
       ) : null}
-    </form>
+    </div>
   );
 }

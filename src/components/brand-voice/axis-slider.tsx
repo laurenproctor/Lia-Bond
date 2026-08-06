@@ -7,6 +7,13 @@ export interface AxisSliderProps {
   value: number;
   disabled?: boolean;
   onChange: (value: number) => void;
+  /**
+   * The drag is over and this value is the user's decision.
+   *
+   * Separate from `onChange` because a range input fires continuously while
+   * dragging: the summary should follow every frame, but a save should not.
+   */
+  onCommit?: () => void;
 }
 
 /**
@@ -17,7 +24,13 @@ export interface AxisSliderProps {
  * them. The pole labels are the accessible name; the numeric value is exposed
  * through `aria-valuetext` so it is read as "warm to formal", not "62".
  */
-export function AxisSlider({ axis, value, disabled = false, onChange }: AxisSliderProps) {
+export function AxisSlider({
+  axis,
+  value,
+  disabled = false,
+  onChange,
+  onCommit,
+}: AxisSliderProps) {
   const label = `${axis.leftLabel} to ${axis.rightLabel}`;
 
   return (
@@ -39,6 +52,12 @@ export function AxisSlider({ axis, value, disabled = false, onChange }: AxisSlid
         aria-label={label}
         aria-valuetext={`${value} of 100, ${label}`}
         onChange={(event) => onChange(Number(event.target.value))}
+        // Three, because each covers a gap the others leave. `pointerup` ends a
+        // drag; `keyup` ends an arrow-key adjustment; `blur` catches a keyboard
+        // user who tabs away, which fires no `keyup` on this control.
+        onPointerUp={onCommit}
+        onKeyUp={onCommit}
+        onBlur={onCommit}
         className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-gray-200 accent-purple-600 disabled:cursor-not-allowed disabled:opacity-60"
       />
       <span className="text-right text-[13px] text-gray-500">{axis.rightLabel}</span>
