@@ -5,16 +5,18 @@ import { PageBody } from "@/components/shell/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
+import { EscalationDetailPane } from "@/components/escalations/escalation-detail-pane";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
-import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { SelectFilter } from "@/components/ui/select-filter";
 import { EscalationStatusBadge, RiskBadge } from "@/components/ui/status-badge";
 import { formatSlaRemaining } from "@/lib/format";
 import { ESCALATION_CATEGORY_LABELS } from "@/lib/labels";
 import { getDataSource } from "@/lib/data";
+import { resolveSelection } from "@/lib/selection";
 import { getOrganizationScope } from "@/lib/tenancy/organization-context";
+import { escalationTimelineEntries } from "@/lib/view-models/escalation";
 import { workspacePathFor } from "@/lib/view-models/mention";
 import { ESCALATION_CATEGORIES, type Escalation, type Mention } from "@/domain";
 
@@ -34,7 +36,7 @@ const COLUMNS: DataTableColumn<EscalationRow>[] = [
       row.mention ? (
         <Link
           href={workspacePathFor(row.mention)}
-          className="font-medium text-gray-950 hover:text-purple-600 hover:underline"
+          className="relative font-medium text-gray-950 hover:text-purple-600 hover:underline"
         >
           {row.escalation.title}
         </Link>
@@ -79,7 +81,12 @@ const COLUMNS: DataTableColumn<EscalationRow>[] = [
   },
 ];
 
-export default async function EscalationsPage() {
+interface EscalationsPageProps {
+  searchParams: Promise<{ selected?: string }>;
+}
+
+export default async function EscalationsPage({ searchParams }: EscalationsPageProps) {
+  const { selected: selectedParam } = await searchParams;
   const scope = await getOrganizationScope();
   const dataSource = await getDataSource();
 
@@ -99,6 +106,19 @@ export default async function EscalationsPage() {
       ? (namesById.get(escalation.assignedUserId) ?? null)
       : null,
   }));
+
+  const selectedRow = resolveSelection(
+    rows,
+    selectedParam,
+    (row) => row.escalation.id,
+  );
+
+  const auditEvents = selectedRow
+    ? await dataSource.auditEvents.list(scope, {
+        entityType: "escalation",
+        entityId: selectedRow.escalation.id,
+      })
+    : [];
 
   const open = escalations.filter(
     (escalation) => escalation.status !== "resolved" && escalation.status !== "dismissed",
@@ -163,16 +183,22 @@ export default async function EscalationsPage() {
           columns={COLUMNS}
           rows={rows}
           rowKey={(row) => row.escalation.id}
+          rowHref={(row) => `/escalations?selected=${row.escalation.id}`}
+          rowLabel={(row) => row.escalation.title}
+          selectedKey={selectedRow?.escalation.id ?? null}
           emptyTitle="No escalations"
           emptyDescription="Nothing has been escalated. High-risk mentions arrive here automatically."
         />
       </Card>
 
-      <SectionPlaceholder
-        title="Selected case"
-        description="Case overview, source evidence, stakeholders, attachments, internal notes, resolution actions, and the audit timeline."
-        shape="lines"
-      />
+      {selectedRow ? (
+        <EscalationDetailPane
+          escalation={selectedRow.escalation}
+          mention={selectedRow.mention}
+          ownerName={selectedRow.assigneeName}
+          timelineEntries={escalationTimelineEntries(auditEvents, namesById)}
+        />
+      ) : null}
     </PageBody>
   );
 }
