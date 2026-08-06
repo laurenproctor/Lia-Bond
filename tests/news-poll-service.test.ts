@@ -91,8 +91,8 @@ describe("pollMonitoringQuery", () => {
       query.id,
     );
     expect(rejections.map((r) => r.reason).sort()).toEqual([
-      "below_threshold",
       "excluded_term",
+      "no_keyword_match",
     ]);
   });
 

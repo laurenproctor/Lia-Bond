@@ -58,9 +58,10 @@ const LOCAL_OUTLET_BONUS = 0.25;
  * alone is *rejected* unless corroborated (see `evaluateCandidate`), so
  * those legitimate brands need a second keyword or an `allowedDomains` entry
  * to be admitted on their own name. That is an acceptable v1 position only
- * because the rejection is logged with its reason (D82) and is therefore
- * discoverable and tunable — it must not be read as "short brand names work
- * fine here."
+ * because the rejection is logged with its own reason (D82,
+ * `ambiguous_uncorroborated`) and is therefore discoverable and tunable — it
+ * must not be read as "short brand names work fine here." A live poll dropped
+ * four articles about a salmonella outbreak at a real chain this way.
  */
 const AMBIGUOUS_TERM_MAX_LENGTH = 8;
 
@@ -247,12 +248,11 @@ export function evaluateCandidate(
   const matched = distinctSignals([...inTitle, ...inDescription]);
 
   if (matched.size === 0) {
-    // Genuinely nothing matched. Score 0 here means exactly that — distinct
-    // from the ambiguity rejection below, which reports a real, nonzero
-    // score even though it also rejects. Conflating the two would leave
-    // `news_rejected_candidates` unable to tell "irrelevant" from "plausible
-    // but unconfirmed", which is the reason the row exists at all (D82).
-    return { admitted: false, score: 0, reason: "below_threshold" };
+    // Genuinely nothing matched, and the score is 0 to say so. Its own reason
+    // rather than a shared one: the operator action here is to fix the
+    // keywords or accept that the provider is returning noise. Nothing about
+    // the threshold or the ambiguity rule is involved.
+    return { admitted: false, score: 0, reason: "no_keyword_match" };
   }
 
   let score = 0;
@@ -281,7 +281,10 @@ export function evaluateCandidate(
    * "Union Square") or the publisher being on the query's `allowedDomains`
    * list — the locality signal the schema itself names. Without either, the
    * candidate is rejected regardless of the numeric score or threshold, and
-   * the rejection carries the real score rather than zero (see above). */
+   * the rejection is recorded as `ambiguous_uncorroborated` — its own reason,
+   * carrying the real score. It used to share `below_threshold` with two
+   * unrelated rules, which made a 0.7 rejection against a 0.35 threshold read
+   * as a contradiction and sent operators to a dial that could not fix it. */
   const [singleMatch] = matched;
   const onlyMatch = matched.size === 1 ? singleMatch : undefined;
   if (onlyMatch !== undefined && isAmbiguous(onlyMatch)) {
@@ -294,7 +297,7 @@ export function evaluateCandidate(
     const locallyCorroborated =
       query.allowedDomains.length > 0 && domainMatches(domain, query.allowedDomains);
     if (!locallyCorroborated) {
-      return { admitted: false, score, reason: "below_threshold" };
+      return { admitted: false, score, reason: "ambiguous_uncorroborated" };
     }
   }
 

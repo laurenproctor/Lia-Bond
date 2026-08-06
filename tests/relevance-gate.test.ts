@@ -164,7 +164,7 @@ describe("scoring", () => {
       article({ title: "City council debates parking", description: "No mention." }),
       context(),
     );
-    expect(verdict).toMatchObject({ admitted: false, reason: "below_threshold" });
+    expect(verdict).toMatchObject({ admitted: false, reason: "no_keyword_match" });
     expect(verdict.score).toBe(0);
   });
 
@@ -293,13 +293,38 @@ describe("ambiguity corroboration", () => {
     expect(verdict.admitted).toBe(true);
   });
 
-  it("reports a nonzero score for an ambiguity rejection, distinct from a true non-match", () => {
+  it("reports ambiguous_uncorroborated with a real score, not a non-match", () => {
     const verdict = evaluateCandidate(
       article({ title: "Bond markets rally", description: "Yields fell." }),
       context({ query: ambiguous }),
     );
-    expect(verdict).toMatchObject({ admitted: false, reason: "below_threshold" });
+    expect(verdict).toMatchObject({
+      admitted: false,
+      reason: "ambiguous_uncorroborated",
+    });
     expect(verdict.score).toBeGreaterThan(0);
+  });
+
+  // The case no existing test covered, and the reason this change exists. A
+  // lone ambiguous term can score well above the threshold and still be
+  // rejected, because corroboration is a hard requirement rather than a
+  // weight. Reported as `below_threshold` this reads as a contradiction and
+  // sends an operator to tune a dial that is not connected to anything.
+  //
+  // Modelled on the live poll: an eight-character brand name matching in both
+  // title and description scored 0.7 against a 0.35 threshold.
+  it("rejects a high-scoring ambiguous match without calling it below threshold", () => {
+    const verdict = evaluateCandidate(
+      article({
+        title: "Chipotle pulls jalapeños after outbreak",
+        description: "Chipotle removed the peppers from some restaurants.",
+      }),
+      context({ query: { ...QUERY, keywords: ["Chipotle"] } }),
+    );
+
+    expect(verdict.admitted).toBe(false);
+    expect(verdict.score).toBeGreaterThan(QUERY.relevanceThreshold);
+    expect(verdict).toMatchObject({ reason: "ambiguous_uncorroborated" });
   });
 });
 
@@ -480,7 +505,7 @@ describe("domain suffix matching", () => {
 });
 
 describe("syndication ordering", () => {
-  it("reports below_threshold, not probable_syndication, for a non-matching article that shares a headline", () => {
+  it("reports no_keyword_match, not probable_syndication, for a non-matching article that shares a headline", () => {
     const verdict = evaluateCandidate(
       article({ title: "City council debates parking", description: "No mention." }),
       context({
@@ -492,7 +517,7 @@ describe("syndication ordering", () => {
         ],
       }),
     );
-    expect(verdict).toMatchObject({ admitted: false, reason: "below_threshold" });
+    expect(verdict).toMatchObject({ admitted: false, reason: "no_keyword_match" });
   });
 });
 
