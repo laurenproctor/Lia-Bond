@@ -817,6 +817,51 @@ one actually proved:
 | Brand voice and monitoring-query writes were demo-adapter only | Both exercised against live Postgres under RLS — brand voice update plus its audit event, and monitoring-query insert, update, and delete. |
 | News ingest was demo-adapter only | The whole pipeline ran against live Postgres with the mock provider: 3 queries polled, 5 articles ingested, 13 rejected `below_threshold`, gate scores and `requests_spent` recorded. The mock-derived rows were then removed, so the database is reproducible from the seed again. |
 | The audit-vocabulary defect (D80) was a test failure | Confirmed against live Postgres: all eight restored event types insert, and an unknown type is still rejected `23514`. Without `20260807000700` the first membership change or brand voice edit would have failed in production. |
+| **GNews had never been called** | Called. A live sweep fetched real articles, and a temporary probe query for a real brand ingested two of them as mentions — title, content, publisher name and domain, source URL, external id, and published-at all normalised correctly, with `raw_payload` left `{}` as D28 requires. The probe and everything it produced were removed afterwards; the database is reproducible from the seed again. |
+
+### What the first live news poll showed about the gate
+
+Two behaviours that look like bugs and are not, recorded so the next reader
+does not re-investigate them:
+
+- **A candidate scoring 0.7 against a 0.35 threshold was rejected.** That is
+  the ambiguity-corroboration rule, working exactly as written: `Laurent` is
+  seven characters with no space, so it is ambiguous, and a lone ambiguous
+  match is rejected *regardless of score* without a second distinct keyword or
+  an allow-listed domain. It kept a New Yorker piece about Yves Saint Laurent
+  out of a restaurant's inbox.
+- **`status: partial` on a run that errored nowhere.** `truncated` was true —
+  GNews capped the page at ten. Recorded as partial so a capped poll never
+  reads as a quiet news day.
+
+**And one thing that is a real defect.** `gate_rejection_reason` has four
+values and none of them means "ambiguous term, uncorroborated", so that
+rejection is recorded as `below_threshold` — which is false whenever the score
+cleared the threshold, and it did on most of them. The live probe made the
+cost concrete: of five articles about a genuine salmonella outbreak at the
+probed brand, four were rejected at score 0.7 against a 0.35 threshold,
+labelled as though they had scored too low. Only the one whose headline
+happened to carry the full two-word company name was admitted.
+
+This matters more than a mislabelled row. `AMBIGUOUS_TERM_MAX_LENGTH`'s own
+comment accepts the short-brand-name trade-off *on the grounds* that "the
+rejection is logged with its reason (D64) and is therefore discoverable and
+tunable". It is not discoverable: an operator reading this table sees
+`below_threshold` at 0.7 and concludes the threshold logic is broken, and
+lowering the threshold — the obvious response — changes nothing, because the
+corroboration rule never consulted it. The rejection data the gate depends on
+to be tunable currently cannot distinguish "irrelevant" from "on-topic but
+uncorroborated", which is the distinction it exists to record.
+
+A related consequence: because ambiguity is checked before syndication, four
+near-identical wire copies of the same story were each recorded as
+`below_threshold` rather than `probable_syndication`, so the dedupe rule
+never ran on the clearest syndication case the live poll produced.
+
+The fix is a fifth enum value plus the migration to add it, and it needs the
+`AMBIGUOUS_TERM_MAX_LENGTH` heuristic revisited alongside — not done here
+because both are gate-tuning decisions with real product consequences, and
+this document is the wrong place to make them silently.
 
 Two useful things fell out of doing it:
 
@@ -843,14 +888,9 @@ Two useful things fell out of doing it:
   302 whether the client is real, the redirect URI is unregistered, or the
   client id is invented, because Google defers every one of those checks until
   after sign-in. A 302 there is not evidence of anything.
-- **News monitoring has no provider key.** `LIA_NEWS_MODE=live` is set and
-  `GNEWS_API_KEY` is blank, so `resolveNewsMode()` reports `unconfigured` and
-  the poll route answers `not_configured` — verified, and nothing fabricated
-  reaches the database. It activates when a key is filled in, with no code
-  change. Note the provider: the key currently in `.env` as
-  `NEWSAPI_AI_API_KEY` is an Event Registry key, read by no code here, and it
-  will not authenticate against the GNews client. D71's upgrade is still an
-  upgrade, not the current state.
+- **The `NEWSAPI_AI_API_KEY` in `.env` is dead configuration.** It is an Event
+  Registry key, read by no code here, and it will not authenticate against the
+  GNews client. D71's upgrade is still an upgrade, not the current state.
 - **`supabase/tests/rls-verification.sql` has still never been executed.** The
   live checks above were run through PostgREST as an authenticated user, which
   covers the tenancy property that harness protects but not the harness
