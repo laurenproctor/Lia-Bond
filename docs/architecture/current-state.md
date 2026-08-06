@@ -869,7 +869,7 @@ New after integrating the branches:
 
 ## Closed by the first live run
 
-All 23 migrations are applied to the hosted project, and the subsystems below
+All 25 migrations are applied to the hosted project, and the subsystems below
 have now executed against real infrastructure rather than a stub. What each
 one actually proved:
 
@@ -884,6 +884,28 @@ one actually proved:
 | News ingest was demo-adapter only | The whole pipeline ran against live Postgres with the mock provider: 3 queries polled, 5 articles ingested, 13 rejected `below_threshold`, gate scores and `requests_spent` recorded. The mock-derived rows were then removed, so the database is reproducible from the seed again. |
 | The audit-vocabulary defect (D93) was a test failure | Confirmed against live Postgres: all eight restored event types insert, and an unknown type is still rejected `23514`. Without `20260807000700` the first membership change or brand voice edit would have failed in production. |
 | **GNews had never been called** | Called. A live sweep fetched real articles, and a temporary probe query for a real brand ingested two of them as mentions — title, content, publisher name and domain, source URL, external id, and published-at all normalised correctly, with `raw_payload` left `{}` as D28 requires. The probe and everything it produced were removed afterwards; the database is reproducible from the seed again. |
+
+### Onboarding, verified against the hosted project
+
+`20260808000100` and `20260808000200` are applied, the seed carries an
+`organization_onboarding` row per tenant, and the flow was exercised
+end to end with a throwaway account that was removed afterwards.
+
+| Property | Result |
+| --- | --- |
+| Provisioning creates three rows, not two | Confirmed. One RPC produced the organization, an `owner`/`active` membership, and an `organization_onboarding` row at `in_progress`/`organization`. An organization cannot exist with nowhere to record its setup. |
+| The profile trigger still fires | `on_auth_user_created` made the `public.users` row every policy resolves through, before the RPC ran. |
+| RLS on the new table | A member of one tenant sees exactly one row — their own — cannot read another's by asking for it, and cannot advance another's setup (0 rows updated). An admin writing their own row is the control that keeps those checks meaningful. |
+| The new owner can read their own row | Confirmed. Without it the wizard could not read the progress it exists to resume. |
+| Seeded tenants skip the wizard | Both seed organizations are `completed`/`ready`, so a seeded login lands on the overview rather than being sent back through setup. |
+
+**Found while cleaning up: there is no `on_auth_user_deleted`.** Deleting an
+account through the admin API or the dashboard removes the `auth.users` row and
+leaves `public.users` behind, authenticating as nobody. That is defensible —
+audit events reference `users`, and the member-management design already says
+removal deletes the membership rather than the account — but it is the
+unstated half of a trigger pair, and the asymmetry is worth knowing before
+somebody adds a cascade to "tidy up" and erases the audit trail with it.
 
 ### What the first live news poll showed about the gate
 
