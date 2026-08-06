@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
+import { ActivationBanner } from "@/components/overview/activation-banner";
 import { EmergingTopicsCard } from "@/components/overview/emerging-topics-card";
 import {
   LocationComparisonCard,
@@ -24,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { KpiCard, type KpiCardProps } from "@/components/ui/kpi-card";
 import { PageHeader } from "@/components/ui/page-header";
 import { getDataSource } from "@/lib/data";
+import { resolveActivationState } from "@/lib/onboarding/activation";
 import { getOrganizationScope } from "@/lib/tenancy/organization-context";
 import { buildOverviewKpis } from "@/lib/view-models/kpi";
 import { toMentionViews } from "@/lib/view-models/mention";
@@ -47,15 +49,26 @@ export default async function OverviewPage() {
   const scope = await getOrganizationScope();
   const dataSource = await getDataSource();
 
-  const [metrics, openMentions, locations, locationMetrics, auditEvents, members] =
-    await Promise.all([
-      dataSource.mentions.metrics(scope),
-      dataSource.mentions.listNeedingAttention(scope),
-      dataSource.locations.list(scope),
-      dataSource.locations.metrics(scope),
-      dataSource.auditEvents.list(scope, { limit: 6 }),
-      dataSource.memberships.listMembers(scope),
-    ]);
+  const [
+    metrics,
+    openMentions,
+    locations,
+    locationMetrics,
+    auditEvents,
+    members,
+    // Null for any workspace that is working normally, which is the common
+    // case. It is a prompt for an overview whose numbers are all zero, not a
+    // permanent getting-started panel — see `resolveActivationState`.
+    activation,
+  ] = await Promise.all([
+    dataSource.mentions.metrics(scope),
+    dataSource.mentions.listNeedingAttention(scope),
+    dataSource.locations.list(scope),
+    dataSource.locations.metrics(scope),
+    dataSource.auditEvents.list(scope, { limit: 6 }),
+    dataSource.memberships.listMembers(scope),
+    resolveActivationState(dataSource, scope),
+  ]);
 
   const analyses = await Promise.all(
     openMentions.slice(0, 4).map((mention) =>
@@ -95,6 +108,8 @@ export default async function OverviewPage() {
           </>
         }
       />
+
+      {activation ? <ActivationBanner state={activation} /> : null}
 
       {/* Six across only once the viewport can give each card enough room for
           its label; three across from `lg` reads better at 1440. */}

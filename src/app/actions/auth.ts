@@ -10,6 +10,11 @@ import { MIN_PASSWORD_LENGTH, newPasswordSchema } from "@/lib/auth/password";
 import { DEFAULT_SIGN_IN_DESTINATION, safeDestination } from "@/lib/auth/redirect";
 import { appOrigin } from "@/lib/env";
 import { getDataSource } from "@/lib/data";
+import {
+  PENDING_ORGANIZATION_METADATA_KEY,
+  postAuthDestination,
+  provisionPendingOrganization,
+} from "@/lib/onboarding/post-auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 /**
@@ -70,7 +75,13 @@ export async function signInAction(
     return { error: "That email and password did not match. Try again." };
   }
 
-  redirect(safeDestination(parsed.data.next));
+  // Signing in is also the recovery path for a signup whose provisioning could
+  // not run — the project requires email confirmation, or the process died
+  // between creating the account and creating the organization. Both leave an
+  // account with no organization, which this repairs.
+  await provisionPendingOrganization();
+
+  redirect(await postAuthDestination(safeDestination(parsed.data.next)));
 }
 
 /**
@@ -88,6 +99,14 @@ export async function signOutAction(): Promise<void> {
 /* -------------------------------------------------------------------------- */
 /* Sign up                                                                     */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Where a newly provisioned owner lands.
+ *
+ * Named rather than inlined because three call sites have to agree on it: this
+ * action, the emailed-link callback, and the sign-in recovery path.
+ */
+const ONBOARDING_FIRST_STEP = "/onboarding/organization";
 
 const signUpSchema = z
   .object({
@@ -130,6 +149,12 @@ export interface SignUpResult {
  * returns a success-shaped response for a duplicate sign-up precisely so this
  * endpoint cannot be used to enumerate customers, and that behaviour is
  * preserved rather than unpicked.
+ *
+ * On success the owner lands on `/onboarding/organization`, not on the
+ * overview. The organization exists at that point but is a name and nothing
+ * else — no industry, no timezone, no source, no locations — and dropping
+ * somebody onto a dashboard of a workspace in that state teaches them the
+ * product is empty rather than that it is unconfigured.
  */
 export async function signUpAction(
   _previous: SignUpResult | null,
@@ -157,7 +182,13 @@ export async function signUpAction(
       // Read by the profile trigger. This is the only path by which a name
       // reaches `public.users`, so omitting it would leave every new account
       // named after the local part of its address.
-      data: { full_name: fullName },
+      data: {
+        full_name: fullName,
+        // Carries the organization name across an email confirmation, which
+        // returns no session and therefore no `auth.uid()` for provisioning to
+        // act as. A hint, never an authorization — see the key's doc comment.
+        [PENDING_ORGANIZATION_METADATA_KEY]: organizationName,
+      },
       emailRedirectTo: `${appOrigin()}/auth/callback`,
     },
   });
@@ -169,7 +200,9 @@ export async function signUpAction(
 
   // No session means the project requires email confirmation. The account
   // exists and is correct; it simply cannot act yet, and provisioning has to
-  // wait until the link is clicked.
+  // wait until the link is clicked — `/auth/callback` and the sign-in action
+  // both call `provisionPendingOrganization`, which reads the name back out of
+  // the metadata written above.
   if (!data.session) {
     redirect("/sign-in?pending=confirm");
   }
@@ -188,7 +221,10 @@ export async function signUpAction(
     };
   }
 
-  redirect(DEFAULT_SIGN_IN_DESTINATION);
+  // Step 1, not the overview. `provision_organization` created the onboarding
+  // row in the same transaction, so this destination is guaranteed to have
+  // progress to record against.
+  redirect(ONBOARDING_FIRST_STEP);
 }
 
 /* -------------------------------------------------------------------------- */

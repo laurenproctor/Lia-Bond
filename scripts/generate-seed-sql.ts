@@ -14,7 +14,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // Resolved by scripts/tsconfig-paths-hook.mjs, which the npm script preloads.
 import { REFERENCE_NOW } from "@/lib/seed/clock";
-import { columnName } from "./seed-sql-columns.ts";
+import { columnName, conflictTarget } from "./seed-sql-columns.ts";
 import { SEED_PLAN, type SeedRow } from "./seed-plan.ts";
 
 type Scalar = string | number | boolean | null | undefined;
@@ -94,7 +94,9 @@ function insert(table: string, rows: Row[], columns: readonly string[]): string 
     `-- ${table} (${rows.length} rows)`,
     `insert into public.${table} (${columnList}) values`,
     values,
-    `on conflict (id) do nothing;`,
+    // Keyed per table rather than assumed: `organization_onboarding` is keyed
+    // on `organization_id` and has no surrogate id. See SEED_CONFLICT_TARGETS.
+    `on conflict (${conflictTarget(table)}) do nothing;`,
     "",
   ].join("\n");
 }
@@ -108,7 +110,7 @@ const sections: string[] = [
   `--`,
   `-- Deterministic: ids are derived from stable labels and timestamps are`,
   `-- anchored to ${REFERENCE_NOW}, so re-running produces identical rows.`,
-  `-- Safe to re-run: every insert is "on conflict (id) do nothing".`,
+  `-- Safe to re-run: every insert is "on conflict (<primary key>) do nothing".`,
   `--`,
   `-- Contains no real credentials, tokens, or personal data.`,
   ``,

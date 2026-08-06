@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { AccessSection } from "@/components/site/access-form";
 import { PrimaryButton, SecondaryButton } from "@/components/site/button";
+import { ClosingCta } from "@/components/site/closing-cta";
 import { SpeechBubble } from "@/components/site/speech-bubble";
 import {
   Eyebrow,
@@ -50,7 +50,7 @@ export default function HomePage() {
           approve.
         </Lede>
         <div className="flex flex-wrap gap-3">
-          <PrimaryButton href="#access">Request early access</PrimaryButton>
+          <PrimaryButton href="/sign-up">Get started</PrimaryButton>
           <SecondaryButton href="/product">See how it works</SecondaryButton>
         </div>
       </header>
@@ -111,7 +111,7 @@ export default function HomePage() {
         </div>
       </Section>
 
-      <AccessSection sourcePath="/" />
+      <ClosingCta />
     </>
   );
 }

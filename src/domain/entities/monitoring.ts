@@ -22,11 +22,11 @@ import {
  * query itself is the anchor.
  */
 
-/** Below this, polling would burn the daily request budget (D67). */
+/** Below this, polling would burn the daily request budget (D85). */
 export const MIN_POLL_INTERVAL_MINUTES = 60;
 /** The GNews free tier returns at most this many articles per request. */
 export const MAX_ARTICLES_PER_POLL = 10;
-/** A repeated headline inside this window is treated as syndication (D68). */
+/** A repeated headline inside this window is treated as syndication (D86). */
 export const SYNDICATION_WINDOW_MS = 72 * 60 * 60 * 1000;
 /**
  * How long a rejection is kept.
@@ -69,7 +69,7 @@ export const monitoringQuerySchema = z
     relevanceThreshold: unitScoreSchema,
     enabled: z.boolean(),
     pollIntervalMinutes: z.number().int().min(MIN_POLL_INTERVAL_MINUTES).max(10_080),
-    /** Doubles as the incremental cursor: `publishedAfter` (D66). */
+    /** Doubles as the incremental cursor: `publishedAfter` (D84). */
     lastPolledAt: timestampSchema.nullable(),
   })
   .extend(organizationOwnedSchema.shape)
@@ -104,7 +104,7 @@ export type UpdateMonitoringQueryInput = z.infer<
  *
  * Its own table rather than a reuse of `platform_sync_runs`, whose
  * `platform_profile_id` is `not null` and which news has nothing to put in
- * (D63).
+ * (D81).
  */
 export const newsPollRunSchema = z
   .object({
@@ -137,7 +137,7 @@ export type NewsPollRun = z.infer<typeof newsPollRunSchema>;
  * An article the gate refused.
  *
  * "Why did you miss this story" is the first question asked of any monitoring
- * product, and without this row the gate is unfalsifiable (D64).
+ * product, and without this row the gate is unfalsifiable (D82).
  */
 export const newsRejectedCandidateSchema = z
   .object({

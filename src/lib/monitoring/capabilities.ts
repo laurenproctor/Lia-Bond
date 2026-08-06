@@ -68,7 +68,7 @@ export function newsCapabilities(available: boolean): IntegrationCapability[] {
       // sent by a person through their own channel" — true of Google's
       // review_publishing, where it was copied from, but false here: there
       // is no composer or draft generation on the media detail screen, and
-      // D72 says there never will be on this surface. Cut rather than
+      // D90 says there never will be on this surface. Cut rather than
       // reworded, because the two sentences above already say everything
       // true about this capability.
       detail:

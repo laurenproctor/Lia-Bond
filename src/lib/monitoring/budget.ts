@@ -3,7 +3,7 @@ import type { LiaDataSource } from "@/lib/data/types";
 /**
  * The daily request ceiling, shared by every tenant.
  *
- * New in this workflow (D67). Google's quota was per connection, so a noisy
+ * New in this workflow (D85). Google's quota was per connection, so a noisy
  * customer could only hurt themselves; here one organization with forty
  * queries can exhaust the day for everyone, which is why this is enforced
  * above the tenant loop rather than inside it.

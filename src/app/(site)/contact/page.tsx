@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AccessSection } from "@/components/site/access-form";
+import { ContactSection } from "@/components/site/contact-form";
 import {
   Eyebrow,
   Lede,
@@ -9,13 +9,13 @@ import {
 
 export const metadata: Metadata = {
   title: "Contact",
-  description: "How to reach Lia about early access, support, or press.",
+  description: "How to reach Lia about getting started, support, or press.",
 };
 
 const CHANNELS = [
   {
-    heading: "Early access",
-    body: "Use the form below. We reply to every request, usually within a working day, and we will tell you plainly if you are not a fit yet.",
+    heading: "Getting started",
+    body: "You do not need to wait for us — sign up and connect your first location today. If you want to talk it through first, use the form below.",
   },
   {
     heading: "Existing customers",
@@ -59,7 +59,7 @@ export default function ContactPage() {
         </div>
       </Section>
 
-      <AccessSection sourcePath="/contact" />
+      <ContactSection />
     </>
   );
 }

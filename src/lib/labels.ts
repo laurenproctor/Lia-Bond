@@ -221,6 +221,7 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "automation_rule.enabled": "Automation rule enabled",
   "automation_rule.disabled": "Automation rule disabled",
   "location.manager_changed": "Location manager changed",
+  "location.created": "Location added",
   "integration.oauth_started": "Authorization started",
   "integration.oauth_completed": "Authorization completed",
   "integration.connected": "Integration connected",
@@ -256,6 +257,20 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "monitoring_query.created": "News query created",
   "monitoring_query.updated": "News query updated",
   "monitoring_query.deleted": "News query deleted",
+  // Onboarding. "Skipped" is named as such rather than folded into a neutral
+  // "step finished": whether somebody connected a source or declined to is the
+  // fact that explains an empty inbox six weeks later.
+  "onboarding.started": "Setup started",
+  "onboarding.organization_completed": "Organization details saved",
+  "onboarding.source_connected": "First source connected",
+  "onboarding.source_skipped": "Source setup skipped",
+  "onboarding.locations_completed": "Locations selected",
+  "onboarding.locations_skipped": "Location setup skipped",
+  "onboarding.brand_voice_completed": "Brand voice set during setup",
+  "onboarding.team_completed": "Teammates invited during setup",
+  "onboarding.team_skipped": "Team invitations skipped",
+  "onboarding.completed": "Setup completed",
+  "onboarding.ready_viewed": "Workspace ready screen opened",
 };
 
 /** Sync-run outcomes, as a person would describe them. */

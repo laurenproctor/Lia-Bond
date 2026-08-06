@@ -28,7 +28,7 @@ import type { MonitoringQuery } from "@/domain";
  * Edit matters more here than a normal CRUD nicety. `news_poll_runs` and
  * `news_rejected_candidates` both reference `monitoring_queries` with
  * `on delete cascade` — deleting a query destroys its entire poll history and
- * rejection log, the exact record D64 exists to make the relevance gate
+ * rejection log, the exact record D82 exists to make the relevance gate
  * falsifiable. Without an edit path, the only way to add a second keyword or
  * loosen a threshold would be delete-and-recreate, which erases the evidence
  * a person would tune against. Editing in place keeps that history intact.

@@ -122,12 +122,51 @@ export const SEED_TABLE_COLUMNS = {
     "axisFormality", "axisConfidence", "axisHospitality", "approvedPhrases",
     "prohibitedPhrases", "version", "updatedByUserId", "createdAt", "updatedAt",
   ],
+  // No surrogate id: `organization_id` is the primary key, one row per
+  // organization. Seeded because the backfill in
+  // 20260808000100_organization_onboarding.sql runs before `supabase/seed.sql`
+  // and therefore never sees these organizations — without these rows a fresh
+  // `supabase db reset` would leave both seeded tenants with no onboarding
+  // record at all.
+  organization_onboarding: [
+    "organizationId", "status", "currentStep", "organizationCompletedAt",
+    "sourceCompletedAt", "sourceSkippedAt", "locationsCompletedAt",
+    "locationsSkippedAt", "brandVoiceCompletedAt", "teamCompletedAt",
+    "teamSkippedAt", "completedAt", "readyViewedAt", "organizationSize",
+    "createdAt", "updatedAt",
+  ],
   audit_events: [
     "id", "organizationId", "actorUserId", "actorType", "eventType",
     "entityType", "entityId", "previousState", "newState", "metadata",
     "occurredAt",
   ],
 } satisfies Record<string, readonly string[]>;
+
+/**
+ * The conflict target each table's idempotent insert uses.
+ *
+ * Every seeded table but one is keyed on a surrogate `id`, so `id` is the
+ * default and this map holds only the exception. `organization_onboarding` is
+ * keyed on `organization_id` — one row per organization is not a rule the
+ * application has to remember, and there is no surrogate id for a second row to
+ * occupy.
+ *
+ * This exists because both loaders previously hard-coded `id`. That is a
+ * silent, table-shaped assumption: `db:validate` parses the generated SQL
+ * happily (`on conflict (id)` is valid syntax against any table), and it fails
+ * only when the statement reaches a real Postgres — which is exactly what
+ * happened the first time these migrations were applied.
+ * `tests/seed-generator-columns.test.ts` now asserts every target is a real
+ * column of its table.
+ */
+export const SEED_CONFLICT_TARGETS: Record<string, string> = {
+  organization_onboarding: "organizationId",
+};
+
+/** The conflict target for a table, as a snake_case column name. */
+export function conflictTarget(table: string): string {
+  return columnName(SEED_CONFLICT_TARGETS[table] ?? "id");
+}
 
 /**
  * Real, non-generated columns the seed generator deliberately does not

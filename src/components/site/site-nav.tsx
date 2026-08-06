@@ -10,10 +10,10 @@ import { SITE_NAV } from "@/lib/site/routes";
  * The one navigation every public page renders.
  *
  * A client component solely for the mobile disclosure. The links themselves are
- * static and the sign-in link needs no session check: `/sign-in` already
- * forwards an authenticated visitor to `/overview` (see `src/middleware.ts`),
- * so the marketing site never reads a session and every page stays statically
- * renderable.
+ * static and neither auth link needs a session check: `/sign-in` and `/sign-up`
+ * both already forward an authenticated visitor to `/overview` (see
+ * `src/middleware.ts`), so the marketing site never reads a session and every
+ * page stays statically renderable.
  */
 export function SiteNav() {
   const [open, setOpen] = useState(false);
@@ -103,11 +103,11 @@ export function SiteNav() {
 function PrimaryNavCta({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <Link
-      href="/#access"
+      href="/sign-up"
       onClick={onNavigate}
       className="inline-flex items-center justify-center rounded-[9px] bg-site-orange px-5 py-2.5 text-[14px] font-semibold whitespace-nowrap text-site-ink transition-colors hover:bg-site-orange-hover"
     >
-      Request early access
+      Get started
     </Link>
   );
 }

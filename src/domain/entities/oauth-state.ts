@@ -43,6 +43,13 @@ export const ALLOWED_REDIRECT_PATHS = [
   "/integrations",
   "/integrations/google-business-profile",
   "/integrations/google-business-profile/setup",
+  // Onboarding. Connecting Google is step 2 and choosing locations is step 3,
+  // so a successful grant returns straight to step 3 rather than dropping the
+  // person back on the screen they just finished. Both are listed: the callback
+  // re-checks the stored path against this list on the way out, and a
+  // reauthorization started from step 2 must be able to return there.
+  "/onboarding/connect-sources",
+  "/onboarding/locations",
 ] as const;
 
 export type AllowedRedirectPath = (typeof ALLOWED_REDIRECT_PATHS)[number];

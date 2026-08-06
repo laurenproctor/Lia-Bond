@@ -4,7 +4,9 @@ import { parse } from "libpg-query";
 import { describe, expect, it } from "vitest";
 import {
   columnName,
+  conflictTarget,
   SEED_COLUMN_EXCLUSIONS,
+  SEED_CONFLICT_TARGETS,
   SEED_TABLE_COLUMNS,
 } from "../scripts/seed-sql-columns.ts";
 
@@ -272,6 +274,58 @@ describe("seed generator columns vs. the Postgres migrations", () => {
             `also writes it — remove the now-stale exclusion.`,
         ).toBe(false);
       }
+    }
+  });
+
+  /**
+   * The same bug class one layer down.
+   *
+   * Both seed loaders write an idempotent upsert, and both hard-coded `id` as
+   * the conflict target — a silent, table-shaped assumption that `db:validate`
+   * cannot catch, because `on conflict (id) do nothing` is valid *syntax*
+   * against any table. It fails only when the statement reaches a real
+   * Postgres, which is exactly how `organization_onboarding` (keyed on
+   * `organization_id`, with no surrogate id) broke the first `supabase db
+   * reset` these migrations were ever run against.
+   */
+  it("gives every seeded table a conflict target that is a real column", async () => {
+    const { tables: schemaColumns } = await extractSchemaColumns();
+
+    for (const table of Object.keys(SEED_TABLE_COLUMNS)) {
+      const realColumns = schemaColumns.get(table);
+      expect(realColumns, `no migration ever creates public.${table}`).toBeDefined();
+
+      const target = conflictTarget(table);
+      expect(
+        realColumns?.has(target),
+        `the seed loaders upsert public.${table} on "${target}", which is not a ` +
+          `real column. Add an entry to SEED_CONFLICT_TARGETS.`,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps the conflict-target overrides honest", async () => {
+    const { tables: schemaColumns } = await extractSchemaColumns();
+
+    for (const [table, column] of Object.entries(SEED_CONFLICT_TARGETS)) {
+      expect(
+        SEED_TABLE_COLUMNS,
+        `SEED_CONFLICT_TARGETS names "${table}", which is not a seeded table.`,
+      ).toHaveProperty(table);
+
+      // An override that names `id` is either wrong or redundant — `id` is
+      // already the default, so listing it hides a table that genuinely has
+      // no surrogate key behind one that does.
+      expect(
+        column,
+        `SEED_CONFLICT_TARGETS["${table}"] is "id", which is the default. Remove it.`,
+      ).not.toBe("id");
+
+      const real = schemaColumns.get(table);
+      expect(
+        real?.has(columnName(column)),
+        `SEED_CONFLICT_TARGETS["${table}"] names "${column}", which is not a real column.`,
+      ).toBe(true);
     }
   });
 });

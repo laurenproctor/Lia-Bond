@@ -16,6 +16,7 @@ import {
   isSuccessfulAnalysisRun,
   isSuccessfulSyncRun,
   isSyncRunStale,
+  firstIncompleteStep,
   recordAuditEventInputSchema,
   requiresResolutionNote,
   sourceFieldsChanged,
@@ -31,6 +32,7 @@ import {
   type InvitationPreview,
   type Mention,
   type MentionAnalysis,
+  type OrganizationOnboarding,
   type PlatformSyncRun,
   type ResponseDraft,
   type SyncResource,
@@ -66,6 +68,7 @@ import {
   toMentionAnalysis,
   toOAuthState,
   toOrganization,
+  toOrganizationOnboarding,
   toPlatformConnection,
   toPlatformProfile,
   toPlatformSyncRun,
@@ -179,6 +182,14 @@ function matchesStoredProfile(
   );
 }
 
+/**
+ * Sentinel for "stamp this column with now(), unless it already has a value".
+ *
+ * A unique symbol rather than a magic string, so it can never collide with a
+ * value somebody genuinely wants to write.
+ */
+const nowIfUnset = Symbol("now-if-unset");
+
 export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource {
   /** Base selector for an organization-owned table. */
   const from = (table: string, scope: OrganizationScope) =>
@@ -214,6 +225,54 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         "This is the only owner. Make somebody else an owner first, then change this one.",
       );
     }
+  }
+
+  /**
+   * Apply one onboarding transition.
+   *
+   * `nowIfUnset` is what makes every transition idempotent: a step that already
+   * carries a timestamp keeps it, so a double-submitted form or a refreshed
+   * confirmation does not restamp progress and make the trail claim somebody
+   * completed a step later than they did. A plain `now()` would rewrite it.
+   *
+   * The row is read first because that resolution needs the current values.
+   * That is a read-then-write, but it is not a race worth guarding: the two
+   * writers are the same person in two tabs, and both are writing the same
+   * forward transition.
+   */
+  async function updateOnboarding(
+    scope: OrganizationScope,
+    patch: Record<string, unknown>,
+  ): Promise<OrganizationOnboarding> {
+    const { data: existing, error: readError } = await client
+      .from("organization_onboarding")
+      .select("*")
+      .eq("organization_id", scope.organizationId)
+      .maybeSingle();
+
+    if (readError) fail(readError, "load setup progress");
+    if (!existing) throw notFound("Setup progress");
+
+    const row = existing as Row;
+    const stamp = new Date().toISOString();
+    const resolved: Record<string, unknown> = {};
+
+    for (const [column, value] of Object.entries(patch)) {
+      resolved[column] = value === nowIfUnset ? (row[column] ?? stamp) : value;
+    }
+
+    const { data, error } = await client
+      .from("organization_onboarding")
+      .update(resolved)
+      .eq("organization_id", scope.organizationId)
+      .select("*")
+      .maybeSingle();
+
+    if (error) fail(error, "save setup progress");
+    // Null means the update matched no row: RLS refused it because the caller
+    // is not an owner or admin here.
+    if (!data) throw new DataError("forbidden", "Your role cannot change setup progress.");
+    return toOrganizationOnboarding(data as Row);
   }
 
   /**
@@ -388,6 +447,30 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (!created) throw notFound("Organization");
         return created;
       },
+
+      async update(scope, input) {
+        const { data, error } = await client
+          .from("organizations")
+          .update({
+            name: input.name,
+            website_url: input.websiteUrl,
+            industry: input.industry,
+            default_timezone: input.defaultTimezone,
+            default_language: input.defaultLanguage,
+          })
+          // Scoped by primary key rather than by `organization_id`: this *is*
+          // the tenant root. `organizations_update_admins` re-checks the role,
+          // so a scope forged past the application layer still writes nothing.
+          .eq("id", scope.organizationId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "save that organization");
+        // Null means the update matched no row — the caller is not an owner or
+        // admin of this organization, and RLS filtered it out.
+        if (!data) throw notFound("Organization");
+        return toOrganization(data as Row);
+      },
       // Deliberately unscoped and run under the service-role client — see the
       // doc comment on `listWithUnanalyzedMentions` in types.ts and on
       // `serviceClient` above.
@@ -436,6 +519,129 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
             ),
           ),
         ];
+      },
+    },
+
+    onboarding: {
+      async get(scope) {
+        const { data, error } = await client
+          .from("organization_onboarding")
+          .select("*")
+          .eq("organization_id", scope.organizationId)
+          .maybeSingle();
+
+        if (error) fail(error, "load setup progress");
+        return data ? toOrganizationOnboarding(data as Row) : null;
+      },
+
+      async create(scope) {
+        // `provision_organization` already writes this row in the same
+        // transaction as the organization, so reaching here means the row is
+        // genuinely absent. `on conflict` is expressed as an upsert rather than
+        // a read-then-insert: two tabs opening onboarding at once would
+        // otherwise race, and the loser would see a unique-violation error for
+        // getting exactly what it asked for.
+        const { data, error } = await client
+          .from("organization_onboarding")
+          .upsert(
+            { organization_id: scope.organizationId },
+            { onConflict: "organization_id", ignoreDuplicates: false },
+          )
+          .select("*")
+          .single();
+
+        if (error) fail(error, "start setup");
+        return toOrganizationOnboarding(data as Row);
+      },
+
+      completeOrganizationStep(scope, organizationSize) {
+        return updateOnboarding(scope, {
+          organization_completed_at: nowIfUnset,
+          organization_size: organizationSize,
+          current_step: "connect_sources",
+        });
+      },
+
+      completeSourceStep(scope) {
+        // Clears the skip. Somebody who continued without connecting and then
+        // came back and connected has not skipped the step, and leaving both
+        // timestamps set would violate the table's own check constraint.
+        return updateOnboarding(scope, {
+          source_completed_at: nowIfUnset,
+          source_skipped_at: null,
+          current_step: "locations",
+        });
+      },
+
+      skipSourceStep(scope) {
+        return updateOnboarding(scope, {
+          source_skipped_at: nowIfUnset,
+          source_completed_at: null,
+          current_step: "locations",
+        });
+      },
+
+      completeLocationsStep(scope) {
+        return updateOnboarding(scope, {
+          locations_completed_at: nowIfUnset,
+          locations_skipped_at: null,
+          current_step: "brand_voice",
+        });
+      },
+
+      skipLocationsStep(scope) {
+        return updateOnboarding(scope, {
+          locations_skipped_at: nowIfUnset,
+          locations_completed_at: null,
+          current_step: "brand_voice",
+        });
+      },
+
+      completeBrandVoiceStep(scope) {
+        return updateOnboarding(scope, {
+          brand_voice_completed_at: nowIfUnset,
+          current_step: "team",
+        });
+      },
+
+      completeTeamStep(scope) {
+        return updateOnboarding(scope, {
+          team_completed_at: nowIfUnset,
+          team_skipped_at: null,
+          current_step: "ready",
+        });
+      },
+
+      skipTeamStep(scope) {
+        return updateOnboarding(scope, {
+          team_skipped_at: nowIfUnset,
+          team_completed_at: null,
+          current_step: "ready",
+        });
+      },
+
+      async completeOnboarding(scope) {
+        const current = await this.get(scope);
+        if (!current) throw notFound("Setup progress");
+        // Already finished. Returned rather than rewritten so a resubmitted
+        // form does not restamp `completedAt` and make the trail claim setup
+        // finished later than it did.
+        if (current.status === "completed") return current;
+
+        const unfinished = firstIncompleteStep(current);
+        if (unfinished) {
+          throw conflict("Finish the earlier setup steps before completing setup.");
+        }
+
+        return updateOnboarding(scope, {
+          status: "completed",
+          completed_at: nowIfUnset,
+          current_step: "ready",
+        });
+      },
+
+      markReadyViewed(scope) {
+        return updateOnboarding(scope, { ready_viewed_at: nowIfUnset });
       },
     },
 

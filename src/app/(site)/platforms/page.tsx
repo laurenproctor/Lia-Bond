@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AccessSection } from "@/components/site/access-form";
+import { ClosingCta } from "@/components/site/closing-cta";
 import {
   Eyebrow,
   Lede,
@@ -143,7 +143,7 @@ export default function PlatformsPage() {
         </dl>
       </Section>
 
-      <AccessSection sourcePath="/platforms" />
+      <ClosingCta />
     </>
   );
 }

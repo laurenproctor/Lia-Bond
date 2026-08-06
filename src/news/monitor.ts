@@ -19,7 +19,7 @@ export interface NewsSearchQuery {
   sourceCountry: string | null;
   /** BCP-47 tag, or null for every language. */
   language: string | null;
-  /** The incremental cursor (D66). Null on a query's first ever poll. */
+  /** The incremental cursor (D84). Null on a query's first ever poll. */
   publishedAfter: string | null;
   /** Hard ceiling on articles requested. The free tier caps this at 10. */
   maxResults: number;
@@ -56,7 +56,7 @@ export interface ExternalArticle {
 
 export interface NewsSearchBatch {
   articles: ExternalArticle[];
-  /** Requests consumed. Charged against the global daily budget (D67). */
+  /** Requests consumed. Charged against the global daily budget (D85). */
   requestsSpent: number;
   /**
    * The provider capped the page and offers no paging on this tier.

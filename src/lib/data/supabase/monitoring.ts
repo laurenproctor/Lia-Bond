@@ -348,7 +348,7 @@ export function createMonitoringRepositories(client: SupabaseClient): {
       // Deliberately unscoped and run under the service-role client — see
       // the doc comment on `requestsSpentSince` in types.ts and on
       // `serviceClient` above. The provider request budget is Lia's own
-      // resource, shared across every tenant, not a per-tenant quota (D67).
+      // resource, shared across every tenant, not a per-tenant quota (D85).
       async requestsSpentSince(since) {
         const { data, error } = await serviceClient()
           .from("news_poll_runs")

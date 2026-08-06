@@ -37,11 +37,12 @@ recorded under "Decisions made integrating the branches".
 | `src/lib/site/` | The marketing route table, and the content each public page renders. One source for the nav, the footer, the sitemap, and `robots.txt`. |
 | `src/lib/support/` | Help requests: validation, message composition, and delivery mode. |
 | `src/lib/brand-voice/` | Brand voice save service, summary derivation, and autosave status. |
+| `src/lib/onboarding/` | First-run setup: route guards, step transitions and their audit trail, the deterministic brand-voice preview, quick-win resolution, import status, and the post-authentication destination. |
 | `src/components/` | Presentational components. **Never** query the database. |
 | `src/domain/` | Zod schemas, inferred types, and lifecycle enums. No I/O. |
 | `src/integrations/` | Platform connector boundary. All Google API behaviour lives behind it. |
 | `src/ai/` | Model boundary. All Anthropic API behaviour lives behind it. |
-| `src/news/` | News provider boundary (`NewsMonitor`). All GNews API behaviour lives behind it, plus the mock used in tests and demo mode. Deliberately not a `PlatformConnector` — see D60. |
+| `src/news/` | News provider boundary (`NewsMonitor`). All GNews API behaviour lives behind it, plus the mock used in tests and demo mode. Deliberately not a `PlatformConnector` — see D78. |
 | `src/lib/analysis/` | Analysis orchestration: prompt, schema, heuristic, run service. |
 | `src/lib/monitoring/` | News orchestration: the relevance gate, the poll service, budget enforcement, implicit connection creation, query CRUD. |
 | `src/lib/integrations/` | OAuth state, credential handling, discovery, mapping, health. |
@@ -65,7 +66,7 @@ nothing with it but the root layout's font.
 
 | Route | Purpose | Data source |
 | --- | --- | --- |
-| `/` | The marketing home page. **No longer redirects to `/overview`** — see D78. | `src/lib/site/content` |
+| `/` | The marketing home page. **No longer redirects to `/overview`** — see D91. | `src/lib/site/content` |
 | `/overview` | Reputation health and urgent work | repositories |
 | `/mentions` | Unified inbox across every source | repositories |
 | `/reviews` → `/reviews/google/[id]` | Google review workspace | repositories |
@@ -91,6 +92,12 @@ nothing with it but the root layout's font.
 | `/forgot-password` | Requests a reset link. Outside the app shell. | Supabase Auth |
 | `/reset-password` | Sets a new password using the recovery session. Outside the app shell. | Supabase Auth |
 | `/auth/callback` | Where an emailed auth link lands; establishes the session | Supabase Auth |
+| `/onboarding/organization` | Setup step 1 — enrich the organization created at signup. Outside the app shell. | repositories |
+| `/onboarding/connect-sources` | Setup step 2 — connect Google Business Profile, or skip | repositories |
+| `/onboarding/locations` | Setup step 3 — map Google listings, or add a location by hand | repositories + Google API |
+| `/onboarding/brand-voice` | Setup step 4 — the existing five-axis voice | repositories |
+| `/onboarding/team` | Setup step 5 — issue copyable invitation links | repositories |
+| `/onboarding/ready` | Workspace Ready. **Not step 6** — no progress strip. | repositories |
 | `/brand-voice` | Voice configuration | repositories |
 | `/settings` | Organization administration | repositories + typed fixture |
 | `/help` | In-app help requests | repositories + Resend |
@@ -157,7 +164,7 @@ holds no membership and cannot construct a scope any other way — there is no
 service-role only, both return identifiers rather than a full cross-tenant
 read (due query rows; organization ids), and neither is reachable from a
 request path. The per-row `OrganizationScope` the cron routes then build from
-each id is what carries tenancy from there — see D70 and Authentication.
+each id is what carries tenancy from there — see D88 and Authentication.
 
 The active organization is stored in the `lia_active_organization` cookie
 (`httpOnly`, `sameSite=lax`). The organization slug is deliberately **not** in the
@@ -223,8 +230,34 @@ signUpAction
   └─ supabase.auth.signUp()          ← creates auth.users
        └─ trigger on_auth_user_created
             └─ public.users          ← the row every RLS policy resolves through
-  └─ organizations.provision()       ← RPC: organization + owner membership, one transaction
+  └─ organizations.provision()       ← RPC: organization + owner membership
+                                       + organization_onboarding, one transaction
+  └─ redirect("/onboarding/organization")
 ```
+
+**Provisioning now creates three rows, not two.** `provision_organization` was
+extended in `20260808000100_organization_onboarding.sql` to insert the
+`organization_onboarding` row in the same function body, so an organization can
+never exist without somewhere to record its setup progress. A trigger was
+considered and rejected: it would also fire for the seed and for the backfill,
+both of which must land as `completed` rather than at step one.
+
+**A new owner lands on `/onboarding/organization`, not `/overview`.** At that
+moment the organization is a name and nothing else, and a dashboard of zeroes
+teaches somebody the product is empty rather than that it is unconfigured. Full
+detail in `docs/onboarding.md`.
+
+**Email confirmation carries the organization name in signup metadata.**
+`signUp` returns no session when confirmation is required, so there is no
+`auth.uid()` for provisioning to act as. `lia_pending_organization` holds the
+name until the link is clicked, and `provisionPendingOrganization()` reads it
+back from `/auth/callback` and from `signInAction`. The key is a hint, never an
+authorization: user metadata is writable by its own account, and provisioning
+runs only for an account that belongs to **no** organization at all — so the
+worst it can produce is the empty workspace the sign-up form already offers.
+
+That same membership check is what keeps an invitee from ever getting an
+organization of their own, whichever route they arrive through.
 
 **Provisioning is a `SECURITY DEFINER` function, not a loosened policy.**
 `public.organizations` has no INSERT policy and `memberships_insert_admins`
@@ -243,6 +276,39 @@ is not recoverable by anyone.
 `auth.users.id = public.users.id` was previously guaranteed only by
 `npm run auth:seed`; any account created another way authenticated perfectly and
 then saw nothing. It now holds by construction.
+
+### First-run setup
+
+Two guards, pointing in opposite directions, which is what keeps them from
+looping:
+
+```text
+/onboarding/*  ── requireOnboardingStep(step) ──▶ completed org?  → /overview
+                                                  step unreachable? → resume step
+
+(app)/layout   ── redirectIfOnboarding() ───────▶ incomplete org, owner/admin?
+                                                  → resume step, before the sidebar renders
+```
+
+A finished organization satisfies the first and is untouched by the second; an
+unfinished one is the reverse.
+
+Progress lives in `organization_onboarding`, one row per organization, primary
+keyed on `organization_id`. `current_step` is **advisory** — the guard
+recomputes the resume point from the per-outcome timestamps, so a stale or
+tampered value cannot unlock a step whose prerequisites were never met. A
+missing row is treated as *completed*, so a pre-existing organization is never
+trapped in a wizard for a workspace it has been using for months; the migration
+backfills every one that existed, and `supabase/seed.sql` carries rows for both
+seeded tenants because the backfill runs before the seed loads.
+
+`onboarding.manage` is owner-and-admin only — narrower than
+`can_write_in_organization`, because finishing setup decides what everybody in
+the organization sees on sign-in. The RLS policies on the table restate that
+rather than trusting the application.
+
+Full detail, including the quick-win hierarchy and what the flow deliberately
+does not claim, is in `docs/onboarding.md`.
 
 ### Invitations
 
@@ -356,7 +422,7 @@ reachable without a session, so provider errors are logged and swallowed too.
 - Relative times in demo mode are measured against a fixed reference instant
   (`REFERENCE_NOW`) so server and client renders agree and fixtures stay stable.
 - The relevance gate (`src/lib/monitoring/gate.ts`) never writes
-  `mentions.relevance_score` (D65). That column belongs to the analysis layer,
+  `mentions.relevance_score` (D83). That column belongs to the analysis layer,
   which supersedes any provisional value within minutes; the gate's own score
   is persisted only on rejections, where it is the thing being tuned.
 - No news provider message reaches a user, a log, or a stored row — the same
@@ -365,7 +431,7 @@ reachable without a session, so provider errors are logged and swallowed too.
   Lia-authored strings; the provider's own response body or a driver error is
   never interpolated into them.
 - Cron carries its own tenancy discipline; row-level security is not its
-  backstop there (D70). Both scheduled routes call `getServiceDataSource()` —
+  backstop there (D88). Both scheduled routes call `getServiceDataSource()` —
   a service-role client with no user session — and build an
   `OrganizationScope` from each row's own `organization_id`, never from
   anything ambient, since `getOrganizationContext()` has no request session to
@@ -492,33 +558,33 @@ reachable without a session, so provider errors are logged and swallowed too.
 
 | # | Decision | Reason |
 | --- | --- | --- |
-| D60 | A separate `NewsMonitor` boundary, not a widened `PlatformConnector` | Eight of `PlatformConnector`'s ten methods have no meaning for a search API, and implementing them as throwers is the `if (platform === "google")` that D9 exists to prevent, relocated inside the interface. D35 set the precedent: `AiProvider` has one method because there is one thing to ask. So does this. |
-| D61 | The provider key is Lia's, held in the environment, shared by every tenant | Lia buys the news plan and serves it; a restaurant group does not arrive with a GNews subscription. Nothing touches `platform_credentials`, `oauth_states`, or the AES vault. The consequence is that quota is a Lia-level resource, which is why D67 enforces it globally. |
-| D62 | A `news_media` connection row is created implicitly on first query save | `mentions.platform_connection_id` is `not null`, so news mentions need a connection whether or not one means anything here. Creating it implicitly reuses the existing status and health machinery without inventing a connect flow for a credential the tenant does not hold. |
-| D63 | `news_poll_runs` is a new table, not a reuse of `platform_sync_runs` | `platform_sync_runs.platform_profile_id` is `not null` and news has no profile. Making it nullable would weaken a guarantee every Google row currently relies on, to accommodate a source whose lock target (a monitoring query), counters, and failure modes are all different anyway. |
-| D64 | Rejected candidates are stored, with reason and score | D26 justified `platform_sync_runs` because "a sync that failed silently looks exactly like a location with no new reviews". The same argument is sharper here: an article Lia rejected looks exactly like an article nobody wrote. "Why did you miss this story" is the first question asked of any monitoring product, and without this table the gate is unfalsifiable and therefore untunable. |
-| D65 | The gate never writes `mentions.relevance_score` | D39 reserves that column for the analysis layer, which supersedes any provisional value within minutes anyway. The gate score is persisted only on rejections — where it is the thing being tuned — and as min/mean/max on the run. The invariant stays exactly as strict as it is today. |
-| D66 | Incremental fetch by `publishedAfter`, the opposite of D23 | D23 refetches Google's full history because Google reorders on *edit*, so a cursor silently loses the review somebody changed their mind about. Articles are not edited into a different position, and a metered plan makes a full refetch cost real money for no correctness gain. The reasoning differs; the conclusion inverts. |
-| D67 | The request budget is enforced globally, in the scheduler | D61 makes quota shared across tenants, which is new: Google's quota was per-connection, so a noisy customer could only hurt themselves. Here one organization with forty queries can exhaust the day for everyone. Enforced above the tenant loop, with headroom reserved for manual polls. |
-| D68 | Syndication dedupe lives in the gate, not the provider | GNews offers no clustering. One wire story republished across forty local papers is the single largest noise source in news monitoring, so the gate normalises headlines and rejects a repeat seen within 72 hours. Deliberately provider-agnostic: it survives the Event Registry upgrade rather than being thrown away. |
-| D69 | Two crons, not one chained call | A slow model batch must not be able to blow the poll window. Splitting them also finally gives `analyzeMentions()` the scheduler that workflow 04 built it to accept and never wired. |
-| D70 | The poll service constructs its own `OrganizationScope` from the query row | This is the first write path in the codebase with no verified human behind it. `getOrganizationContext()` is unavailable to cron, so RLS is not the backstop it is everywhere else, and the tenancy discipline has to be explicit rather than ambient. |
-| D71 | GNews free tier now, Event Registry later | The user's decision, taken with the trade-offs stated. Recorded because the free tier is licensed for development only and cannot be the state when Lia has a paying customer. See "The provider decision" in `docs/superpowers/specs/2026-08-04-news-monitoring-design.md`. |
-| D72 | No response composer on the media detail screen | `CLAUDE.md` forbids implying publishing where the source does not support it. There is no path by which Lia posts to a newspaper, and a composer on that screen would be exactly the implication the rule prohibits. |
+| D78 | A separate `NewsMonitor` boundary, not a widened `PlatformConnector` | Eight of `PlatformConnector`'s ten methods have no meaning for a search API, and implementing them as throwers is the `if (platform === "google")` that D9 exists to prevent, relocated inside the interface. D35 set the precedent: `AiProvider` has one method because there is one thing to ask. So does this. |
+| D79 | The provider key is Lia's, held in the environment, shared by every tenant | Lia buys the news plan and serves it; a restaurant group does not arrive with a GNews subscription. Nothing touches `platform_credentials`, `oauth_states`, or the AES vault. The consequence is that quota is a Lia-level resource, which is why D85 enforces it globally. |
+| D80 | A `news_media` connection row is created implicitly on first query save | `mentions.platform_connection_id` is `not null`, so news mentions need a connection whether or not one means anything here. Creating it implicitly reuses the existing status and health machinery without inventing a connect flow for a credential the tenant does not hold. |
+| D81 | `news_poll_runs` is a new table, not a reuse of `platform_sync_runs` | `platform_sync_runs.platform_profile_id` is `not null` and news has no profile. Making it nullable would weaken a guarantee every Google row currently relies on, to accommodate a source whose lock target (a monitoring query), counters, and failure modes are all different anyway. |
+| D82 | Rejected candidates are stored, with reason and score | D26 justified `platform_sync_runs` because "a sync that failed silently looks exactly like a location with no new reviews". The same argument is sharper here: an article Lia rejected looks exactly like an article nobody wrote. "Why did you miss this story" is the first question asked of any monitoring product, and without this table the gate is unfalsifiable and therefore untunable. |
+| D83 | The gate never writes `mentions.relevance_score` | D39 reserves that column for the analysis layer, which supersedes any provisional value within minutes anyway. The gate score is persisted only on rejections — where it is the thing being tuned — and as min/mean/max on the run. The invariant stays exactly as strict as it is today. |
+| D84 | Incremental fetch by `publishedAfter`, the opposite of D23 | D23 refetches Google's full history because Google reorders on *edit*, so a cursor silently loses the review somebody changed their mind about. Articles are not edited into a different position, and a metered plan makes a full refetch cost real money for no correctness gain. The reasoning differs; the conclusion inverts. |
+| D85 | The request budget is enforced globally, in the scheduler | D79 makes quota shared across tenants, which is new: Google's quota was per-connection, so a noisy customer could only hurt themselves. Here one organization with forty queries can exhaust the day for everyone. Enforced above the tenant loop, with headroom reserved for manual polls. |
+| D86 | Syndication dedupe lives in the gate, not the provider | GNews offers no clustering. One wire story republished across forty local papers is the single largest noise source in news monitoring, so the gate normalises headlines and rejects a repeat seen within 72 hours. Deliberately provider-agnostic: it survives the Event Registry upgrade rather than being thrown away. |
+| D87 | Two crons, not one chained call | A slow model batch must not be able to blow the poll window. Splitting them also finally gives `analyzeMentions()` the scheduler that workflow 04 built it to accept and never wired. |
+| D88 | The poll service constructs its own `OrganizationScope` from the query row | This is the first write path in the codebase with no verified human behind it. `getOrganizationContext()` is unavailable to cron, so RLS is not the backstop it is everywhere else, and the tenancy discipline has to be explicit rather than ambient. |
+| D89 | GNews free tier now, Event Registry later | The user's decision, taken with the trade-offs stated. Recorded because the free tier is licensed for development only and cannot be the state when Lia has a paying customer. See "The provider decision" in `docs/superpowers/specs/2026-08-04-news-monitoring-design.md`. |
+| D90 | No response composer on the media detail screen | `CLAUDE.md` forbids implying publishing where the source does not support it. There is no path by which Lia posts to a newspaper, and a composer on that screen would be exactly the implication the rule prohibits. |
 
 ## Decisions made integrating the branches
 
 Brand voice, news monitoring, and the marketing site were built in parallel
 from a common ancestor and merged afterwards. Three of the thirteen file
 conflicts were real disagreements rather than two features appending to the
-same list; those are D78–D80. The rest were resolved by taking both sides.
+same list; those are D91–D93. The rest were resolved by taking both sides.
 
 | # | Decision | Reason |
 | --- | --- | --- |
-| D78 | `/` is the marketing home; the product starts at `/overview` | The route it replaced was a redirect, so nothing that existed lost a home. `CLAUDE.md` fixes the product route list and `/` was never on it. |
-| D79 | The auth gate stays a product denylist, with `/api/cron` as an explicit carve-out | The marketing site requires the denylist: an allowlist bounces every unrecognised URL to `/sign-in`, so a mistyped marketing link or a dead search result met a login form instead of a 404. But `/api` is on the denylist, and news monitoring's cron routes live under it — merging the two as written would have redirected every scheduled invocation to `/sign-in` before its own `CRON_SECRET` check ran. The carve-out is matched by segment and checked first, so `/api/cronjobs` does not inherit the bypass. This is the failure mode the denylist's own comment predicted, and it is covered by tests in both directions because the symptom is silence: nothing errors, and the only sign is data that stops arriving. |
-| D80 | The audit vocabulary gets a merge migration rather than an edit to the branch that broke it | `audit_events_known_event_type` is a closed check constraint, and Postgres cannot extend one — so every workflow redefines the whole list. That is safe on one line of history and wrong on three: news monitoring redefined it from a copy predating membership and brand voice, and filename order puts that redefinition last, silently dropping eight event types the application still emits. A new migration keeps each branch's own migration honest about what it knew, and puts the union somewhere a reader can see it was a merge artefact rather than a mistake anyone made alone. |
-| D81 | `SEED_TABLE_COLUMNS` wins over the inline column lists | News monitoring pulled the seed generator's hand-written column lists into one module and added a test comparing them against the migrations in both directions — a response to hitting the same silent bug three times, where a column exists everywhere except the generator's list and simply never reaches `seed.sql`. Brand voice added a table to the old inline form. Folding it into the refactor puts the newest table under that test rather than outside it, which is the only version of this resolution that gets the benefit. |
+| D91 | `/` is the marketing home; the product starts at `/overview` | The route it replaced was a redirect, so nothing that existed lost a home. `CLAUDE.md` fixes the product route list and `/` was never on it. |
+| D92 | The auth gate stays a product denylist, with `/api/cron` as an explicit carve-out | The marketing site requires the denylist: an allowlist bounces every unrecognised URL to `/sign-in`, so a mistyped marketing link or a dead search result met a login form instead of a 404. But `/api` is on the denylist, and news monitoring's cron routes live under it — merging the two as written would have redirected every scheduled invocation to `/sign-in` before its own `CRON_SECRET` check ran. The carve-out is matched by segment and checked first, so `/api/cronjobs` does not inherit the bypass. This is the failure mode the denylist's own comment predicted, and it is covered by tests in both directions because the symptom is silence: nothing errors, and the only sign is data that stops arriving. |
+| D93 | The audit vocabulary gets a merge migration rather than an edit to the branch that broke it | `audit_events_known_event_type` is a closed check constraint, and Postgres cannot extend one — so every workflow redefines the whole list. That is safe on one line of history and wrong on three: news monitoring redefined it from a copy predating membership and brand voice, and filename order puts that redefinition last, silently dropping eight event types the application still emits. A new migration keeps each branch's own migration honest about what it knew, and puts the union somewhere a reader can see it was a merge artefact rather than a mistake anyone made alone. |
+| D94 | `SEED_TABLE_COLUMNS` wins over the inline column lists | News monitoring pulled the seed generator's hand-written column lists into one module and added a test comparing them against the migrations in both directions — a response to hitting the same silent bug three times, where a column exists everywhere except the generator's list and simply never reaches `seed.sql`. Brand voice added a table to the old inline form. Folding it into the refactor puts the newest table under that test rather than outside it, which is the only version of this resolution that gets the benefit. |
 
 ## Known gaps after workflow 04
 
@@ -598,11 +664,11 @@ New in workflow 04:
   `trigger: "scheduled"`, and `/api/cron/analyze-mentions` now calls it on a
   timer: `vercel.ts` schedules it hourly at :30, half an hour after the news
   poll sweep at :00 so it picks up what that sweep just ingested rather than
-  racing it (D69). Google review sync still has no scheduler — see workflow
+  racing it (D87). Google review sync still has no scheduler — see workflow
   03's gap of the same name — so only news polling and analysis are wired to
   cron so far.
 - Cost is bounded per run, not per day. Adequate while the trigger is manual
-  for Google reviews; news polling is now bounded per day instead (D67).
+  for Google reviews; news polling is now bounded per day instead (D85).
 - Auto-escalation is a machine decision: a false critical creates an escalation
   somebody must dismiss.
 - Analysis is per organization, not per location — there is no way to analyse
@@ -697,7 +763,7 @@ outside the source:
   Zuma, Semma, Estela, Carbone — so any of those needs a second keyword or an
   `allowedDomains` entry to be admitted on the strength of its own name alone.
   Acceptable as a v1 position only because every such rejection is logged with
-  its reason (D64) and is therefore discoverable and tunable.
+  its reason (D82) and is therefore discoverable and tunable.
 - **A description-only match never clears the default relevance threshold on
   its own.** A description match alone scores 0.2 against a default threshold
   of 0.35, so a piece that names the restaurant only in its summary — headlined
@@ -758,7 +824,7 @@ The rest are gaps, largely as the design spec predicted:
   source it was constructed from**, so a user-facing page render
   (`news-media/page.tsx`) performs an unscoped cross-tenant read and depends
   on `SUPABASE_SERVICE_ROLE_KEY` being set. The payload is a coarse global
-  integer that D67 arguably intends, but the mechanism is an ambient
+  integer that D85 arguably intends, but the mechanism is an ambient
   privilege escalation inside a repository method, and the same escape hatch
   makes `listDue` callable from any request path. Fixing it properly means
   deciding how the repository layer expresses privilege — a design decision,
@@ -774,7 +840,7 @@ deliberate choice someone could otherwise "fix" by mistake:
 - `resolveNewsMode()` requires **both** `LIA_NEWS_MODE=live` and
   `GNEWS_API_KEY`, where the Google and Anthropic equivalents infer live mode
   from credential presence alone. Deliberate, not an inconsistency: for a
-  metered provider on a shared daily budget (D67), a key appearing in the
+  metered provider on a shared daily budget (D85), a key appearing in the
   environment should not by itself start a cron spending quota.
 
 **Correction:** an earlier version of this section recorded the
@@ -809,14 +875,14 @@ one actually proved:
 
 | Was | Now |
 | --- | --- |
-| Only 8 of 23 migrations applied | All 23 applied. The collided-and-renumbered versions (D80) went on cleanly, confirming none had ever been pushed under their old numbers. |
+| Only 8 of 23 migrations applied | All 23 applied. The collided-and-renumbered versions (D93) went on cleanly, confirming none had ever been pushed under their old numbers. |
 | **The Anthropic API had never been called from this repository** | Called. A scheduled sweep classified 12 mentions across both organizations with zero failures, writing real provenance — `claude-opus-5`, prompt version `analysis@2026-08-04`, per-row token counts. |
 | Analysis had no scheduler | `/api/cron/analyze-mentions` ran end to end under `CRON_SECRET`, through `getServiceDataSource()`, and recorded two `completed` rows in `analysis_runs`. |
-| D70's system-actor rule was a reading of the code | Verified in Postgres: both scheduled runs stored `actor_user_id = null`. `SYSTEM_ACTOR_ID` satisfies the `OrganizationScope` type and reaches no foreign key. |
+| D88's system-actor rule was a reading of the code | Verified in Postgres: both scheduled runs stored `actor_user_id = null`. `SYSTEM_ACTOR_ID` satisfies the `OrganizationScope` type and reaches no foreign key. |
 | RLS policies had never been enforced by a live database | Enforced. Signed in as a seeded admin, all eight organization-owned tables returned own-tenant rows only; a cross-tenant insert was rejected `42501` with a same-tenant control proving the table was writable; a cross-tenant update touched 0 rows; the service-role scan RPC was rejected `42501`; anonymous read returned nothing. |
 | Brand voice and monitoring-query writes were demo-adapter only | Both exercised against live Postgres under RLS — brand voice update plus its audit event, and monitoring-query insert, update, and delete. |
 | News ingest was demo-adapter only | The whole pipeline ran against live Postgres with the mock provider: 3 queries polled, 5 articles ingested, 13 rejected `below_threshold`, gate scores and `requests_spent` recorded. The mock-derived rows were then removed, so the database is reproducible from the seed again. |
-| The audit-vocabulary defect (D80) was a test failure | Confirmed against live Postgres: all eight restored event types insert, and an unknown type is still rejected `23514`. Without `20260807000700` the first membership change or brand voice edit would have failed in production. |
+| The audit-vocabulary defect (D93) was a test failure | Confirmed against live Postgres: all eight restored event types insert, and an unknown type is still rejected `23514`. Without `20260807000700` the first membership change or brand voice edit would have failed in production. |
 | **GNews had never been called** | Called. A live sweep fetched real articles, and a temporary probe query for a real brand ingested two of them as mentions — title, content, publisher name and domain, source URL, external id, and published-at all normalised correctly, with `raw_payload` left `{}` as D28 requires. The probe and everything it produced were removed afterwards; the database is reproducible from the seed again. |
 
 ### What the first live news poll showed about the gate
@@ -845,7 +911,7 @@ happened to carry the full two-word company name was admitted.
 
 This matters more than a mislabelled row. `AMBIGUOUS_TERM_MAX_LENGTH`'s own
 comment accepts the short-brand-name trade-off *on the grounds* that "the
-rejection is logged with its reason (D64) and is therefore discoverable and
+rejection is logged with its reason (D82) and is therefore discoverable and
 tunable". It is not discoverable: an operator reading this table sees
 `below_threshold` at 0.7 and concludes the threshold logic is broken, and
 lowering the threshold — the obvious response — changes nothing, because the
@@ -890,7 +956,7 @@ Two useful things fell out of doing it:
   after sign-in. A 302 there is not evidence of anything.
 - **The `NEWSAPI_AI_API_KEY` in `.env` is dead configuration.** It is an Event
   Registry key, read by no code here, and it will not authenticate against the
-  GNews client. D71's upgrade is still an upgrade, not the current state.
+  GNews client. D89's upgrade is still an upgrade, not the current state.
 - **`supabase/tests/rls-verification.sql` has still never been executed.** The
   live checks above were run through PostgREST as an authenticated user, which
   covers the tenancy property that harness protects but not the harness

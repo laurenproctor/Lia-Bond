@@ -21,6 +21,7 @@ export const PERMISSIONS = [
   "brand_voice.update",
   "location.update_manager",
   "organization.manage_members",
+  "onboarding.manage",
   "integration.connect",
   "integration.reauthorize",
   "integration.manage_profiles",
@@ -83,6 +84,18 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   "brand_voice.update": ["owner", "admin", "communications_lead"],
   "location.update_manager": ["owner", "admin"],
   "organization.manage_members": ["owner", "admin"],
+  // First-run setup. Narrower than the write gate the rest of the product
+  // uses, because finishing onboarding decides what *everybody* in the
+  // organization sees on sign-in — and because its five steps are each already
+  // an owner-or-admin decision on their own (renaming the organization,
+  // granting Google standing access, deciding which listing is which
+  // restaurant, setting the voice every response will carry, issuing
+  // invitations). A communications lead who could mark setup complete would be
+  // pushing the whole organization past steps they had no authority to perform.
+  //
+  // Restated in `organization_onboarding`'s RLS policies, not merely trusted
+  // here: a check in application code protects the one path that runs it.
+  "onboarding.manage": ["owner", "admin"],
 
   // Integrations.
   //

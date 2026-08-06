@@ -31,7 +31,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
  * truncated `content` field rather than store a partial article as if it were
  * complete. Every affordance here follows from that — a prominent link out to
  * the real source, and no response composer, since there is no path by which
- * Lia posts to a publication (D72).
+ * Lia posts to a publication (D90).
  */
 export default async function MediaWorkspacePage({ params }: PageProps) {
   const { id } = await params;

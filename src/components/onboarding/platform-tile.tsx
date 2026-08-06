@@ -1,0 +1,78 @@
+/**
+ * The Google mark, and the tiles for platforms that are not available yet.
+ *
+ * Kept apart from `components/ui/source-badge.tsx` because that component is
+ * the product's dense inline glyph, sized for table rows. This is the large
+ * marketing-brand treatment onboarding uses.
+ */
+
+/** Google's four-colour G, drawn rather than fetched — no external requests. */
+export function GoogleGlyph() {
+  return (
+    <span
+      className="flex size-12 shrink-0 items-center justify-center rounded-full bg-white ring-1 ring-site-border"
+      aria-hidden
+    >
+      <svg viewBox="0 0 48 48" className="size-7">
+        <path
+          fill="#4285F4"
+          d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84a10.1 10.1 0 0 1-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"
+        />
+        <path
+          fill="#34A853"
+          d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7A21.99 21.99 0 0 0 24 46z"
+        />
+        <path
+          fill="#FBBC05"
+          d="M11.69 28.18A13.2 13.2 0 0 1 11 24c0-1.45.25-2.86.69-4.18v-5.7H4.34A21.99 21.99 0 0 0 2 24c0 3.55.85 6.91 2.34 9.88l7.35-5.7z"
+        />
+        <path
+          fill="#EA4335"
+          d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"
+        />
+      </svg>
+    </span>
+  );
+}
+
+/**
+ * A platform Lia does not connect to yet.
+ *
+ * An `<li>` with no interactive element in it. Deliberately **not** a disabled
+ * button: a disabled control implies the capability exists and is temporarily
+ * unavailable, and there is no Yelp connector behind this at all. The status
+ * word is text a screen reader reads in order, not an `aria-disabled` attribute
+ * on something that was never operable.
+ */
+export function PlatformTile({
+  name,
+  description,
+  tint,
+  initial,
+}: {
+  name: string;
+  description: string;
+  /** Tailwind classes for the mark's background and letter colour. */
+  tint: string;
+  initial: string;
+}) {
+  return (
+    <li className="flex flex-col gap-3 rounded-2xl border border-site-border bg-site-tint/60 p-4">
+      <div className="flex items-center gap-3">
+        <span
+          className={`flex size-9 shrink-0 items-center justify-center rounded-full text-[15px] font-bold ${tint}`}
+          aria-hidden
+        >
+          {initial}
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-[14px] font-bold text-site-ink">{name}</p>
+          <p className="text-[11.5px] font-semibold text-site-muted">
+            Available after setup
+          </p>
+        </div>
+      </div>
+      <p className="text-[12.5px] leading-relaxed text-site-body">{description}</p>
+    </li>
+  );
+}

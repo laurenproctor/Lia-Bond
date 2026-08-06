@@ -200,9 +200,41 @@ people sharing one published password.
 returns a seeded user and sign-in is not required, so the app still runs with no
 database at all.
 
+## First-run setup
+
+A self-serve signup lands on `/onboarding/organization`, not `/overview`. At
+that moment the organization is a name and nothing else — no industry, no
+source, no locations, no voice, no teammates — and a dashboard of zeroes teaches
+somebody the product is empty rather than that it is unconfigured.
+
+Five steps, then a separate Workspace Ready screen:
+
+```text
+Create account → Organization → Connect sources → Choose locations
+              → Brand voice → Invite team → Workspace Ready → first useful action
+```
+
+Progress lives in `organization_onboarding`, one row per organization created in
+the same transaction as the organization itself, so it survives a refresh, a
+sign-out, and a change of device. Typing the URL of a later step redirects back
+to the first unsettled one; revisiting a completed step works.
+
+**Existing organizations are not affected.** The migration backfills every one
+of them as completed, and a missing row is treated as completed too — so nobody
+who has been using the product is dropped into a setup wizard.
+
+The seeded tenants are complete, so signing in as any seeded user goes straight
+to `/overview`. To see the wizard you need a genuinely new self-serve signup
+against a Supabase project.
+
+Route map, skip semantics, the quick-win hierarchy, and what the flow
+deliberately does not claim: [`docs/onboarding.md`](docs/onboarding.md).
+
 ## Local database setup
 
-Requires Docker (for `supabase start`) and the Supabase CLI.
+Requires Docker (for `supabase start`) and the Supabase CLI. `supabase/config.toml`
+is checked in, so `supabase start` followed by `supabase db reset` applies every
+migration in order and then loads `supabase/seed.sql`.
 
 ```bash
 supabase start                 # local Postgres, API, and Studio
@@ -270,6 +302,13 @@ and a demo session otherwise (selectable through the `lia_demo_user` cookie so
 each role can be exercised locally). Membership verification, permission checks,
 and audit writes are identical in both, so introducing a real provider is a
 change to one file rather than to every call site.
+
+Where somebody lands after authenticating is decided by
+`postAuthDestination()`, shared by the sign-in action and the emailed-link
+callback because both run before any layout — and therefore before either
+onboarding guard. An organization still being set up sends its owner or admin to
+the step they left off on; a completed one honours the requested destination, or
+`/overview`. See [`docs/onboarding.md`](docs/onboarding.md).
 
 ## How audit events are generated
 
@@ -364,6 +403,7 @@ platform it received.
 ## Documentation
 
 - `docs/architecture/current-state.md` — stack, data flow, decisions, known gaps
+- `docs/onboarding.md` — first-run setup: routes, progress model, guards, RLS, quick-win hierarchy
 - `docs/integrations/google-business-profile.md` — OAuth, scopes, encryption, mapping, disconnect
 - `docs/product-spec.md` — positioning, capability model, automation philosophy
 - `docs/data-model.md` — entity reference

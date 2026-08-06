@@ -54,6 +54,21 @@ Build Lia as a polished, production-oriented SaaS application for restaurant gro
 - `/brand-voice`
 - `/settings`
 
+### First-run setup
+
+Outside the app shell, on the public-site brand rather than the product's
+purple. Five steps plus a separate result screen — the result screen is **not**
+step 6 and shows no progress strip.
+
+- `/onboarding/organization`
+- `/onboarding/connect-sources`
+- `/onboarding/locations`
+- `/onboarding/brand-voice`
+- `/onboarding/team`
+- `/onboarding/ready`
+
+Detail: `docs/onboarding.md`.
+
 ## Required shared components
 
 - App shell and sidebar

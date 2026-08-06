@@ -44,7 +44,7 @@ export interface MentionView {
   publisherName: string | null;
   /** The outlet's domain, as the source reported it. Null off a news article. */
   publisherDomain: string | null;
-  /** Set by the relevance gate (D68), never by a provider. Always false today. */
+  /** Set by the relevance gate (D86), never by a provider. Always false today. */
   isSyndicated: boolean;
 }
 
