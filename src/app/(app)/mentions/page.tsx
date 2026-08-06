@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { CalendarRange, Download, Star } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
 import { AnalysisPanel } from "@/components/mentions/analysis-panel";
+import { MentionDetailPane } from "@/components/mentions/mention-detail-pane";
 import { MentionListItem } from "@/components/mentions/mention-list-item";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -9,13 +10,13 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
-import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import { SelectFilter } from "@/components/ui/select-filter";
 import { isAiAvailable } from "@/ai/registry";
 import { getAnalysisStatus } from "@/lib/analysis/analyze";
 import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
+import { resolveSelection } from "@/lib/selection";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
 import { toMentionViews } from "@/lib/view-models/mention";
 import type { MentionSourceType } from "@/domain";
@@ -30,7 +31,12 @@ const REVIEW_TYPES: MentionSourceType[] = [
 ];
 const REDDIT_TYPES: MentionSourceType[] = ["reddit_post", "reddit_comment"];
 
-export default async function MentionsPage() {
+interface MentionsPageProps {
+  searchParams: Promise<{ mention?: string }>;
+}
+
+export default async function MentionsPage({ searchParams }: MentionsPageProps) {
+  const { mention: mentionParam } = await searchParams;
   const context = await getOrganizationContext();
   const { scope, role } = context;
   const dataSource = await getDataSource();
@@ -50,6 +56,11 @@ export default async function MentionsPage() {
     analyses: analyses.filter((analysis) => analysis !== null),
     locations,
   });
+
+  const selected = resolveSelection(views, mentionParam, (view) => view.id);
+  const selectedDrafts = selected
+    ? await dataSource.responseDrafts.list(scope, { mentionId: selected.id })
+    : [];
 
   const countOf = (types: MentionSourceType[]) =>
     mentions.filter((mention) => types.includes(mention.sourceType)).length;
@@ -167,18 +178,33 @@ export default async function MentionsPage() {
           ) : (
             <ul className="lia-scroll max-h-[calc(100dvh-22rem)] divide-y divide-gray-200 overflow-y-auto border-t border-gray-200">
               {views.map((mention) => (
-                <MentionListItem key={mention.id} mention={mention} />
+                <MentionListItem
+                  key={mention.id}
+                  mention={mention}
+                  href={`/mentions?mention=${mention.id}`}
+                  selected={mention.id === selected?.id}
+                  scroll={false}
+                />
               ))}
             </ul>
           )}
         </Card>
 
-        <SectionPlaceholder
-          className="xl:col-span-7"
-          title="Selected mention"
-          description="AI summary, topic and risk analysis, recommended action, draft response, assignment and SLA, and response history."
-          shape="lines"
-        />
+        {selected ? (
+          <MentionDetailPane
+            className="xl:col-span-7 xl:max-h-[calc(100dvh-16rem)]"
+            mention={selected}
+            drafts={selectedDrafts}
+          />
+        ) : (
+          <Card className="xl:col-span-7">
+            <EmptyState
+              title="Nothing selected"
+              description="Once a source is connected and synced, select a mention to see its details."
+              size="sm"
+            />
+          </Card>
+        )}
       </div>
     </PageBody>
   );

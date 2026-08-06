@@ -17,6 +17,8 @@ export interface MentionListItemProps {
   mention: MentionView;
   href?: string;
   selected?: boolean;
+  /** Forwarded to the link. Selection links pass false to stop the scroll-to-top jump. */
+  scroll?: boolean;
   /** Trims the row to title, source, and time for dense sidebars. */
   density?: "comfortable" | "compact";
 }
@@ -34,12 +36,14 @@ export function MentionListItem({
   mention,
   href,
   selected = false,
+  scroll,
   density = "comfortable",
 }: MentionListItemProps) {
   return (
     <li>
       <Link
         href={href ?? mention.workspacePath}
+        scroll={scroll}
         aria-current={selected ? "true" : undefined}
         className={cn(
           "relative block border-l-2 px-4 transition-colors",
