@@ -754,11 +754,16 @@ create table public.brand_voice_profiles (
   -- Named columns rather than jsonb: the axes are a fixed taxonomy, not user
   -- data, so the range is enforceable here. Adding a sixth axis is a migration,
   -- which is correct — it also changes the summary and any future prompt.
-  axis_warmth smallint not null default 45 check (axis_warmth between 0 and 100),
-  axis_detail smallint not null default 40 check (axis_detail between 0 and 100),
-  axis_formality smallint not null default 55 check (axis_formality between 0 and 100),
-  axis_confidence smallint not null default 44 check (axis_confidence between 0 and 100),
-  axis_hospitality smallint not null default 35 check (axis_hospitality between 0 and 100),
+  --
+  -- No defaults, deliberately. Both adapters always write all five, so a
+  -- default would never be exercised — it would only be a second declaration
+  -- of the starting values, free to drift from DEFAULT_BRAND_VOICE in
+  -- src/domain/entities/brand-voice.ts, which is the one that decides them.
+  axis_warmth smallint not null check (axis_warmth between 0 and 100),
+  axis_detail smallint not null check (axis_detail between 0 and 100),
+  axis_formality smallint not null check (axis_formality between 0 and 100),
+  axis_confidence smallint not null check (axis_confidence between 0 and 100),
+  axis_hospitality smallint not null check (axis_hospitality between 0 and 100),
 
   approved_phrases text[] not null default '{}'
     check (public.brand_voice_phrases_valid(approved_phrases)),

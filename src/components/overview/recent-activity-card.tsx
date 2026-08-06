@@ -5,6 +5,7 @@ import {
   Plug,
   Send,
   ShieldAlert,
+  Sparkles,
   UserRound,
   Workflow,
 } from "lucide-react";
@@ -28,6 +29,7 @@ const ENTITY_ICONS: Record<AuditEntityType, LucideIcon> = {
   approval: PencilLine,
   escalation: ShieldAlert,
   automation_rule: Workflow,
+  brand_voice: Sparkles,
 };
 
 const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
@@ -42,6 +44,7 @@ const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
   approval: "purple",
   escalation: "red",
   automation_rule: "amber",
+  brand_voice: "purple",
 };
 
 export interface RecentActivityCardProps {

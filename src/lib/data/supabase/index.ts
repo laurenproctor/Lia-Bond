@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  BRAND_VOICE_AXIS_KEYS,
   canDecideOnDraft,
   createEscalationInputSchema,
   createLocationInputSchema,
@@ -20,10 +21,12 @@ import {
   sourceFieldsChanged,
   startAnalysisRunInputSchema,
   startSyncRunInputSchema,
+  updateBrandVoiceInputSchema,
   upsertPlatformConnectionInputSchema,
   upsertPlatformProfileInputSchema,
   type AnalysisRun,
   type Approval,
+  type BrandVoiceProfile,
   type Invitation,
   type InvitationPreview,
   type Mention,
@@ -31,6 +34,7 @@ import {
   type PlatformSyncRun,
   type ResponseDraft,
   type SyncResource,
+  type UpdateBrandVoiceInput,
 } from "@/domain";
 import { conflict, DataError, invalidInput, notFound } from "@/lib/data/errors";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -53,6 +57,7 @@ import {
   toApproval,
   toAuditEvent,
   toAutomationRule,
+  toBrandVoiceProfile,
   toEscalation,
   toInvitation,
   toLocation,
@@ -127,6 +132,31 @@ function fail(error: { message: string; code?: string }, action: string): never 
     throw new DataError("forbidden", "You don't have permission to do that.");
   }
   throw new DataError("unavailable", `Could not ${action}. Please try again.`);
+}
+
+/**
+ * Whether a save would change anything.
+ *
+ * Order counts as a change for phrase lists: the order is what somebody sees
+ * when they read the list back. Duplicated deliberately rather than shared
+ * with the demo adapter's `matchesStored` — see the note on `uniqueSlug` above.
+ */
+function matchesStoredProfile(
+  stored: BrandVoiceProfile,
+  input: UpdateBrandVoiceInput,
+): boolean {
+  const sameAxes = BRAND_VOICE_AXIS_KEYS.every(
+    (key) => stored.axes[key] === input.axes[key],
+  );
+  const samePhrases = (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && a.every((value, index) => value === b[index]);
+
+  return (
+    sameAxes &&
+    stored.name === input.name &&
+    samePhrases(stored.approvedPhrases, input.approvedPhrases) &&
+    samePhrases(stored.prohibitedPhrases, input.prohibitedPhrases)
+  );
 }
 
 export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource {
@@ -2030,6 +2060,65 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (error) fail(error, "update the rule");
         if (!data) throw notFound("Automation rule");
         return toAutomationRule(data as Row);
+      },
+    },
+
+    brandVoice: {
+      async get(scope) {
+        const { data, error } = await from("brand_voice_profiles", scope).maybeSingle();
+        if (error) fail(error, "load the brand voice");
+        return data ? toBrandVoiceProfile(data as Row) : null;
+      },
+
+      async save(scope, input) {
+        // Re-parse rather than trust the caller's shape: this is what actually
+        // enforces phrase deduplication, trim-and-drop-blanks, the length caps,
+        // and the approved/prohibited collision rule. A caller reaching the
+        // repository directly bypasses none of that.
+        const value = updateBrandVoiceInputSchema.parse(input);
+
+        const current = await this.get(scope);
+
+        const columns = {
+          name: value.name,
+          axis_warmth: value.axes.warmth,
+          axis_detail: value.axes.detail,
+          axis_formality: value.axes.formality,
+          axis_confidence: value.axes.confidence,
+          axis_hospitality: value.axes.hospitality,
+          approved_phrases: value.approvedPhrases,
+          prohibited_phrases: value.prohibitedPhrases,
+          updated_by_user_id: scope.userId,
+        };
+
+        if (!current) {
+          const { data, error } = await client
+            .from("brand_voice_profiles")
+            .insert({ ...columns, organization_id: scope.organizationId, version: 1 })
+            .select("*")
+            .single();
+          if (error) fail(error, "save the brand voice");
+          return toBrandVoiceProfile(data as Row);
+        }
+
+        // Unchanged input returns the stored row untouched, so the version --
+        // and therefore the provenance of every draft that cites it -- is not
+        // disturbed by pressing Save twice.
+        if (matchesStoredProfile(current, value)) return current;
+
+        // Read-then-write, with no transaction available (D17): two concurrent
+        // saves can both read version n and both write n+1, so one edit is lost
+        // and the version undercounts by one. The unique constraint still
+        // guarantees a single row; a serialising fix needs a stored procedure
+        // and is out of scope here.
+        const { data, error } = await client
+          .from("brand_voice_profiles")
+          .update({ ...columns, version: current.version + 1 })
+          .eq("organization_id", scope.organizationId)
+          .select("*")
+          .single();
+        if (error) fail(error, "save the brand voice");
+        return toBrandVoiceProfile(data as Row);
       },
     },
 

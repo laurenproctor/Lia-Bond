@@ -1,6 +1,7 @@
 import {
   applySourceFields,
   auditEventSchema,
+  BRAND_VOICE_AXIS_KEYS,
   createEscalationInputSchema,
   createLocationInputSchema,
   createMentionAnalysisInputSchema,
@@ -25,12 +26,14 @@ import {
   sourceFieldsChanged,
   startAnalysisRunInputSchema,
   startSyncRunInputSchema,
+  updateBrandVoiceInputSchema,
   upsertPlatformConnectionInputSchema,
   upsertPlatformProfileInputSchema,
   type AnalysisRun,
   type Approval,
   type AuditEvent,
   type AutomationRule,
+  type BrandVoiceProfile,
   type Escalation,
   type Invitation,
   type Location,
@@ -42,6 +45,7 @@ import {
   type PlatformProfile,
   type PlatformSyncRun,
   type ResponseDraft,
+  type UpdateBrandVoiceInput,
   type User,
 } from "@/domain";
 import { canDecideOnDraft } from "@/domain";
@@ -97,6 +101,28 @@ function realNowIso(): string {
 
 function textIncludes(haystack: string | null, needle: string): boolean {
   return (haystack ?? "").toLowerCase().includes(needle);
+}
+
+/**
+ * Whether a save would change anything.
+ *
+ * Order counts as a change for phrase lists: the order is what somebody sees
+ * when they read the list back, so silently keeping the old one would make the
+ * screen disagree with the database.
+ */
+function matchesStored(stored: BrandVoiceProfile, input: UpdateBrandVoiceInput): boolean {
+  const sameAxes = BRAND_VOICE_AXIS_KEYS.every(
+    (key) => stored.axes[key] === input.axes[key],
+  );
+  const samePhrases = (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && a.every((value, index) => value === b[index]);
+
+  return (
+    sameAxes &&
+    stored.name === input.name &&
+    samePhrases(stored.approvedPhrases, input.approvedPhrases) &&
+    samePhrases(stored.prohibitedPhrases, input.prohibitedPhrases)
+  );
 }
 
 /**
@@ -1741,6 +1767,65 @@ export function createDemoDataSource(): LiaDataSource {
           updatedAt: nowIso(),
         };
         return replaceRow(store().automationRules, updated);
+      },
+    },
+
+    brandVoice: {
+      async get(scope) {
+        return (
+          store().brandVoiceProfiles.find(
+            (row) => row.organizationId === scope.organizationId,
+          ) ?? null
+        );
+      },
+
+      async save(scope, input) {
+        // Re-parse rather than trust the caller's shape: this is what actually
+        // enforces phrase deduplication, trim-and-drop-blanks, the length caps,
+        // and the approved/prohibited collision rule. A caller reaching the
+        // repository directly bypasses none of that.
+        const value = updateBrandVoiceInputSchema.parse(input);
+
+        const existing = store().brandVoiceProfiles.find(
+          (row) => row.organizationId === scope.organizationId,
+        );
+
+        if (!existing) {
+          const created: BrandVoiceProfile = {
+            id: seedId(`brand_voice:${scope.organizationId}`),
+            organizationId: scope.organizationId,
+            name: value.name,
+            axes: { ...value.axes },
+            approvedPhrases: [...value.approvedPhrases],
+            prohibitedPhrases: [...value.prohibitedPhrases],
+            version: 1,
+            updatedByUserId: scope.userId,
+            createdAt: nowIso(),
+            updatedAt: nowIso(),
+          };
+
+          store().brandVoiceProfiles.push(created);
+          return created;
+        }
+
+        // A save that changes nothing returns the stored row untouched.
+        // `response_drafts.brand_voice_version` records which voice produced a
+        // draft, so bumping on a no-op would invalidate the provenance of every
+        // existing draft because somebody pressed Save twice.
+        if (matchesStored(existing, value)) return existing;
+
+        const updated: BrandVoiceProfile = {
+          ...existing,
+          name: value.name,
+          axes: { ...value.axes },
+          approvedPhrases: [...value.approvedPhrases],
+          prohibitedPhrases: [...value.prohibitedPhrases],
+          version: existing.version + 1,
+          updatedByUserId: scope.userId,
+          updatedAt: nowIso(),
+        };
+
+        return replaceRow(store().brandVoiceProfiles, updated);
       },
     },
 

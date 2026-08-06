@@ -18,6 +18,7 @@ export const PERMISSIONS = [
   "escalation.assign",
   "escalation.update_status",
   "automation_rule.toggle",
+  "brand_voice.update",
   "location.update_manager",
   "organization.manage_members",
   "integration.connect",
@@ -68,6 +69,16 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // Automation changes what the product does without a human, so it stays with
   // owners, admins, and the communications lead who owns response policy.
   "automation_rule.toggle": ["owner", "admin", "communications_lead"],
+  // Brand voice sets how every generated response sounds, so it belongs with
+  // automation rather than with administration: both change what the product
+  // says without a person in the loop. The communications lead is the role
+  // accountable for response policy — locking them out would mean filing a
+  // ticket to change the tone of their own team's writing.
+  //
+  // Approvers are absent deliberately. Deciding one response and setting the
+  // policy for all of them are different jobs, and conflating them was the
+  // reason this permission is new rather than a reuse of `response.decide`.
+  "brand_voice.update": ["owner", "admin", "communications_lead"],
   "location.update_manager": ["owner", "admin"],
   "organization.manage_members": ["owner", "admin"],
 

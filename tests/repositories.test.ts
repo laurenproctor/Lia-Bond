@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { freshDataSource, ushg } from "./helpers/scope";
+import { freshDataSource, harbor, ushg } from "./helpers/scope";
 import type { LiaDataSource } from "@/lib/data/types";
-import { CONN_GOOGLE, LOC_SOHO, USER_MARCUS, USER_SOFIA } from "@/lib/seed/dataset";
+import {
+  BRAND_VOICE_USHG,
+  CONN_GOOGLE,
+  LOC_SOHO,
+  ORG_HARBOR,
+  USER_MARCUS,
+  USER_SOFIA,
+} from "@/lib/seed/dataset";
 
 /**
  * Repository behaviour: filtering, ordering, transitions, and ingest.
@@ -371,5 +378,100 @@ describe("metrics", () => {
   it("returns a full trend window", async () => {
     const metrics = await data.mentions.metrics(ushg.admin());
     expect(metrics.sentimentTrend).toHaveLength(30);
+  });
+});
+
+describe("brand voice", () => {
+  const input = {
+    name: "Maison Laurent voice",
+    axes: { warmth: 60, detail: 40, formality: 55, confidence: 44, hospitality: 35 },
+    approvedPhrases: ["thank you for sharing"],
+    prohibitedPhrases: ["not our fault"],
+  };
+
+  it("reads the seeded profile", async () => {
+    const profile = await data.brandVoice.get(ushg.admin());
+    expect(profile?.id).toBe(BRAND_VOICE_USHG);
+    expect(profile?.version).toBe(1);
+  });
+
+  it("returns null for an organization that has never configured one", async () => {
+    // Absence is normal: provisioning does not create a row, so this is what
+    // every organization looks like until somebody presses Save.
+    expect(await data.brandVoice.get(harbor.owner())).toBeNull();
+  });
+
+  it("inserts at version 1 on the first save", async () => {
+    const saved = await data.brandVoice.save(harbor.owner(), input);
+    expect(saved.version).toBe(1);
+    expect(saved.organizationId).toBe(ORG_HARBOR);
+    expect(saved.name).toBe("Maison Laurent voice");
+  });
+
+  it("bumps the version when something changes", async () => {
+    const before = await data.brandVoice.get(ushg.admin());
+    const saved = await data.brandVoice.save(ushg.admin(), input);
+    expect(saved.version).toBe((before?.version ?? 0) + 1);
+  });
+
+  it("leaves the version alone when nothing changes", async () => {
+    // response_drafts.brand_voice_version records which voice produced a draft.
+    // Bumping on a no-op would invalidate the provenance of every existing
+    // draft because somebody pressed Save twice.
+    const first = await data.brandVoice.save(ushg.admin(), input);
+    const second = await data.brandVoice.save(ushg.admin(), input);
+
+    expect(second.version).toBe(first.version);
+    expect(second.updatedAt).toBe(first.updatedAt);
+  });
+
+  it("treats a reordered phrase list as a change", async () => {
+    await data.brandVoice.save(ushg.admin(), {
+      ...input,
+      approvedPhrases: ["one", "two"],
+    });
+    const reordered = await data.brandVoice.save(ushg.admin(), {
+      ...input,
+      approvedPhrases: ["two", "one"],
+    });
+    expect(reordered.approvedPhrases).toEqual(["two", "one"]);
+  });
+
+  it("records who saved it", async () => {
+    const saved = await data.brandVoice.save(ushg.comms(), input);
+    expect(saved.updatedByUserId).toBe(ushg.comms().userId);
+  });
+
+  it("does not leak one organization's voice into another", async () => {
+    await data.brandVoice.save(harbor.owner(), { ...input, name: "Harbor voice" });
+    const ushgProfile = await data.brandVoice.get(ushg.admin());
+    expect(ushgProfile?.name).not.toBe("Harbor voice");
+  });
+
+  it("rejects a phrase listed in both the approved and prohibited lists", async () => {
+    await expect(
+      data.brandVoice.save(harbor.owner(), {
+        ...input,
+        approvedPhrases: ["thank you"],
+        prohibitedPhrases: ["thank you"],
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("dedupes phrases differing only in case, keeping the first spelling", async () => {
+    const saved = await data.brandVoice.save(harbor.owner(), {
+      ...input,
+      approvedPhrases: ["Thank You", "thank you"],
+    });
+    expect(saved.approvedPhrases).toEqual(["Thank You"]);
+  });
+
+  it("rejects a phrase over 80 characters", async () => {
+    await expect(
+      data.brandVoice.save(harbor.owner(), {
+        ...input,
+        approvedPhrases: ["a".repeat(81)],
+      }),
+    ).rejects.toThrow();
   });
 });

@@ -201,6 +201,11 @@ insert into public.automation_rules (id, organization_id, name, description, sta
   ('8f1b1fbb-64da-525d-a27f-446028472ca2', '2cfb101c-667c-588b-a37e-d52a0f6209ba', 'Escalate allergen mentions', 'Any critical mention pages the owner immediately.', 'active', 0, '[{"field":"risk_level","operator":"is","value":"critical"}]'::jsonb, '[{"type":"escalate","assigneeUserId":"66e8a131-b39e-5c45-a6e1-74896d5c80aa"}]'::jsonb, '2026-07-31T18:00:00.000Z', '2026-06-02T18:00:00.000Z', '2026-07-29T18:00:00.000Z')
 on conflict (id) do nothing;
 
+-- brand_voice_profiles (1 rows)
+insert into public.brand_voice_profiles (id, organization_id, name, axis_warmth, axis_detail, axis_formality, axis_confidence, axis_hospitality, approved_phrases, prohibited_phrases, version, updated_by_user_id, created_at, updated_at) values
+  ('b3239145-5e2e-542e-82c5-2474fa86cea2', '2e10c03b-59de-5083-b50b-c2878784ebaa', 'Union Square Hospitality voice', 45, 40, 55, 44, 35, '{"thank you for sharing","we appreciate the feedback","we''re here to help","we look forward to welcoming you back"}', '{"we never","not our fault","policy prohibits","as per our policy"}', 1, '174d1f97-afca-5692-bd2b-f960039b725a', '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z')
+on conflict (id) do nothing;
+
 -- audit_events (9 rows)
 insert into public.audit_events (id, organization_id, actor_user_id, actor_type, event_type, entity_type, entity_id, previous_state, new_state, metadata, occurred_at) values
   ('1900a79a-ed8c-5c2d-bd50-bc1b1c1b873a', '2e10c03b-59de-5083-b50b-c2878784ebaa', '4508217a-0a44-5bbb-9ac8-b3108b57b482', 'user', 'response.approved', 'response_draft', 'bc70eac7-dcac-5693-b381-33af8cccf5ca', '{"status":"awaiting_approval"}'::jsonb, '{"status":"approved"}'::jsonb, '{"source":"responses"}'::jsonb, '2026-08-01T17:30:00.000Z'),

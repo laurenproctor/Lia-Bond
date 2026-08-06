@@ -248,6 +248,7 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "membership.role_changed": "Member role changed",
   "membership.status_changed": "Member status changed",
   "membership.removed": "Member removed",
+  "brand_voice.updated": "Brand voice updated",
 };
 
 /** Sync-run outcomes, as a person would describe them. */

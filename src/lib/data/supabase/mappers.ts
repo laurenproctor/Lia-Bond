@@ -3,6 +3,7 @@ import {
   approvalSchema,
   auditEventSchema,
   automationRuleSchema,
+  brandVoiceProfileSchema,
   escalationSchema,
   invitationSchema,
   locationSchema,
@@ -20,6 +21,7 @@ import {
   type Approval,
   type AuditEvent,
   type AutomationRule,
+  type BrandVoiceProfile,
   type Escalation,
   type Invitation,
   type Location,
@@ -509,6 +511,37 @@ export function toAutomationRule(row: Row): AutomationRule {
       updatedAt: iso(row.updated_at),
     },
     "automation rule",
+  );
+}
+
+/**
+ * Five axis columns fold back into one object.
+ *
+ * The columns are separate in Postgres so each carries its own range check;
+ * the domain groups them because every consumer wants them together.
+ */
+export function toBrandVoiceProfile(row: Row): BrandVoiceProfile {
+  return parseOrThrow(
+    brandVoiceProfileSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      name: row.name,
+      axes: {
+        warmth: row.axis_warmth,
+        detail: row.axis_detail,
+        formality: row.axis_formality,
+        confidence: row.axis_confidence,
+        hospitality: row.axis_hospitality,
+      },
+      approvedPhrases: row.approved_phrases ?? [],
+      prohibitedPhrases: row.prohibited_phrases ?? [],
+      version: row.version,
+      updatedByUserId: row.updated_by_user_id ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "brand voice profile",
   );
 }
 
