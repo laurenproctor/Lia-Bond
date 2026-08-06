@@ -54,7 +54,7 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
       className={`${geist.variable} font-site flex min-h-dvh flex-col bg-white text-[15px] leading-normal text-site-body`}
     >
       {/* Rendered once here rather than per page. Every page reaches the
-          speech bubbles through `AccessSection` at minimum, and a page that
+          speech bubbles through `ClosingCta` at minimum, and a page that
           used a bubble without these definitions in the document would
           reference a filter id that resolves to nothing. */}
       <BubbleFilters />

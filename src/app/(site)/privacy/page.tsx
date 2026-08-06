@@ -22,8 +22,8 @@ export default function PrivacyPage() {
         {
           heading: "What this website collects",
           paragraphs: [
-            "If you submit the early-access form, we store the email address you enter, plus the business name, industry, and page you submitted from when those are provided. That is the entire record.",
-            "We use it to contact you about early access. We do not sell it, and we do not add it to a marketing list you did not ask for.",
+            "If you submit the contact form, we store the email address you enter, plus the business name and page you submitted from when those are provided. That is the entire record.",
+            "We use it to reply to you. We do not sell it, and we do not add it to a marketing list you did not ask for.",
           ],
         },
         {
@@ -45,7 +45,7 @@ export default function PrivacyPage() {
         {
           heading: "Retention and deletion",
           paragraphs: [
-            "Early-access records are kept until you ask us to delete them, or until we close the early-access programme.",
+            "Contact-form records are kept until you ask us to delete them, or until the conversation they belong to is closed.",
             "Customer data is retained for the life of the account. On request we delete it, subject to records we are legally required to keep.",
           ],
         },

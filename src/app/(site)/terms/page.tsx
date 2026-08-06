@@ -16,13 +16,13 @@ export default function TermsPage() {
       eyebrow="Legal"
       title="Terms"
       updated="4 August 2026"
-      intro="These terms apply to the Lia website and to the Lia product during early access. They will be replaced with a reviewed agreement before general availability."
+      intro="These terms apply to the Lia website and to the Lia product during its launch period. They will be replaced with a reviewed agreement before general availability."
       sections={[
         {
-          heading: "Early access",
+          heading: "Launch period",
           paragraphs: [
-            "During early access, Lia is provided as-is while we are still building it. Features may change, and we will tell you when they do in a way that affects you.",
-            "Early-access pricing is held for the first year of a paid subscription that begins during the programme.",
+            "During the launch period, Lia is provided as-is while we are still building it. Features may change, and we will tell you when they do in a way that affects you.",
+            "Launch pricing is held for the first year of a paid subscription that begins during the launch period.",
           ],
         },
         {

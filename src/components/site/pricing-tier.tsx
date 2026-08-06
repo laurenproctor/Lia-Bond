@@ -14,6 +14,7 @@ export function PricingTier({
   price,
   priceNote,
   ctaLabel,
+  ctaHref,
   features,
   featured = false,
 }: {
@@ -22,6 +23,13 @@ export function PricingTier({
   price: string;
   priceNote: string;
   ctaLabel: string;
+  /**
+   * A prop rather than the `#access` anchor this used to hard-code. The two
+   * self-serve tiers now go to `/sign-up`; the custom tier has no price to
+   * sign up against and goes to `/contact`, so the destination varies with the
+   * tier and belongs with the copy that describes it.
+   */
+  ctaHref: string;
   features: readonly string[];
   featured?: boolean;
 }) {
@@ -69,7 +77,7 @@ export function PricingTier({
       </p>
 
       <Link
-        href="#access"
+        href={ctaHref}
         className={
           featured
             ? "mb-6.5 rounded-[10px] bg-site-orange py-3.5 text-center text-[14px] font-semibold text-site-ink transition-colors hover:bg-site-orange-hover"

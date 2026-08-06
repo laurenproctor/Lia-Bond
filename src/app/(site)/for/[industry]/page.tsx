@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { AccessSection } from "@/components/site/access-form";
 import { PrimaryButton, SecondaryButton } from "@/components/site/button";
+import { ClosingCta } from "@/components/site/closing-cta";
 import { SpeechBubble } from "@/components/site/speech-bubble";
 import {
   Eyebrow,
@@ -73,7 +73,7 @@ export default async function IndustryPage({ params }: Params) {
         </PageHeading>
         <Lede className="mb-8 max-w-[580px]">{content.lede}</Lede>
         <div className="flex flex-wrap gap-3">
-          <PrimaryButton href="#access">Request early access</PrimaryButton>
+          <PrimaryButton href="/sign-up">Get started</PrimaryButton>
           <SecondaryButton href="/pricing">See pricing</SecondaryButton>
         </div>
       </header>
@@ -120,7 +120,7 @@ export default async function IndustryPage({ params }: Params) {
         </ol>
       </Section>
 
-      <AccessSection industry={slug} sourcePath={`/for/${slug}`} />
+      <ClosingCta />
     </>
   );
 }

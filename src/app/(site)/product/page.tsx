@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { AccessSection } from "@/components/site/access-form";
 import { SecondaryButton } from "@/components/site/button";
+import { ClosingCta } from "@/components/site/closing-cta";
 import {
   Eyebrow,
   Lede,
@@ -93,7 +93,7 @@ export default function ProductPage() {
         </Section>
       ))}
 
-      <AccessSection sourcePath="/product" />
+      <ClosingCta />
     </>
   );
 }

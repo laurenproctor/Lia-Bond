@@ -4,23 +4,31 @@ import { useState } from "react";
 import { submitEarlyAccessAction } from "@/app/actions/early-access";
 import { SpeechBubble } from "@/components/site/speech-bubble";
 import { Lede, SectionHeading } from "@/components/site/section";
-import type { IndustrySlug } from "@/lib/site/routes";
 
 /**
  * The one interactive element on the marketing site.
  *
+ * It used to be the early-access capture that closed every page. Signup is
+ * self-serve now — `ClosingCta` sends people to `/sign-up` instead — so this is
+ * left on `/contact` alone, where it is the site's only way to reach a person:
+ * nothing else on the public site publishes an address, and a contact page with
+ * no channel on it is worse than the wait the form used to imply.
+ *
+ * It still writes through `submitEarlyAccessAction`. The storage, the honeypot,
+ * and the notification email are all unchanged and correct for this; only what
+ * the page asks for has moved on, so the action keeps its name rather than
+ * renaming a table and a server action to relabel a button.
+ *
  * The success message never distinguishes a new address from one already on the
- * list. It could — the action knows — but a form that says "you are already
- * registered" is an oracle a stranger can query for whether a given address
- * uses Lia. One sentence for both cases costs nothing and closes that.
+ * list. It could — the action knows — but a form that says "you already wrote
+ * to us" is an oracle a stranger can query for whether a given address uses
+ * Lia. One sentence for both cases costs nothing and closes that.
  */
-export function AccessForm({
-  industry,
+export function ContactForm({
   sourcePath,
   className,
 }: {
-  industry?: IndustrySlug;
-  /** Which page this instance sits on, recorded with the lead. */
+  /** Which page this instance sits on, recorded with the message. */
   sourcePath: string;
   className?: string;
 }) {
@@ -40,7 +48,7 @@ export function AccessForm({
     const result = await submitEarlyAccessAction({
       email: formData.get("email"),
       businessName: formData.get("businessName"),
-      industry: industry ?? null,
+      industry: null,
       sourcePath,
       website: formData.get("website"),
     });
@@ -67,10 +75,10 @@ export function AccessForm({
         role="status"
       >
         <p className="text-[15px] font-semibold text-site-ink">
-          Thanks — you are on the list.
+          Thanks — we have your address.
         </p>
         <p className="mt-1.5 text-[14px] text-site-body">
-          We will be in touch about connecting your first location.
+          Someone who works on Lia will reply, usually within a working day.
         </p>
       </div>
     );
@@ -84,18 +92,18 @@ export function AccessForm({
           would make its off-screen placement, and so its effectiveness,
           coincidental to wherever it is mounted. */}
       <div className="relative mx-auto flex max-w-[520px] flex-wrap gap-3">
-        <label htmlFor="access-email" className="sr-only">
+        <label htmlFor="contact-email" className="sr-only">
           Your work email
         </label>
         <input
-          id="access-email"
+          id="contact-email"
           name="email"
           type="email"
           required
           autoComplete="email"
           placeholder="Your work email"
           disabled={state === "sending"}
-          aria-describedby={emailError ? "access-error" : undefined}
+          aria-describedby={emailError ? "contact-error" : undefined}
           aria-invalid={emailError ? true : undefined}
           className="min-w-[220px] flex-1 rounded-[10px] border border-site-field px-4 py-3.5 text-[15px] text-site-ink outline-none placeholder:text-site-muted focus:border-site-blue disabled:opacity-60"
         />
@@ -103,9 +111,9 @@ export function AccessForm({
         {/* Honeypot. Hidden from people, tempting to form-fillers. Not
             `display:none`, which some bots skip; off-screen and untabbable. */}
         <div className="absolute left-[-9999px]" aria-hidden="true">
-          <label htmlFor="access-website">Website</label>
+          <label htmlFor="contact-website">Website</label>
           <input
-            id="access-website"
+            id="contact-website"
             name="website"
             type="text"
             tabIndex={-1}
@@ -119,7 +127,7 @@ export function AccessForm({
           disabled={state === "sending"}
           className="rounded-[10px] bg-site-orange px-6 py-3.5 text-[15px] font-semibold whitespace-nowrap text-site-ink transition-colors hover:bg-site-orange-hover disabled:opacity-70"
         >
-          {state === "sending" ? "Sending…" : "Request access"}
+          {state === "sending" ? "Sending…" : "Send"}
         </button>
       </div>
 
@@ -128,30 +136,30 @@ export function AccessForm({
         // no error/risk hue of its own, and this is the same red every other
         // form error in the app already uses — reusing it beats inventing a
         // one-off value that would drift from that convention.
-        <p id="access-error" role="alert" className="mt-3 text-[13px] text-red-600">
+        <p
+          id="contact-error"
+          role="alert"
+          className="mt-3 text-[13px] text-red-600"
+        >
           {error}
         </p>
       ) : null}
 
       <p className="mt-3.5 text-[12.5px] text-site-muted">
-        No spam. We will only use this to talk about your reputation workflow.
+        No spam. We will only use this to reply to you.
       </p>
     </form>
   );
 }
 
 /**
- * The closing call to action, with the bubbles that frame it on every page.
- * `id="access"` is the target the navigation button and every in-page CTA
- * scroll to.
+ * The closing section on `/contact`, with the bubbles that frame it.
+ *
+ * Every other page closes on `ClosingCta` instead, which sends people to
+ * `/sign-up`. `id="access"` is kept for the same reason it is kept there: it
+ * was the fragment every in-page CTA pointed at for the life of the site.
  */
-export function AccessSection({
-  industry,
-  sourcePath,
-}: {
-  industry?: IndustrySlug;
-  sourcePath: string;
-}) {
+export function ContactSection() {
   return (
     <section id="access" className="relative bg-white">
       <div className="relative mx-auto w-full max-w-[1200px] px-[clamp(24px,6vw,106px)] py-[clamp(64px,8vw,110px)]">
@@ -173,14 +181,12 @@ export function AccessSection({
         </div>
 
         <div className="mx-auto max-w-[620px] text-center">
-          <SectionHeading>
-            Know what to say when your reputation is public.
-          </SectionHeading>
+          <SectionHeading>Leave us your email.</SectionHeading>
           <Lede className="mt-4.5 mb-7">
-            Tell us a little about your business and we will set you up with your
-            Google reviews to start.
+            Tell us where to reach you and we will come back with an answer, not
+            a sequence.
           </Lede>
-          <AccessForm industry={industry} sourcePath={sourcePath} />
+          <ContactForm sourcePath="/contact" />
         </div>
       </div>
     </section>

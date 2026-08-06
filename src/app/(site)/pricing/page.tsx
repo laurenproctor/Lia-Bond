@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { AccessSection } from "@/components/site/access-form";
+import { ClosingCta } from "@/components/site/closing-cta";
 import { PricingTier } from "@/components/site/pricing-tier";
 import { SpeechBubble } from "@/components/site/speech-bubble";
 import {
@@ -22,7 +22,8 @@ const TIERS = [
     blurb: "For independent hotels, restaurants, and clinics.",
     price: "$149",
     priceNote: "per location, per month",
-    ctaLabel: "Request early access",
+    ctaLabel: "Get started",
+    ctaHref: "/sign-up",
     features: [
       "Google review monitoring",
       "AI-assisted response drafts",
@@ -35,7 +36,8 @@ const TIERS = [
     blurb: "For multi-location brands and groups.",
     price: "$129",
     priceNote: "per location, per month · volume pricing",
-    ctaLabel: "Request early access",
+    ctaLabel: "Get started",
+    ctaHref: "/sign-up",
     featured: true,
     features: [
       "Everything in single location",
@@ -51,6 +53,7 @@ const TIERS = [
     price: "Custom",
     priceNote: "tailored to your portfolio",
     ctaLabel: "Talk to us",
+    ctaHref: "/contact",
     features: [
       "Everything in growth",
       "Dedicated reputation strategist",
@@ -131,7 +134,7 @@ export default function PricingPage() {
           ))}
         </div>
         <p className="mt-6.5 text-center text-[13.5px] text-site-muted">
-          Early-access pricing, locked in for your first year. Cancel anytime.
+          Launch pricing, locked in for your first year. Cancel anytime.
         </p>
       </div>
 
@@ -155,7 +158,7 @@ export default function PricingPage() {
         </div>
       </Section>
 
-      <AccessSection sourcePath="/pricing" />
+      <ClosingCta />
     </>
   );
 }
