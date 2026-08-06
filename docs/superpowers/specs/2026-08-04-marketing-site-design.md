@@ -270,7 +270,9 @@ its own body — so it is reusable for an unauthenticated endpoint without chang
 1. `earlyAccessSchema.parse()`. Lives in `src/lib/site/early-access.ts`, a pure
    module mirroring `src/lib/support/help-request.ts`: validation and message
    composition, no I/O, so it is testable without a database or a mail provider.
-2. Insert with `on conflict do nothing`.
+2. Plain insert; a unique-violation (`23505`, meaning the address is already on
+   the list) is caught and treated the same as a fresh success — see
+   "Failure policy" below.
 3. `sendEmail()` to `SUPPORT_INBOX_EMAIL`, reusing the existing Resend path.
 
 ### Failure policy: capture beats notify
@@ -291,11 +293,14 @@ the list" — that answer turns the form into an email-enumeration oracle.
 
 ### Abuse
 
-A honeypot field and a minimum time-to-submit stop naive bots. That is the
-extent of it, and this document does not claim the endpoint is rate-limited
-(M11). Before launch, a platform-level control — Vercel BotID, or a WAF
-rate-limit rule scoped to the action's route — should be added. That is recorded
-in "Pre-launch" below rather than approximated in application code.
+A honeypot field stops naive bots: `website` is hidden off-screen and
+untabbable, and any non-empty value fails validation with a generic error that
+tells the bot nothing about which field betrayed it. That is the extent of it —
+there is no minimum time-to-submit check or any other application-level
+throttle, and this document does not claim the endpoint is rate-limited (M11).
+Before launch, a platform-level control — Vercel BotID, or a WAF rate-limit
+rule scoped to the action's route — should be added. That is recorded in
+"Pre-launch" below rather than approximated in application code.
 
 ## Crawl surface
 
