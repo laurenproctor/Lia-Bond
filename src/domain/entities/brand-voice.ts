@@ -189,7 +189,7 @@ export type BrandVoiceProfile = z.infer<typeof brandVoiceProfileSchema>;
  *
  * There is no backfill migration and `provision_organization` does not create
  * one, so absence is normal and means "never configured". The axis values are
- * declared once, here — the migration in `20260806000100_brand_voice.sql`
+ * declared once, here — the migration in `20260806000300_brand_voice.sql`
  * carries no column defaults, so this constant is the sole source of the
  * starting values. The phrase lists are empty because a default phrase would
  * put words in a customer's mouth.
