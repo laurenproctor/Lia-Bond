@@ -870,7 +870,7 @@ New after integrating the branches:
 
 ## Closed by the first live run
 
-All 25 migrations are applied to the hosted project, and the subsystems below
+All 26 migrations are applied to the hosted project, and the subsystems below
 have now executed against real infrastructure rather than a stub. What each
 one actually proved:
 

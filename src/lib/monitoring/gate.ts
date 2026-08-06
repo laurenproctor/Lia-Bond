@@ -323,10 +323,10 @@ export function evaluateCandidate(
 
   /* Syndication is checked last, and only against a candidate that would
    * otherwise be admitted on content. An article that matches no keyword but
-   * happens to share a headline with something recently seen is "below
-   * threshold", full stop — reporting it as `probable_syndication` instead
-   * would credit the gate with having found a relevant duplicate when it
-   * found nothing relevant at all, polluting the rejection data the gate
+   * happens to share a headline with something recently seen is
+   * `no_keyword_match`, full stop — reporting it as `probable_syndication`
+   * instead would credit the gate with having found a relevant duplicate when
+   * it found nothing relevant at all, polluting the rejection data the gate
    * depends on to be tunable. */
   const normalisedHeadline = normaliseHeadline(candidate.title);
   const syndicated = recentHeadlines.some((seen) => {
