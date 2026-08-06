@@ -1,9 +1,13 @@
 # Current state
 
-Factual snapshot of the Lia codebase after workflow 04 (AI provider layer and
-mention analysis), the authentication work that followed it, and brand voice
-configuration. Update this document whenever a workflow changes the stack,
-the tenancy model, or the data flow.
+Factual snapshot of the Lia codebase after workflow 06, with brand voice
+configuration, news monitoring, and the public marketing site integrated onto
+one line of history. Update this document whenever a workflow changes the
+stack, the tenancy model, or the data flow.
+
+Those three streams were built in parallel on branches that never saw each
+other. What that cost, and the one defect that existed only in the union, is
+recorded under "Decisions made integrating the branches".
 
 ## Stack
 
@@ -28,8 +32,11 @@ the tenancy model, or the data flow.
 
 | Path | Contents |
 | --- | --- |
-| `src/app/` | App Router routes. All product screens live in the `(app)` route group. |
+| `src/app/` | App Router routes. Product screens live in the `(app)` route group; the public marketing site lives in `(site)`. |
 | `src/app/actions/` | Server actions. The only write path in the application. |
+| `src/lib/site/` | The marketing route table, and the content each public page renders. One source for the nav, the footer, the sitemap, and `robots.txt`. |
+| `src/lib/support/` | Help requests: validation, message composition, and delivery mode. |
+| `src/lib/brand-voice/` | Brand voice save service, summary derivation, and autosave status. |
 | `src/components/` | Presentational components. **Never** query the database. |
 | `src/domain/` | Zod schemas, inferred types, and lifecycle enums. No I/O. |
 | `src/integrations/` | Platform connector boundary. All Google API behaviour lives behind it. |
@@ -52,11 +59,13 @@ the tenancy model, or the data flow.
 
 ## Routes
 
-All screens render inside one shell (`src/app/(app)/layout.tsx`).
+Product screens render inside one shell (`src/app/(app)/layout.tsx`). The
+marketing site has its own shell (`src/app/(site)/layout.tsx`) and shares
+nothing with it but the root layout's font.
 
 | Route | Purpose | Data source |
 | --- | --- | --- |
-| `/` | Redirect to `/overview` | — |
+| `/` | The marketing home page. **No longer redirects to `/overview`** — see D78. | `src/lib/site/content` |
 | `/overview` | Reputation health and urgent work | repositories |
 | `/mentions` | Unified inbox across every source | repositories |
 | `/reviews` → `/reviews/google/[id]` | Google review workspace | repositories |
@@ -84,6 +93,11 @@ All screens render inside one shell (`src/app/(app)/layout.tsx`).
 | `/auth/callback` | Where an emailed auth link lands; establishes the session | Supabase Auth |
 | `/brand-voice` | Voice configuration | repositories |
 | `/settings` | Organization administration | repositories + typed fixture |
+| `/help` | In-app help requests | repositories + Resend |
+| `/product`, `/platforms`, `/pricing`, `/contact` | Marketing pages. Public, statically rendered. | `src/lib/site/content` |
+| `/for/[industry]` | Four vertical pages from one template, prerendered from `INDUSTRIES` | `src/lib/site/content` |
+| `/privacy`, `/terms` | Placeholder legal pages | `src/lib/site/content` |
+| `/robots.txt`, `/sitemap.xml` | Generated from the route table, so a new page cannot be forgotten in either | `src/lib/site/routes` |
 
 ## Data flow
 
@@ -492,6 +506,20 @@ reachable without a session, so provider errors are logged and swallowed too.
 | D71 | GNews free tier now, Event Registry later | The user's decision, taken with the trade-offs stated. Recorded because the free tier is licensed for development only and cannot be the state when Lia has a paying customer. See "The provider decision" in `docs/superpowers/specs/2026-08-04-news-monitoring-design.md`. |
 | D72 | No response composer on the media detail screen | `CLAUDE.md` forbids implying publishing where the source does not support it. There is no path by which Lia posts to a newspaper, and a composer on that screen would be exactly the implication the rule prohibits. |
 
+## Decisions made integrating the branches
+
+Brand voice, news monitoring, and the marketing site were built in parallel
+from a common ancestor and merged afterwards. Three of the thirteen file
+conflicts were real disagreements rather than two features appending to the
+same list; those are D78–D80. The rest were resolved by taking both sides.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D78 | `/` is the marketing home; the product starts at `/overview` | The route it replaced was a redirect, so nothing that existed lost a home. `CLAUDE.md` fixes the product route list and `/` was never on it. |
+| D79 | The auth gate stays a product denylist, with `/api/cron` as an explicit carve-out | The marketing site requires the denylist: an allowlist bounces every unrecognised URL to `/sign-in`, so a mistyped marketing link or a dead search result met a login form instead of a 404. But `/api` is on the denylist, and news monitoring's cron routes live under it — merging the two as written would have redirected every scheduled invocation to `/sign-in` before its own `CRON_SECRET` check ran. The carve-out is matched by segment and checked first, so `/api/cronjobs` does not inherit the bypass. This is the failure mode the denylist's own comment predicted, and it is covered by tests in both directions because the symptom is silence: nothing errors, and the only sign is data that stops arriving. |
+| D80 | The audit vocabulary gets a merge migration rather than an edit to the branch that broke it | `audit_events_known_event_type` is a closed check constraint, and Postgres cannot extend one — so every workflow redefines the whole list. That is safe on one line of history and wrong on three: news monitoring redefined it from a copy predating membership and brand voice, and filename order puts that redefinition last, silently dropping eight event types the application still emits. A new migration keeps each branch's own migration honest about what it knew, and puts the union somewhere a reader can see it was a merge artefact rather than a mistake anyone made alone. |
+| D81 | `SEED_TABLE_COLUMNS` wins over the inline column lists | News monitoring pulled the seed generator's hand-written column lists into one module and added a test comparing them against the migrations in both directions — a response to hitting the same silent bug three times, where a column exists everywhere except the generator's list and simply never reaches `seed.sql`. Brand voice added a table to the old inline form. Folding it into the refactor puts the newest table under that test rather than outside it, which is the only version of this resolution that gets the benefit. |
+
 ## Known gaps after workflow 04
 
 Carried over from workflow 01:
@@ -765,3 +793,27 @@ on `listDue`'s underlying query, and two UI regressions in the monitoring-query
 editor (a lost two-column grid; an inline edit form inside an unconstrained
 `DataTable` cell) — are tracked in `progress.md` rather than repeated here;
 they sit an abstraction level below what an architecture scan needs.
+
+New after integrating the branches:
+
+- **The hosted project is fifteen migrations behind.** Only the first eight
+  have ever been applied (`supabase db push`); everything from
+  `20260805000100_membership_provisioning.sql` onward — membership, early
+  access, brand voice, news monitoring, and the audit-vocabulary merge — has
+  been parse-validated and exercised against the demo adapter only. That is
+  what made renumbering the collided migrations free, and it is the single
+  largest untested surface in the repository. The RLS verification in
+  `supabase/tests/rls-verification.sql` covers policies that no live database
+  has yet enforced.
+- **Three streams of write-path code have still only run against the demo
+  adapter**: brand voice saves, monitoring-query CRUD, and news ingest. The
+  same position sync and analysis have been in since workflow 03.
+- **No live scheduled run.** `vercel.ts` declares both crons and the routes
+  build, but nothing has invoked them on a deployment, so the
+  session-gate carve-out (D79) and the service-role data source are correct by
+  test and by reading rather than by observation. The first deploy is the
+  experiment.
+- The marketing site, help requests, and early access shipped without ever
+  reaching this document; their routes and directories are recorded above as
+  of this merge. Whatever caused them to be missed is a process gap, not a
+  code one — the branch that added them updated no architecture doc at all.
