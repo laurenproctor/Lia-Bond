@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getGoogleConnector } from "@/integrations/registry";
 import { IntegrationError, toIntegrationMessage } from "@/integrations/errors";
-import { mutationContext } from "@/lib/actions/guard";
+import { mutationContext, type MutationContext } from "@/lib/actions/guard";
 import { can } from "@/lib/auth/permissions";
 import { DataError, toUserMessage } from "@/lib/data/errors";
 import { ConfigurationError } from "@/lib/env";
@@ -10,6 +10,7 @@ import {
   GOOGLE_PLATFORM,
 } from "@/lib/integrations/google-service";
 import { consumeState, OAuthStateError } from "@/lib/integrations/oauth-state";
+import { completeSourceStep } from "@/lib/onboarding/service";
 
 /**
  * The Google OAuth callback.
@@ -44,6 +45,40 @@ function redirectTo(
 
 function failure(request: NextRequest, message: string): NextResponse {
   return redirectTo(request, "/integrations", { error: message });
+}
+
+/** True for the two onboarding destinations in `ALLOWED_REDIRECT_PATHS`. */
+function isOnboardingRedirect(redirectPath: string): boolean {
+  return redirectPath.startsWith("/onboarding/");
+}
+
+/**
+ * Record that the wizard's source step is done, best-effort.
+ *
+ * Deliberately swallowed on failure. The connection is already stored and the
+ * credentials are already sealed; losing the redirect over a progress-row write
+ * would strand somebody on an error page having just granted Google access,
+ * with no obvious way to discover that the grant actually succeeded. Step 2
+ * re-renders as "Connected" with a **Continue** button in that case, which
+ * settles the step through the ordinary action — so the worst outcome is one
+ * extra click rather than a broken flow.
+ *
+ * A role that cannot manage onboarding never reaches here: the caller has
+ * already been checked for `integration.connect` or `integration.reauthorize`,
+ * both owner-and-admin only.
+ */
+async function settleOnboardingSource(context: MutationContext): Promise<void> {
+  try {
+    const state = await context.dataSource.onboarding.get(context.scope);
+    // Nothing to advance for an organization that has finished, or that never
+    // had a row. Checked rather than assumed: `completeSourceStep` would
+    // otherwise rewrite `current_step` on a completed organization.
+    if (!state || state.status === "completed") return;
+
+    await completeSourceStep(context);
+  } catch (error) {
+    console.error("[integrations:google:callback] onboarding step not recorded", error);
+  }
 }
 
 /** Google's own `error` parameter, translated into something actionable. */
@@ -151,6 +186,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       userId: context.userId,
       reauthorization: stateRecord.reauthorization,
     });
+
+    // A grant started from the wizard settles the wizard's source step.
+    //
+    // Without this the callback returns to step 3, whose guard finds step 2
+    // unsettled and bounces straight back to step 2 — so connecting Google
+    // appeared to do nothing. The connection was stored correctly; the progress
+    // row simply never learned about it, because nothing between the connect
+    // route and here had any reason to tell it.
+    //
+    // Gated on the return path rather than on "is this organization
+    // onboarding", so a reconnection from `/integrations` cannot reach it: that
+    // flow asks for an `/integrations` destination, and its organization has
+    // long since finished setup.
+    if (isOnboardingRedirect(stateRecord.redirectPath)) {
+      await settleOnboardingSource(context);
+    }
 
     return redirectTo(request, stateRecord.redirectPath, {
       connected: "1",

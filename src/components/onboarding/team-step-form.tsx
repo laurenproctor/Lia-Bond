@@ -188,9 +188,13 @@ export function TeamStepForm({
           {rows.map((row, index) => (
             <div
               key={row.id}
-              className="grid gap-3 rounded-xl border border-site-border p-3 sm:grid-cols-[1fr_1.3fr_auto_auto] sm:items-end"
+              // The four-column layout waits for `xl`, not `sm`. Between `lg`
+              // and `xl` the contextual panel takes a third of the width, so
+              // the card is at its narrowest exactly where a `sm:` grid would
+              // already be four columns wide — which overflowed at 1024px.
+              className="grid gap-3 rounded-xl border border-site-border p-3 sm:grid-cols-2 xl:grid-cols-[1fr_1.3fr_auto_auto] xl:items-end"
             >
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <label
                   htmlFor={`${row.id}-name`}
                   className="text-[12.5px] font-semibold text-site-ink"
@@ -214,7 +218,7 @@ export function TeamStepForm({
                 </span>
               </div>
 
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <label
                   htmlFor={`${row.id}-email`}
                   className="text-[12.5px] font-semibold text-site-ink"
@@ -233,7 +237,7 @@ export function TeamStepForm({
                 />
               </div>
 
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <label
                   htmlFor={`${row.id}-role`}
                   className="text-[12.5px] font-semibold text-site-ink"
