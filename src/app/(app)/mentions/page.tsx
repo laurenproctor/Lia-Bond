@@ -16,10 +16,12 @@ import { isAiAvailable } from "@/ai/registry";
 import { getAnalysisStatus } from "@/lib/analysis/analyze";
 import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
+import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
 import { resolveSelection } from "@/lib/selection";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
-import { toMentionViews } from "@/lib/view-models/mention";
-import type { MentionSourceType } from "@/domain";
+import { toMentionView, toMentionViews } from "@/lib/view-models/mention";
+import type { MentionView } from "@/lib/view-models/mention";
+import type { Location, MentionSourceType } from "@/domain";
 
 export const metadata: Metadata = { title: "Mentions" };
 
@@ -33,6 +35,35 @@ const REDDIT_TYPES: MentionSourceType[] = ["reddit_post", "reddit_comment"];
 
 interface MentionsPageProps {
   searchParams: Promise<{ mention?: string }>;
+}
+
+/**
+ * Resolve a `?mention=` deep link that points outside the loaded page.
+ *
+ * The queue only loads the newest 50 mentions, but other screens (responses,
+ * escalations, workspaces) link here with `/mentions?mention=<id>` for any
+ * mention, regardless of how old it is. When `resolveSelection` couldn't find
+ * the id among the loaded views, fetch it directly rather than silently
+ * showing the fallback-to-first mention (D98 still applies, but only for a
+ * genuinely unknown id — not merely an unloaded one).
+ */
+async function resolveDeepLinkedMention(
+  dataSource: LiaDataSource,
+  scope: OrganizationScope,
+  mentionParam: string | undefined,
+  fallback: MentionView | null,
+  locationsById: Map<string, Location>,
+): Promise<MentionView | null> {
+  if (!mentionParam || fallback?.id === mentionParam) return fallback;
+
+  const detail = await dataSource.mentions.getDetail(scope, mentionParam);
+  if (!detail) return fallback;
+
+  return toMentionView({
+    mention: detail.mention,
+    analysis: detail.analysis ?? null,
+    locationsById,
+  });
 }
 
 export default async function MentionsPage({ searchParams }: MentionsPageProps) {
@@ -57,7 +88,15 @@ export default async function MentionsPage({ searchParams }: MentionsPageProps) 
     locations,
   });
 
-  const selected = resolveSelection(views, mentionParam, (view) => view.id);
+  const pageSelection = resolveSelection(views, mentionParam, (view) => view.id);
+  const locationsById = new Map(locations.map((location) => [location.id, location]));
+  const selected = await resolveDeepLinkedMention(
+    dataSource,
+    scope,
+    mentionParam,
+    pageSelection,
+    locationsById,
+  );
   const selectedDrafts = selected
     ? await dataSource.responseDrafts.list(scope, { mentionId: selected.id })
     : [];

@@ -43,6 +43,13 @@ export function MentionDetailPane({
     mention.topics.length > 0 ||
     mention.summary !== null;
 
+  // Source types with no dedicated workspace resolve `workspacePath` back to
+  // `/mentions` (see `workspacePathFor`) — this pane IS their workspace, so a
+  // link to it would just be a self-referential no-op. Only source types with
+  // a real, separate workspace screen (Google review, Reddit, news) get the
+  // "Open workspace" affordance.
+  const hasWorkspace = !mention.workspacePath.startsWith("/mentions");
+
   return (
     <DetailPanel
       className={className}
@@ -59,23 +66,27 @@ export function MentionDetailPane({
               {formatRelativeLong(mention.publishedAt)}
             </p>
           </div>
-          <Link
-            href={mention.workspacePath}
-            className="ml-auto inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-purple-600 hover:underline"
-          >
-            Open workspace
-            <ArrowUpRight className="size-3.5" aria-hidden />
-          </Link>
+          {hasWorkspace ? (
+            <Link
+              href={mention.workspacePath}
+              className="ml-auto inline-flex shrink-0 items-center gap-1 text-[13px] font-medium text-purple-600 hover:underline"
+            >
+              Open workspace
+              <ArrowUpRight className="size-3.5" aria-hidden />
+            </Link>
+          ) : null}
         </div>
       }
       footer={
-        <Link
-          href={mention.workspacePath}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-purple-600 bg-purple-600 px-3 text-[13px] font-medium text-white transition-colors hover:bg-purple-500"
-        >
-          Open workspace
-          <ArrowUpRight className="size-4" aria-hidden />
-        </Link>
+        hasWorkspace ? (
+          <Link
+            href={mention.workspacePath}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-purple-600 bg-purple-600 px-3 text-[13px] font-medium text-white transition-colors hover:bg-purple-500"
+          >
+            Open workspace
+            <ArrowUpRight className="size-4" aria-hidden />
+          </Link>
+        ) : undefined
       }
     >
       <div className="flex flex-col gap-4">

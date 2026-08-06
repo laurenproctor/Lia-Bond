@@ -18,7 +18,7 @@ import { GENERATED_BY_LABELS, RESPONSE_TYPE_LABELS } from "@/lib/labels";
 import { getDataSource } from "@/lib/data";
 import { resolveSelection } from "@/lib/selection";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
-import { approvalTimelineEntries } from "@/lib/view-models/response";
+import { approvalTimelineEntries, hasHumanEdit } from "@/lib/view-models/response";
 import { excerptFrom, workspacePathFor } from "@/lib/view-models/mention";
 import { resolvePublishingMode } from "@/domain";
 import type { Mention, ResponseDraft } from "@/domain";
@@ -122,9 +122,7 @@ export default async function ResponsesPage({ searchParams }: ResponsesPageProps
     drafts.filter((draft) => draft.status === status).length;
 
   const published = countOf("published");
-  const humanEdited = drafts.filter(
-    (draft) => draft.finalText !== null && draft.finalText !== draft.draftText,
-  ).length;
+  const humanEdited = drafts.filter(hasHumanEdit).length;
 
   const metrics = [
     { id: "total", label: "Responses", value: String(drafts.length), detail: "All statuses" },
