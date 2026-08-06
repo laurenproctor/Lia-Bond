@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { cn } from "@/lib/cn";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -22,6 +23,16 @@ export interface DataTableProps<Row> {
   emptyTitle?: string;
   emptyDescription?: string;
   className?: string;
+  /**
+   * Makes every row a selection link via a stretched overlay in the first
+   * cell. Interactive content inside cells must add `relative` to its own
+   * class list to stay clickable above the overlay.
+   */
+  rowHref?: (row: Row) => string;
+  /** Accessible name for the row's selection link. Provide with rowHref. */
+  rowLabel?: (row: Row) => string;
+  /** The rowKey of the selected row; highlights it and sets aria-current. */
+  selectedKey?: string | null;
 }
 
 export function DataTable<Row>({
@@ -32,6 +43,9 @@ export function DataTable<Row>({
   emptyTitle = "Nothing to show yet",
   emptyDescription,
   className,
+  rowHref,
+  rowLabel,
+  selectedKey,
 }: DataTableProps<Row>) {
   if (rows.length === 0) {
     return <EmptyState title={emptyTitle} description={emptyDescription} />;
@@ -60,23 +74,43 @@ export function DataTable<Row>({
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-200">
-          {rows.map((row) => (
-            <tr key={rowKey(row)} className="transition-colors hover:bg-gray-50">
-              {columns.map((column) => (
-                <td
-                  key={column.id}
-                  className={cn(
-                    "px-4 py-3 text-[13px] text-gray-700 align-middle",
-                    column.align === "right" ? "text-right" : "text-left",
-                    column.secondary && "hidden lg:table-cell",
-                    column.className,
-                  )}
-                >
-                  {column.cell(row)}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const key = rowKey(row);
+            const selected = selectedKey != null && key === selectedKey;
+            return (
+              <tr
+                key={key}
+                className={cn(
+                  "transition-colors",
+                  rowHref && "relative",
+                  selected ? "bg-purple-50" : "hover:bg-gray-50",
+                )}
+              >
+                {columns.map((column, columnIndex) => (
+                  <td
+                    key={column.id}
+                    className={cn(
+                      "px-4 py-3 text-[13px] text-gray-700 align-middle",
+                      column.align === "right" ? "text-right" : "text-left",
+                      column.secondary && "hidden lg:table-cell",
+                      column.className,
+                    )}
+                  >
+                    {rowHref && columnIndex === 0 ? (
+                      <Link
+                        href={rowHref(row)}
+                        scroll={false}
+                        aria-label={rowLabel?.(row) ?? "Select row"}
+                        aria-current={selected ? "true" : undefined}
+                        className="absolute inset-0"
+                      />
+                    ) : null}
+                    {column.cell(row)}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

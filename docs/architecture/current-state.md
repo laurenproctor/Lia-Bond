@@ -68,12 +68,12 @@ nothing with it but the root layout's font.
 | --- | --- | --- |
 | `/` | The marketing home page. **No longer redirects to `/overview`** — see D91. | `src/lib/site/content` |
 | `/overview` | Reputation health and urgent work | repositories |
-| `/mentions` | Unified inbox across every source | repositories |
+| `/mentions` | Unified inbox across every source, plus a server-rendered detail pane selected via `?mention=` (a missing or stale id falls back to the first item) | repositories |
 | `/reviews` → `/reviews/google/[id]` | Google review workspace | repositories |
 | `/reddit` → `/reddit/[id]` | Reddit conversation workspace | repositories |
 | `/media` → `/media/[id]` | News and media workspace | repositories |
-| `/responses` | Response library | repositories |
-| `/escalations` | Escalation centre | repositories |
+| `/responses` | Response library, plus a server-rendered detail pane selected via `?selected=` that embeds the existing response composer — approve and reject work; save draft and publish remain disabled | repositories |
+| `/escalations` | Escalation centre, plus a server-rendered, read-only detail pane selected via `?selected=` showing the case's audit trail from `audit_events` | repositories |
 | `/insights` | Cross-channel analytics | repositories + typed fixture |
 | `/locations` | Portfolio and per-location settings | repositories |
 | `/rules` | Automation rules | repositories |

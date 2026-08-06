@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { CalendarRange, Download, Star } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
 import { AnalysisPanel } from "@/components/mentions/analysis-panel";
+import { MentionDetailPane } from "@/components/mentions/mention-detail-pane";
 import { MentionListItem } from "@/components/mentions/mention-list-item";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -9,16 +10,18 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { PageHeader } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
-import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import { SelectFilter } from "@/components/ui/select-filter";
 import { isAiAvailable } from "@/ai/registry";
 import { getAnalysisStatus } from "@/lib/analysis/analyze";
 import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
+import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
+import { resolveSelection } from "@/lib/selection";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
-import { toMentionViews } from "@/lib/view-models/mention";
-import type { MentionSourceType } from "@/domain";
+import { toMentionView, toMentionViews } from "@/lib/view-models/mention";
+import type { MentionView } from "@/lib/view-models/mention";
+import type { Location, MentionSourceType } from "@/domain";
 
 export const metadata: Metadata = { title: "Mentions" };
 
@@ -30,7 +33,41 @@ const REVIEW_TYPES: MentionSourceType[] = [
 ];
 const REDDIT_TYPES: MentionSourceType[] = ["reddit_post", "reddit_comment"];
 
-export default async function MentionsPage() {
+interface MentionsPageProps {
+  searchParams: Promise<{ mention?: string }>;
+}
+
+/**
+ * Resolve a `?mention=` deep link that points outside the loaded page.
+ *
+ * The queue only loads the newest 50 mentions, but other screens (responses,
+ * escalations, workspaces) link here with `/mentions?mention=<id>` for any
+ * mention, regardless of how old it is. When `resolveSelection` couldn't find
+ * the id among the loaded views, fetch it directly rather than silently
+ * showing the fallback-to-first mention (D98 still applies, but only for a
+ * genuinely unknown id — not merely an unloaded one).
+ */
+async function resolveDeepLinkedMention(
+  dataSource: LiaDataSource,
+  scope: OrganizationScope,
+  mentionParam: string | undefined,
+  fallback: MentionView | null,
+  locationsById: Map<string, Location>,
+): Promise<MentionView | null> {
+  if (!mentionParam || fallback?.id === mentionParam) return fallback;
+
+  const detail = await dataSource.mentions.getDetail(scope, mentionParam);
+  if (!detail) return fallback;
+
+  return toMentionView({
+    mention: detail.mention,
+    analysis: detail.analysis ?? null,
+    locationsById,
+  });
+}
+
+export default async function MentionsPage({ searchParams }: MentionsPageProps) {
+  const { mention: mentionParam } = await searchParams;
   const context = await getOrganizationContext();
   const { scope, role } = context;
   const dataSource = await getDataSource();
@@ -50,6 +87,19 @@ export default async function MentionsPage() {
     analyses: analyses.filter((analysis) => analysis !== null),
     locations,
   });
+
+  const pageSelection = resolveSelection(views, mentionParam, (view) => view.id);
+  const locationsById = new Map(locations.map((location) => [location.id, location]));
+  const selected = await resolveDeepLinkedMention(
+    dataSource,
+    scope,
+    mentionParam,
+    pageSelection,
+    locationsById,
+  );
+  const selectedDrafts = selected
+    ? await dataSource.responseDrafts.list(scope, { mentionId: selected.id })
+    : [];
 
   const countOf = (types: MentionSourceType[]) =>
     mentions.filter((mention) => types.includes(mention.sourceType)).length;
@@ -167,18 +217,33 @@ export default async function MentionsPage() {
           ) : (
             <ul className="lia-scroll max-h-[calc(100dvh-22rem)] divide-y divide-gray-200 overflow-y-auto border-t border-gray-200">
               {views.map((mention) => (
-                <MentionListItem key={mention.id} mention={mention} />
+                <MentionListItem
+                  key={mention.id}
+                  mention={mention}
+                  href={`/mentions?mention=${mention.id}`}
+                  selected={mention.id === selected?.id}
+                  scroll={false}
+                />
               ))}
             </ul>
           )}
         </Card>
 
-        <SectionPlaceholder
-          className="xl:col-span-7"
-          title="Selected mention"
-          description="AI summary, topic and risk analysis, recommended action, draft response, assignment and SLA, and response history."
-          shape="lines"
-        />
+        {selected ? (
+          <MentionDetailPane
+            className="xl:col-span-7 xl:max-h-[calc(100dvh-16rem)]"
+            mention={selected}
+            drafts={selectedDrafts}
+          />
+        ) : (
+          <Card className="xl:col-span-7">
+            <EmptyState
+              title="Nothing selected"
+              description="Once a source is connected and synced, select a mention to see its details."
+              size="sm"
+            />
+          </Card>
+        )}
       </div>
     </PageBody>
   );
