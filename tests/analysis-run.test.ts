@@ -117,6 +117,9 @@ async function ingestFresh(
     sourceReplyUpdatedAt: null,
     sourceMetadata: {},
     syncedAt: "2026-08-04T00:00:00.000Z",
+    publisherName: null,
+    publisherDomain: null,
+    monitoringQueryId: null,
     ...overrides,
   });
 
@@ -291,6 +294,9 @@ describe("rating-only mentions", () => {
       sourceReplyUpdatedAt: null,
       sourceMetadata: {},
       syncedAt: "2026-08-04T00:00:00.000Z",
+      publisherName: null,
+      publisherDomain: null,
+      monitoringQueryId: null,
     });
 
     const provider = fakeProvider();
@@ -332,6 +338,9 @@ describe("rating-only mentions", () => {
       sourceReplyUpdatedAt: null,
       sourceMetadata: {},
       syncedAt: "2026-08-04T00:00:00.000Z",
+      publisherName: null,
+      publisherDomain: null,
+      monitoringQueryId: null,
     });
 
     await analyzeMentions({ dataSource, scope }, { provider: fakeProvider(), limit: 500 });
@@ -676,6 +685,9 @@ describe("observability", () => {
       sourceReplyUpdatedAt: null,
       sourceMetadata: {},
       syncedAt: "2026-08-04T00:00:00.000Z",
+      publisherName: null,
+      publisherDomain: null,
+      monitoringQueryId: null,
     });
 
     const result = await analyzeMentions(

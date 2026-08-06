@@ -58,6 +58,7 @@ import {
   rankByUrgency,
 } from "@/lib/data/metrics";
 import { demoRuntimeStore, demoStore, replaceRow, scoped } from "@/lib/data/demo/store";
+import { createMonitoringRepositories } from "@/lib/data/demo/monitoring";
 import {
   AnalysisRunInProgressError,
   SyncRunInProgressError,
@@ -207,6 +208,7 @@ export function createDemoDataSource(): LiaDataSource {
 
   return {
     kind: "demo",
+    ...createMonitoringRepositories(),
 
     organizations: {
       async listForUser(userId) {
@@ -271,6 +273,19 @@ export function createDemoDataSource(): LiaDataSource {
         });
 
         return { organization, role: "owner", status: "active" };
+      },
+      // Deliberately unscoped — see the doc comment on
+      // `listWithUnanalyzedMentions` in types.ts. Mirrors `listUnanalyzed`'s
+      // own selection ("no analysis row"), just unfiltered by organization.
+      async listWithUnanalyzedMentions() {
+        const analyzed = new Set(
+          store().mentionAnalyses.map((analysis) => analysis.mentionId),
+        );
+        const organizationIds = new Set<string>();
+        for (const mention of store().mentions) {
+          if (!analyzed.has(mention.id)) organizationIds.add(mention.organizationId);
+        }
+        return [...organizationIds];
       },
     },
 
@@ -1401,6 +1416,14 @@ export function createDemoDataSource(): LiaDataSource {
           sourceReplyUpdatedAt: value.sourceReplyUpdatedAt,
           sourceMetadata: value.sourceMetadata,
           lastSyncedAt: value.syncedAt,
+          publisherName: value.publisherName,
+          publisherDomain: value.publisherDomain,
+          // Set by the gate, not by this ingest — no candidate arrives here
+          // already flagged as syndicated.
+          isSyndicated: false,
+          // Only a brand-new mention attributes to the query that found it;
+          // `applySourceFields` (the update branch above) never touches this.
+          monitoringQueryId: value.monitoringQueryId,
           createdAt: nowIso(),
           updatedAt: nowIso(),
         };

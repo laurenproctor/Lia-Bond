@@ -54,6 +54,16 @@ export type AiMode = z.infer<typeof aiModeSchema>;
 const emailModeSchema = z.enum(["live", "log"]);
 export type EmailMode = z.infer<typeof emailModeSchema>;
 
+/**
+ * Which news monitor is in play.
+ *
+ * Same posture as Google and the analyser, and for the same reason: a
+ * deployment quietly serving fabricated news articles would be worse than one
+ * that plainly says news is not configured.
+ */
+const newsModeSchema = z.enum(["live", "mock"]);
+export type NewsMode = z.infer<typeof newsModeSchema>;
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -101,6 +111,11 @@ const envSchema = z
      * it is not `z.email()`. Must sit on a domain verified with Resend.
      */
     SUPPORT_FROM_EMAIL: z.string().min(5).optional(),
+    /* News monitoring. Server-only. */
+    GNEWS_API_KEY: z.string().min(1).optional(),
+    LIA_NEWS_MODE: newsModeSchema.optional(),
+    /** Shared secret the scheduler presents so the poll route cannot be hit by anyone else. */
+    CRON_SECRET: z.string().min(16).optional(),
 
     /** 32 bytes, base64 / base64url / hex. Encrypts stored OAuth credentials. */
     TOKEN_ENCRYPTION_KEY: z.string().min(32).optional(),
@@ -133,6 +148,13 @@ const envSchema = z
       message: "LIA_EMAIL_MODE=log is refused in production",
       path: ["LIA_EMAIL_MODE"],
     },
+  )
+  .refine(
+    (value) => !(value.LIA_NEWS_MODE === "mock" && value.NODE_ENV === "production"),
+    {
+      message: "LIA_NEWS_MODE=mock is refused in production",
+      path: ["LIA_NEWS_MODE"],
+    },
   );
 
 export type Env = z.infer<typeof envSchema>;
@@ -159,6 +181,9 @@ function readEnv(): Env {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || undefined,
     LIA_AI_MODE: process.env.LIA_AI_MODE || undefined,
     LIA_ANALYSIS_BATCH_SIZE: process.env.LIA_ANALYSIS_BATCH_SIZE || undefined,
+    GNEWS_API_KEY: process.env.GNEWS_API_KEY || undefined,
+    LIA_NEWS_MODE: process.env.LIA_NEWS_MODE || undefined,
+    CRON_SECRET: process.env.CRON_SECRET || undefined,
   });
 
   if (!parsed.success) {
@@ -442,4 +467,33 @@ export function supportFromAddress(): string {
 export function appOrigin(): string {
   if (env.APP_URL) return env.APP_URL.replace(/\/$/, "");
   return "http://localhost:3000";
+}
+
+/* -------------------------------------------------------------------------- */
+/* News monitoring                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which news monitor this process should use.
+ *
+ * `unconfigured` rather than a silent fallback, for the same reason as Google
+ * and the analyser: a deployment quietly serving fabricated news articles is
+ * worse than one that plainly says news is not set up.
+ */
+export function resolveNewsMode(): NewsMode | "unconfigured" {
+  if (env.LIA_NEWS_MODE === "mock") {
+    // Belt and braces: the schema already refuses this combination, but this
+    // is the branch that would serve fabricated articles, so it re-checks
+    // rather than trusts.
+    if (env.NODE_ENV === "production") {
+      throw new ConfigurationError(
+        "LIA_NEWS_MODE=mock cannot be used in production.",
+        ["LIA_NEWS_MODE"],
+      );
+    }
+    return "mock";
+  }
+
+  if (env.LIA_NEWS_MODE === "live" && env.GNEWS_API_KEY) return "live";
+  return "unconfigured";
 }

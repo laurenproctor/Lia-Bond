@@ -77,14 +77,36 @@ export const PRODUCT_PATHS = [
 ];
 
 /**
+ * The carve-outs the comment above anticipated: paths that sit *inside* a
+ * `PRODUCT_PATHS` entry but must stay reachable without a session.
+ *
+ * `/api/cron` is the only one, and it is here deliberately rather than by
+ * omission. Vercel Cron invokes these routes with no browser session at all,
+ * so leaving them under `/api` would redirect every scheduled invocation to
+ * `/sign-in` and the route handler's own `CRON_SECRET` check would never run.
+ * They are authenticated — by a shared secret checked inside the handler
+ * (`isAuthorizedCronRequest`), not by a session cookie. Do not remove this to
+ * "re-protect" them; that would silently break every scheduled sweep in
+ * production, which is exactly what this comment exists to prevent.
+ *
+ * Checked before `PRODUCT_PATHS`, so the more specific rule wins.
+ */
+export const SESSIONLESS_PATHS = ["/api/cron"];
+
+/**
  * Segment match, not `startsWith`: `/overview-of-pricing` (a hypothetical
  * marketing page) shares a prefix with `/overview` but is not the product
  * route, and must not be swept into the gate.
  */
+function matchesSegment(pathname: string, path: string): boolean {
+  return pathname === path || pathname.startsWith(`${path}/`);
+}
+
 export function isProductPath(pathname: string): boolean {
-  return PRODUCT_PATHS.some(
-    (path) => pathname === path || pathname.startsWith(`${path}/`),
-  );
+  if (SESSIONLESS_PATHS.some((path) => matchesSegment(pathname, path))) {
+    return false;
+  }
+  return PRODUCT_PATHS.some((path) => matchesSegment(pathname, path));
 }
 
 export async function middleware(request: NextRequest) {

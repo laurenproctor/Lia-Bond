@@ -24,11 +24,15 @@ import type {
   MembershipRole,
   MembershipStatus,
   MembershipWithUser,
+  CreateMonitoringQueryInput,
   Mention,
   MentionAnalysis,
   MentionFilter,
   MentionIngestOutcome,
   MentionStatus,
+  MonitoringQuery,
+  NewsPollRun,
+  NewsRejectedCandidate,
   OAuthState,
   Organization,
   OrganizationMembership,
@@ -43,6 +47,7 @@ import type {
   StartSyncRunInput,
   SyncResource,
   UpdateBrandVoiceInput,
+  UpdateMonitoringQueryInput,
   UpsertPlatformConnectionInput,
   UpsertPlatformProfileInput,
   User,
@@ -167,6 +172,24 @@ export interface OrganizationRepository {
    * links, so it is not a field a signing-up stranger chooses.
    */
   provision(input: ProvisionOrganizationInput): Promise<OrganizationMembership>;
+  /**
+   * Ids of organizations with at least one mention `analyzeMentions` would
+   * pick up — the same "no analysis row" selection `MentionRepository.
+   * listUnanalyzed` uses, not merely `status = 'new'`: a mention whose status
+   * was already advanced but whose analysis insert never landed (a crash
+   * between the two, per the ordering note on `analyzeOne`) must still count,
+   * or that organization silently stops being swept for it.
+   *
+   * The one deliberately unscoped read on this repository — mirrors
+   * `MonitoringQueryRepository.listDue`. Cron holds no membership and cannot
+   * construct a scope, so it cannot enumerate tenants any other way; every
+   * other method here answers "what can this user see," which has no meaning
+   * for a scheduler. Deriving the swept set from monitoring queries instead
+   * was considered and rejected: analysis covers every mention source, not
+   * just news, so a Google-only organization would never be analysed.
+   * Service-role only. Never call this from a request path.
+   */
+  listWithUnanalyzedMentions(): Promise<string[]>;
 }
 
 export interface MembershipRepository {
@@ -610,6 +633,92 @@ export interface ProfileSyncState {
   lastSuccessful: PlatformSyncRun | null;
 }
 
+/** A run left `running` by a dead process is reclaimed after this. */
+export const POLL_RUN_STALE_AFTER_MS = 30 * 60 * 1000;
+
+export interface StartPollRunInput {
+  monitoringQueryId: string;
+  trigger: NewsPollRun["trigger"];
+  actorUserId: string | null;
+}
+
+export interface FinishPollRunInput {
+  status: Exclude<NewsPollRun["status"], "running">;
+  candidatesEvaluated: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  requestsSpent: number;
+  truncated: boolean;
+  gateScoreMin: number | null;
+  gateScoreMean: number | null;
+  gateScoreMax: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface MonitoringQueryRepository {
+  list(scope: OrganizationScope): Promise<MonitoringQuery[]>;
+  get(scope: OrganizationScope, queryId: string): Promise<MonitoringQuery | null>;
+  create(
+    scope: OrganizationScope,
+    input: CreateMonitoringQueryInput,
+  ): Promise<MonitoringQuery>;
+  update(
+    scope: OrganizationScope,
+    queryId: string,
+    input: UpdateMonitoringQueryInput,
+  ): Promise<MonitoringQuery>;
+  remove(scope: OrganizationScope, queryId: string): Promise<void>;
+  /** Advance the cursor. Only the poll service calls this. */
+  markPolled(
+    scope: OrganizationScope,
+    queryId: string,
+    polledAt: string,
+  ): Promise<MonitoringQuery>;
+  /**
+   * Enabled queries whose interval has elapsed, across every tenant.
+   *
+   * The one deliberately unscoped read in the repository layer. Cron holds no
+   * membership and cannot construct a scope, so the poll service builds one per
+   * row from `organizationId` (D70). Never call this from a request path.
+   */
+  listDue(now: string, limit: number): Promise<MonitoringQuery[]>;
+}
+
+export interface NewsPollRunRepository {
+  /** Throws `PollRunInProgressError`. Reclaims runs older than the stale window. */
+  start(scope: OrganizationScope, input: StartPollRunInput): Promise<NewsPollRun>;
+  finish(
+    scope: OrganizationScope,
+    runId: string,
+    input: FinishPollRunInput,
+  ): Promise<NewsPollRun>;
+  listForQuery(
+    scope: OrganizationScope,
+    queryId: string,
+    limit?: number,
+  ): Promise<NewsPollRun[]>;
+  /** Global spend since an instant. Unscoped, because the budget is Lia's (D67). */
+  requestsSpentSince(since: string): Promise<number>;
+}
+
+export interface NewsRejectedCandidateRepository {
+  recordMany(
+    scope: OrganizationScope,
+    candidates: readonly Omit<
+      NewsRejectedCandidate,
+      "id" | "organizationId" | "createdAt" | "updatedAt"
+    >[],
+  ): Promise<void>;
+  listForQuery(
+    scope: OrganizationScope,
+    queryId: string,
+    limit?: number,
+  ): Promise<NewsRejectedCandidate[]>;
+  /** Delete rows older than the retention window. Returns the count removed. */
+  purgeOlderThan(scope: OrganizationScope, before: string): Promise<number>;
+}
+
 /**
  * Raised when an analysis is already running for this organization.
  *
@@ -687,6 +796,12 @@ export interface LiaDataSource {
   platformSyncRuns: PlatformSyncRunRepository;
   /** Analysis history, and the lock that keeps runs from overlapping. */
   analysisRuns: AnalysisRunRepository;
+  /** What Lia watches. */
+  monitoringQueries: MonitoringQueryRepository;
+  /** Poll history, and the lock that keeps runs from overlapping. */
+  newsPollRuns: NewsPollRunRepository;
+  /** Why the gate refused an article. Diagnostic, readable by any member. */
+  newsRejectedCandidates: NewsRejectedCandidateRepository;
   mentions: MentionRepository;
   responseDrafts: ResponseDraftRepository;
   escalations: EscalationRepository;

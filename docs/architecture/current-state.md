@@ -34,7 +34,9 @@ the tenancy model, or the data flow.
 | `src/domain/` | Zod schemas, inferred types, and lifecycle enums. No I/O. |
 | `src/integrations/` | Platform connector boundary. All Google API behaviour lives behind it. |
 | `src/ai/` | Model boundary. All Anthropic API behaviour lives behind it. |
+| `src/news/` | News provider boundary (`NewsMonitor`). All GNews API behaviour lives behind it, plus the mock used in tests and demo mode. Deliberately not a `PlatformConnector` — see D60. |
 | `src/lib/analysis/` | Analysis orchestration: prompt, schema, heuristic, run service. |
+| `src/lib/monitoring/` | News orchestration: the relevance gate, the poll service, budget enforcement, implicit connection creation, query CRUD. |
 | `src/lib/integrations/` | OAuth state, credential handling, discovery, mapping, health. |
 | `src/lib/crypto/` | AES-256-GCM credential vault. Server-only. |
 | `src/lib/auth/` | Session resolution and the central permission matrix. |
@@ -68,9 +70,12 @@ All screens render inside one shell (`src/app/(app)/layout.tsx`).
 | `/integrations` | Platform connections and capabilities | repositories |
 | `/integrations/google-business-profile` | Google connection detail, health, disconnect | repositories |
 | `/integrations/google-business-profile/setup` | Location selection and mapping | repositories + Google API |
+| `/integrations/news-media` | Monitoring query management (create, edit, enable/disable, delete), poll history, rejected candidates | repositories |
 | `/api/integrations/google-business-profile/connect` | Starts OAuth (POST only) | — |
 | `/api/integrations/google-business-profile/callback` | OAuth callback | — |
 | `/api/integrations/google-business-profile/reviews/sync` | Manual review sync (POST only) | repositories + Google API |
+| `/api/cron/news-poll` | Scheduled poll sweep across every tenant (GET and POST, `CRON_SECRET`-guarded, bypasses the session gate — see Authentication) | repositories + GNews API |
+| `/api/cron/analyze-mentions` | Scheduled analysis sweep across every tenant (GET and POST, `CRON_SECRET`-guarded, bypasses the session gate — see Authentication) | repositories + Anthropic API |
 | `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
 | `/sign-up` | Creates an account **and** the organization it owns. Outside the app shell. | Supabase Auth + `provision_organization` |
 | `/invite/[token]` | Accept an invitation. Public — the invitee has no account yet. | `invitation_preview` / `accept_invitation` |
@@ -130,6 +135,16 @@ Enforced at three layers:
    checks for an `active` membership belonging to `auth.uid()`. No policy grants
    access on the basis of authentication alone.
 
+Workflow 06 added two named, deliberate exceptions to "`listAll()`-style
+methods do not exist": `MonitoringQueryRepository.listDue` and
+`OrganizationRepository.listWithUnanalyzedMentions`. Both exist because cron
+holds no membership and cannot construct a scope any other way — there is no
+`getOrganizationContext()` to call with no request session behind it. Both are
+service-role only, both return identifiers rather than a full cross-tenant
+read (due query rows; organization ids), and neither is reachable from a
+request path. The per-row `OrganizationScope` the cron routes then build from
+each id is what carries tenancy from there — see D70 and Authentication.
+
 The active organization is stored in the `lia_active_organization` cookie
 (`httpOnly`, `sameSite=lax`). The organization slug is deliberately **not** in the
 URL: `CLAUDE.md` fixes the route list (`/overview`, `/mentions`, …), and prefixing
@@ -173,6 +188,16 @@ the middleware would make the app unpleasant, not insecure.
 `public.users.id`. An account created with a fresh id authenticates perfectly and
 then sees nothing at all. `npm run auth:seed` creates the seeded logins with
 their exact UUIDs for this reason.
+
+**`/api/cron` is the one route family that bypasses this gate on purpose.**
+`middleware.ts`'s `SESSIONLESS_PATHS` lists it explicitly, because Vercel Cron
+invokes these routes with no browser session at all — gating them here would
+redirect every scheduled invocation to `/sign-in` before the handler's own
+check ever ran. Authorization is a shared secret (`CRON_SECRET`) instead,
+checked inside each handler by `isAuthorizedCronRequest()` and compared with
+`timingSafeEqual` against a fixed-length digest of both sides, so a partial
+match cannot leak the secret's length through timing. It is the only path in
+the app authenticated by a secret rather than by session or RLS.
 
 ### Sign-up and provisioning
 
@@ -316,6 +341,21 @@ reachable without a session, so provider errors are logged and swallowed too.
   error message, a log line, or an API response.
 - Relative times in demo mode are measured against a fixed reference instant
   (`REFERENCE_NOW`) so server and client renders agree and fixtures stay stable.
+- The relevance gate (`src/lib/monitoring/gate.ts`) never writes
+  `mentions.relevance_score` (D65). That column belongs to the analysis layer,
+  which supersedes any provisional value within minutes; the gate's own score
+  is persisted only on rejections, where it is the thing being tuned.
+- No news provider message reaches a user, a log, or a stored row — the same
+  discipline the Anthropic client keeps, applied to GNews. `errorMessage` on a
+  `news_poll_runs` row and the `console.error` calls in both cron routes are
+  Lia-authored strings; the provider's own response body or a driver error is
+  never interpolated into them.
+- Cron carries its own tenancy discipline; row-level security is not its
+  backstop there (D70). Both scheduled routes call `getServiceDataSource()` —
+  a service-role client with no user session — and build an
+  `OrganizationScope` from each row's own `organization_id`, never from
+  anything ambient, since `getOrganizationContext()` has no request session to
+  resolve.
 
 ## Decisions made in workflow 01
 
@@ -434,6 +474,24 @@ reachable without a session, so provider errors are logged and swallowed too.
 | D76 | `pending` is removed from the controls' `disabled` | Left in, every autosave would freeze the form mid-edit — the quickest way to make the feature feel broken. Serialisation happens in the hook instead. |
 | D77 | The status renders as the form's first row, not inside `PageHeader` | `PageHeader` is server-rendered by the page while the state lives in the client form — the same cross-component problem that put Save in a sticky bar originally. A context provider for one string is not worth the indirection. |
 
+## Decisions made in workflow 06
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D60 | A separate `NewsMonitor` boundary, not a widened `PlatformConnector` | Eight of `PlatformConnector`'s ten methods have no meaning for a search API, and implementing them as throwers is the `if (platform === "google")` that D9 exists to prevent, relocated inside the interface. D35 set the precedent: `AiProvider` has one method because there is one thing to ask. So does this. |
+| D61 | The provider key is Lia's, held in the environment, shared by every tenant | Lia buys the news plan and serves it; a restaurant group does not arrive with a GNews subscription. Nothing touches `platform_credentials`, `oauth_states`, or the AES vault. The consequence is that quota is a Lia-level resource, which is why D67 enforces it globally. |
+| D62 | A `news_media` connection row is created implicitly on first query save | `mentions.platform_connection_id` is `not null`, so news mentions need a connection whether or not one means anything here. Creating it implicitly reuses the existing status and health machinery without inventing a connect flow for a credential the tenant does not hold. |
+| D63 | `news_poll_runs` is a new table, not a reuse of `platform_sync_runs` | `platform_sync_runs.platform_profile_id` is `not null` and news has no profile. Making it nullable would weaken a guarantee every Google row currently relies on, to accommodate a source whose lock target (a monitoring query), counters, and failure modes are all different anyway. |
+| D64 | Rejected candidates are stored, with reason and score | D26 justified `platform_sync_runs` because "a sync that failed silently looks exactly like a location with no new reviews". The same argument is sharper here: an article Lia rejected looks exactly like an article nobody wrote. "Why did you miss this story" is the first question asked of any monitoring product, and without this table the gate is unfalsifiable and therefore untunable. |
+| D65 | The gate never writes `mentions.relevance_score` | D39 reserves that column for the analysis layer, which supersedes any provisional value within minutes anyway. The gate score is persisted only on rejections — where it is the thing being tuned — and as min/mean/max on the run. The invariant stays exactly as strict as it is today. |
+| D66 | Incremental fetch by `publishedAfter`, the opposite of D23 | D23 refetches Google's full history because Google reorders on *edit*, so a cursor silently loses the review somebody changed their mind about. Articles are not edited into a different position, and a metered plan makes a full refetch cost real money for no correctness gain. The reasoning differs; the conclusion inverts. |
+| D67 | The request budget is enforced globally, in the scheduler | D61 makes quota shared across tenants, which is new: Google's quota was per-connection, so a noisy customer could only hurt themselves. Here one organization with forty queries can exhaust the day for everyone. Enforced above the tenant loop, with headroom reserved for manual polls. |
+| D68 | Syndication dedupe lives in the gate, not the provider | GNews offers no clustering. One wire story republished across forty local papers is the single largest noise source in news monitoring, so the gate normalises headlines and rejects a repeat seen within 72 hours. Deliberately provider-agnostic: it survives the Event Registry upgrade rather than being thrown away. |
+| D69 | Two crons, not one chained call | A slow model batch must not be able to blow the poll window. Splitting them also finally gives `analyzeMentions()` the scheduler that workflow 04 built it to accept and never wired. |
+| D70 | The poll service constructs its own `OrganizationScope` from the query row | This is the first write path in the codebase with no verified human behind it. `getOrganizationContext()` is unavailable to cron, so RLS is not the backstop it is everywhere else, and the tenancy discipline has to be explicit rather than ambient. |
+| D71 | GNews free tier now, Event Registry later | The user's decision, taken with the trade-offs stated. Recorded because the free tier is licensed for development only and cannot be the state when Lia has a paying customer. See "The provider decision" in `docs/superpowers/specs/2026-08-04-news-monitoring-design.md`. |
+| D72 | No response composer on the media detail screen | `CLAUDE.md` forbids implying publishing where the source does not support it. There is no path by which Lia posts to a newspaper, and a composer on that screen would be exactly the implication the rule prohibits. |
+
 ## Known gaps after workflow 04
 
 Carried over from workflow 01:
@@ -508,9 +566,15 @@ New in workflow 04:
   version can be compared against this one.
 - `effort` is left at the API default and unswept (D43). Deliberate — the sweep
   needs real data.
-- **No scheduler.** `analyzeMentions()` accepts `trigger: "scheduled"` and needs
-  no request context, but nothing calls it on a timer.
-- Cost is bounded per run, not per day. Adequate while the trigger is manual.
+- ~~No scheduler.~~ **Resolved in workflow 06.** `analyzeMentions()` accepts
+  `trigger: "scheduled"`, and `/api/cron/analyze-mentions` now calls it on a
+  timer: `vercel.ts` schedules it hourly at :30, half an hour after the news
+  poll sweep at :00 so it picks up what that sweep just ingested rather than
+  racing it (D69). Google review sync still has no scheduler — see workflow
+  03's gap of the same name — so only news polling and analysis are wired to
+  cron so far.
+- Cost is bounded per run, not per day. Adequate while the trigger is manual
+  for Google reviews; news polling is now bounded per day instead (D67).
 - Auto-escalation is a machine decision: a false critical creates an escalation
   somebody must dismiss.
 - Analysis is per organization, not per location — there is no way to analyse
@@ -572,3 +636,132 @@ New in brand voice configuration:
   recorded diff is empty. The stored voice is correct; only the audit entry
   is uninformative. A separator that cannot occur inside a phrase would fix
   it.
+
+New in workflow 06:
+
+Two things the design spec predicted as gaps turned out not to be, once
+implementation reached them. Recorded here as corrections, not gaps:
+
+- **Rejection retention has a sweeper.** The spec predicted none —
+  "`news_rejected_candidates` has a 30-day retention policy but no sweeper job
+  until one exists to hang it on." One exists: `pollMonitoringQuery` purges
+  rows older than `REJECTION_RETENTION_MS` (30 days) on every run it makes,
+  best-effort, so a purge failure never turns an otherwise-successful poll
+  into a failed one. This is working, not a gap.
+- **Two structural tests now pin code against the database**, not asked for by
+  the design spec: `tests/audit-vocabulary-migrations.test.ts` and
+  `tests/seed-generator-columns.test.ts`. Both parse the real SQL migrations
+  with `libpg-query` — not a hardcoded list or a regex — and fail in both
+  directions: a TypeScript enum value with no matching database constraint, or
+  a constraint value nothing in TypeScript names. They exist because this
+  workflow hit the same class of drift three times (Tasks 10, 11, and 13) with
+  nothing catching it until a human noticed.
+
+Three judgement calls the relevance gate makes, recorded in
+`src/lib/monitoring/gate.ts`'s own comments and repeated here because a gate
+that silently misses stories needs its blind spots to be discoverable from
+outside the source:
+
+- **Headline length is a weak proxy for ambiguity.** A term with no internal
+  space at or under 8 characters is treated as ambiguous and, matched alone,
+  requires corroboration (see below). That threshold catches "Bond" exactly as
+  readily as it catches legitimate one-word restaurant brands — Nobu, Odo,
+  Zuma, Semma, Estela, Carbone — so any of those needs a second keyword or an
+  `allowedDomains` entry to be admitted on the strength of its own name alone.
+  Acceptable as a v1 position only because every such rejection is logged with
+  its reason (D64) and is therefore discoverable and tunable.
+- **A description-only match never clears the default relevance threshold on
+  its own.** A description match alone scores 0.2 against a default threshold
+  of 0.35, so a piece that names the restaurant only in its summary — headlined
+  on the chef instead — is dropped by a plain brand query.
+  `MONITORING_QUERY_TYPES` includes `person` precisely so a named chef can be
+  tracked directly rather than relying on a restaurant query's description-only
+  signal.
+- **Exact-match syndication detection misses re-headlined pickups.**
+  `normaliseHeadline` catches only byte-identical wire copy once casing,
+  punctuation, and whitespace are normalised; a locally rewritten headline
+  covering the same wire story slips through as independent coverage. The
+  inverse risk is real too: two genuinely different stories that happen to
+  share a generic headline ("X opens new location") within the 72-hour window
+  collapse into one — a live risk for the multi-location groups that are the
+  target customer, not a hypothetical.
+
+**The ambiguity rule changed during review, from what the design spec
+described.** The spec described it as a scoring penalty. A CRITICAL finding in
+Task 9's review showed the penalty was defeated whenever the ambiguous keyword
+also appeared in the description — the normal case — because the
+description-match bonus nearly cancelled the ambiguity penalty regardless of
+whether the second occurrence was the *same* term or a genuinely distinct one.
+It shipped instead as a hard corroboration requirement: a lone ambiguous term,
+matched once in any field or repeated across fields, is rejected outright
+unless corroborated by a second, distinct matched keyword or by the publisher
+appearing in the query's `allowedDomains` list. Repeated occurrences of the
+same term do not count as corroboration — that was the exact defect being
+closed. Consequence, stated plainly: **a restaurant with a short, one-word
+name needs one of those two signals — a second keyword, or an allow-listed
+local publisher — before Lia will surface anything about it at all.**
+
+The rest are gaps, largely as the design spec predicted:
+
+- **The GNews API has never been called live.** The same position workflows
+  02, 03, and 04 shipped in for Google and Anthropic. Every test stubs the
+  provider; the client is covered against a stubbed `fetch`.
+- **The Supabase adapter's news write paths have never run against a real
+  database.** Poll ingest, rejected-candidate recording, and both cron routes
+  are exercised only by the demo adapter and by static reading — mirroring the
+  same gap already recorded for sync ingest, analysis, and escalation creation
+  under "Carried over from workflow 01."
+- **Gate thresholds are unvalidated** against labelled data, exactly as prompt
+  quality is per D43. The rejections table exists so a later threshold can be
+  compared against this one.
+- **The free tier is licensed for development only.** Must be resolved before
+  commercial use.
+- News is up to 12 hours behind, and the analysis layer sees headline and
+  description rather than the article.
+- A poll returning more than 10 matches truncates; no paging is available.
+- An article naming two restaurants attributes to one. `monitoring_query_id`
+  is set on insert and never overwritten on conflict — first finder wins.
+- No notification beyond escalation. A critical story found at 3am waits for
+  somebody to open the escalations centre.
+- **No test renders any of the new UI** — the media detail screen or
+  `/integrations/news-media`, in any state. Everything beyond the capability
+  strings covered by unit tests is verified by reading only.
+- **`requestsSpentSince` builds a service-role client regardless of the data
+  source it was constructed from**, so a user-facing page render
+  (`news-media/page.tsx`) performs an unscoped cross-tenant read and depends
+  on `SUPABASE_SERVICE_ROLE_KEY` being set. The payload is a coarse global
+  integer that D67 arguably intends, but the mechanism is an ambient
+  privilege escalation inside a repository method, and the same escape hatch
+  makes `listDue` callable from any request path. Fixing it properly means
+  deciding how the repository layer expresses privilege — a design decision,
+  not a fix-wave edit.
+- **Manual polls bypass the shared budget entirely.** `MANUAL_RESERVE` is
+  subtracted from the scheduler's allowance but never enforced as a ceiling
+  on manual polling, so repeated "Poll now" clicks in one tenant can exhaust
+  the shared daily quota for all tenants.
+
+One item deferred during implementation is worth keeping at this level, as a
+deliberate choice someone could otherwise "fix" by mistake:
+
+- `resolveNewsMode()` requires **both** `LIA_NEWS_MODE=live` and
+  `GNEWS_API_KEY`, where the Google and Anthropic equivalents infer live mode
+  from credential presence alone. Deliberate, not an inconsistency: for a
+  metered provider on a shared daily budget (D67), a key appearing in the
+  environment should not by itself start a cron spending quota.
+
+**Correction:** an earlier version of this section recorded the
+`monitoringQueries` cross-tenant `locationId` gap as "Pre-existing, both
+adapters." That was wrong — `monitoringQueries` is introduced by this
+branch, not carried over from an earlier one — and the gap itself has since
+been closed: `createMonitoringQueryAction` and `updateMonitoringQueryAction`
+(`src/app/actions/monitoring.ts`) now resolve a caller-supplied `locationId`
+through `locations.get(context.scope, locationId)` before trusting it, the
+same pattern `updateLocationManagerAction` already used, with a cross-tenant
+rejection pinned by `tests/monitoring-actions.test.ts`.
+
+A handful of smaller implementation nits — an unpinned `sourceCountry`
+validation, duplicated `rows()`/`fail()` adapter helpers, a missing `.limit()`
+on `listDue`'s underlying query, and two UI regressions in the monitoring-query
+editor (a lost two-column grid; an inline edit form inside an unconstrained
+`DataTable` cell) — are tracked in `progress.md` rather than repeated here;
+they sit an abstraction level below what an architecture scan needs.

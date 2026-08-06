@@ -90,6 +90,33 @@ export const mentionSchema = z
     sourceMetadata: jsonObjectSchema,
     /** When a sync last confirmed this record against the source. */
     lastSyncedAt: timestampSchema.nullable(),
+
+    /* ---------------------------------------------------------------------- */
+    /* News fields                                                             */
+    /*                                                                        */
+    /* Platform-neutral, matching D21's precedent of extending the canonical   */
+    /* model rather than forking the inbox for a new source.                  */
+    /* ---------------------------------------------------------------------- */
+
+    /** The outlet's name, as the source reported it. Source-owned. */
+    publisherName: z.string().max(200).nullable(),
+    /** The outlet's domain, as the source reported it. Source-owned. */
+    publisherDomain: z.string().max(253).nullable(),
+    /**
+     * Set by Lia's own gate, never by a provider — the free news tier offers
+     * no clustering flag of its own (D68).
+     */
+    isSyndicated: z.boolean(),
+    /**
+     * The monitoring query that first found this article.
+     *
+     * Deliberately **not** source-owned: an article naming two restaurants
+     * attributes to whichever query saw it first, and a second query that
+     * later matches the same article must not steal the attribution.
+     * `applySourceFields` leaves this untouched on update — only a brand-new
+     * mention sets it.
+     */
+    monitoringQueryId: uuidSchema.nullable(),
   })
   .extend(organizationOwnedSchema.shape)
   .extend(timestampsSchema.shape);
@@ -106,6 +133,12 @@ export const NEW_MENTION_DEFAULTS = {
   sourceReplyUpdatedAt: null,
   sourceMetadata: {},
   lastSyncedAt: null,
+  // News fields (workflow 06). Every pre-existing fixture predates news
+  // monitoring, so null/false is the honest default rather than a fabrication.
+  publisherName: null,
+  publisherDomain: null,
+  isSyndicated: false,
+  monitoringQueryId: null,
 } as const;
 
 /**
@@ -142,6 +175,12 @@ export const createMentionInputSchema = mentionSchema
     sourceReplyUpdatedAt: timestampSchema.nullable().default(null),
     sourceMetadata: jsonObjectSchema.default({}),
     lastSyncedAt: timestampSchema.nullable().default(null),
+    // News fields, defaulted for the same reason: every non-news caller has
+    // no concept of a publisher or a monitoring query.
+    publisherName: z.string().max(200).nullable().default(null),
+    publisherDomain: z.string().max(253).nullable().default(null),
+    isSyndicated: z.boolean().default(false),
+    monitoringQueryId: uuidSchema.nullable().default(null),
   });
 
 export type CreateMentionInput = z.input<typeof createMentionInputSchema>;
@@ -197,8 +236,29 @@ export const ingestMentionInputSchema = mentionSchema
      * Supabase adapter record the same instant for the same run.
      */
     syncedAt: timestampSchema,
+    // News fields. Extended rather than picked, so every existing ingest
+    // caller (Google, Reddit) that has no concept of a publisher or a
+    // monitoring query keeps compiling and defaults to "none" rather than
+    // being forced to name one.
+    publisherName: z.string().max(200).nullable().default(null),
+    publisherDomain: z.string().max(253).nullable().default(null),
+    /**
+     * Set only on a brand-new mention (see `applySourceFields`); absent from
+     * `SOURCE_OWNED_MENTION_FIELDS` on purpose.
+     */
+    monitoringQueryId: uuidSchema.nullable().default(null),
   });
 
+/**
+ * `z.infer`, not `z.input` — unlike `CreateMentionInput`. Every ingest caller
+ * already names every source-owned field explicitly, defaulted or not (an
+ * ingest is a deliberate overwrite of a live record), so the `.default()`s
+ * above exist as a schema-level safety net rather than for a caller's
+ * convenience. Staying on the output type also keeps `rawPayload` and
+ * `sourceMetadata` at their validated `Record<string, JsonValue>` shape:
+ * `jsonObjectSchema` is `z.lazy`, whose `z.input` type collapses to
+ * `Record<string, unknown>`, which is not assignable back into `Mention`.
+ */
 export type IngestMentionInput = z.infer<typeof ingestMentionInputSchema>;
 
 /** What an ingest did to the record. Drives the counts a sync reports. */
@@ -232,6 +292,8 @@ export const SOURCE_OWNED_MENTION_FIELDS = [
   "sourceReplyText",
   "sourceReplyUpdatedAt",
   "sourceMetadata",
+  "publisherName",
+  "publisherDomain",
 ] as const satisfies readonly (keyof IngestMentionInput & keyof Mention)[];
 
 /**
@@ -288,6 +350,10 @@ export function applySourceFields(
     sourceReplyUpdatedAt: input.sourceReplyUpdatedAt,
     sourceMetadata: input.sourceMetadata,
     lastSyncedAt: input.syncedAt,
+    publisherName: input.publisherName,
+    publisherDomain: input.publisherDomain,
+    // Deliberately absent: `monitoringQueryId` is not source-owned. See the
+    // field's doc comment on `mentionSchema`.
     updatedAt,
   };
 }

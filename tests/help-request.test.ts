@@ -30,13 +30,18 @@ const SENDER = {
 
 const ORGANIZATION = { name: "Bond Restaurant Group", slug: "bond-restaurant-group" };
 
-function compose(input: unknown, demoMode = false) {
+function compose(
+  input: unknown,
+  demoMode = false,
+  attachments: Array<{ name: string; type: string; size: number }> = [],
+) {
   return composeHelpRequest({
     request: helpRequestSchema.parse(input),
     sender: SENDER,
     organization: ORGANIZATION,
     origin: "https://app.lia.test",
     demoMode,
+    attachments,
     sentAt: new Date("2026-08-04T09:30:00.000Z"),
   });
 }
@@ -151,6 +156,18 @@ describe("composeHelpRequest", () => {
   it("flags demo data, which is why a report often describes numbers nobody else sees", () => {
     expect(compose(VALID).text).not.toContain("Demo dataset");
     expect(compose(VALID, true).text).toContain("Demo dataset");
+  });
+
+  it("names attachments in the body, so a stripped one shows as a gap", () => {
+    expect(compose(VALID).text).not.toContain("Attached");
+
+    const { text } = compose(VALID, false, [
+      { name: "screenshot.png", type: "image/png", size: 240 * 1024 },
+      { name: "clip.mov", type: "video/quicktime", size: 3 * 1024 * 1024 },
+    ]);
+
+    expect(text).toContain("screenshot.png (240 KB)");
+    expect(text).toContain("clip.mov (3 MB)");
   });
 
   it("reports the signed-in account even when the reply-to is somewhere else", () => {

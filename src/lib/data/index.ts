@@ -3,7 +3,10 @@ import "server-only";
 import { resolveDataSourceKind } from "@/lib/env";
 import { createDemoDataSource } from "@/lib/data/demo";
 import { createSupabaseDataSource } from "@/lib/data/supabase";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import {
+  createSupabaseServerClient,
+  createSupabaseServiceClient,
+} from "@/lib/supabase/server";
 import type { LiaDataSource } from "@/lib/data/types";
 
 /**
@@ -25,6 +28,29 @@ export async function getDataSource(): Promise<LiaDataSource> {
   }
 
   // Demo mode is process-wide so mutations survive between requests in dev.
+  demoSingleton ??= createDemoDataSource();
+  return demoSingleton;
+}
+
+/**
+ * The privileged data source. Bypasses row-level security entirely.
+ *
+ * `getDataSource()` builds its Supabase client from the caller's session
+ * (`createSupabaseServerClient`), and a scheduled job has no session — every
+ * policy resolving through `auth.uid()` would reject the write. This is the
+ * only sanctioned way around that.
+ *
+ * Only the cron path may call this. Every caller therefore carries its own
+ * tenancy discipline: nothing downstream of this function is checking
+ * membership on its behalf (D70). The poll service is the one caller today,
+ * and it enforces that discipline by constructing an `OrganizationScope` from
+ * each row's own `organizationId` rather than trusting an ambient one.
+ */
+export async function getServiceDataSource(): Promise<LiaDataSource> {
+  if (resolveDataSourceKind() === "supabase") {
+    return createSupabaseDataSource(createSupabaseServiceClient());
+  }
+
   demoSingleton ??= createDemoDataSource();
   return demoSingleton;
 }

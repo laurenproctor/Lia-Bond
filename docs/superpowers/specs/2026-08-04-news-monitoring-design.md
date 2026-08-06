@@ -252,12 +252,21 @@ inside a page render.
 | `/integrations/news-media` | **New.** Capabilities, poll health, recent runs, monitoring queries, rejected candidates |
 | `/media/[id]` | Now receives real articles. Headline, description, publisher, analysis, prominent link out. No composer (D72), and no pretence of being a reading surface for a body Lia does not have |
 | `/mentions` | No structural change — news arrives through the existing inbox and source badge |
-| `/api/cron/news-poll` | **New.** POST only, `CRON_SECRET`-guarded |
-| `/api/cron/analyze-mentions` | **New.** POST only, `CRON_SECRET`-guarded |
+| `/api/cron/news-poll` | **New.** GET and POST, `CRON_SECRET`-guarded |
+| `/api/cron/analyze-mentions` | **New.** GET and POST, `CRON_SECRET`-guarded |
 
 `/integrations/news-media` sits outside `CLAUDE.md`'s fixed route list in the
 same way the Google screens do — as a child of `/integrations`, which the list
 contains.
+
+**Correction, post-implementation:** the two cron routes originally shipped
+exporting `POST` only, per this section's original "POST only" wording. That
+was wrong — Vercel Cron invokes scheduled routes with `GET`, and the App
+Router 405s any method a route module does not export — so every scheduled
+poll and analysis sweep 405ed and never ran until a whole-branch review
+caught it. Both routes now export `GET` and `POST` from one shared handler.
+The table above has been corrected in place rather than left wrong with a
+note beside it, since this exact sentence is what the implementation copied.
 
 Capability text must state three limits plainly: news is up to 12 hours behind,
 Lia holds headline and description rather than the article, and one poll returns

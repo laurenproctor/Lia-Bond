@@ -10,6 +10,9 @@ import {
   membershipSchema,
   mentionAnalysisSchema,
   mentionSchema,
+  monitoringQuerySchema,
+  newsPollRunSchema,
+  newsRejectedCandidateSchema,
   oauthStateSchema,
   organizationSchema,
   platformConnectionSchema,
@@ -28,6 +31,9 @@ import {
   type Membership,
   type Mention,
   type MentionAnalysis,
+  type MonitoringQuery,
+  type NewsPollRun,
+  type NewsRejectedCandidate,
   type OAuthState,
   type Organization,
   type PlatformConnection,
@@ -300,6 +306,10 @@ export function toMention(row: Row): Mention {
       sourceReplyUpdatedAt: isoOrNull(row.source_reply_updated_at),
       sourceMetadata: row.source_metadata ?? {},
       lastSyncedAt: isoOrNull(row.last_synced_at),
+      publisherName: row.publisher_name ?? null,
+      publisherDomain: row.publisher_domain ?? null,
+      isSyndicated: row.is_syndicated ?? false,
+      monitoringQueryId: row.monitoring_query_id ?? null,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
     },
@@ -562,5 +572,89 @@ export function toAuditEvent(row: Row): AuditEvent {
       occurredAt: iso(row.occurred_at),
     },
     "audit event",
+  );
+}
+
+export function toMonitoringQuery(row: Row): MonitoringQuery {
+  return parseOrThrow(
+    monitoringQuerySchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      locationId: row.location_id ?? null,
+      name: row.name,
+      queryType: row.query_type,
+      keywords: stringArray(row.keywords),
+      exclusions: stringArray(row.exclusions),
+      allowedDomains: stringArray(row.allowed_domains),
+      deniedDomains: stringArray(row.denied_domains),
+      sourceCountry: row.source_country ?? null,
+      language: row.language ?? null,
+      relevanceThreshold: num(row.relevance_threshold) ?? 0,
+      enabled: row.enabled,
+      pollIntervalMinutes: Number(row.poll_interval_minutes),
+      lastPolledAt: isoOrNull(row.last_polled_at),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "monitoring query",
+  );
+}
+
+/**
+ * A poll run.
+ *
+ * Mirrors `toPlatformSyncRun` and `toAnalysisRun`: the counts and the gate
+ * score summary are separate columns on the row, folded together only by the
+ * domain schema they are parsed through.
+ */
+export function toNewsPollRun(row: Row): NewsPollRun {
+  return parseOrThrow(
+    newsPollRunSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      monitoringQueryId: row.monitoring_query_id,
+      trigger: row.trigger,
+      actorUserId: row.actor_user_id ?? null,
+      status: row.status,
+      startedAt: iso(row.started_at),
+      completedAt: isoOrNull(row.completed_at),
+      candidatesEvaluated: Number(row.candidates_evaluated ?? 0),
+      acceptedCount: Number(row.accepted_count ?? 0),
+      rejectedCount: Number(row.rejected_count ?? 0),
+      requestsSpent: Number(row.requests_spent ?? 0),
+      truncated: row.truncated ?? false,
+      gateScoreMin: num(row.gate_score_min),
+      gateScoreMean: num(row.gate_score_mean),
+      gateScoreMax: num(row.gate_score_max),
+      errorCode: row.error_code ?? null,
+      errorMessage: row.error_message ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "poll run",
+  );
+}
+
+export function toNewsRejectedCandidate(row: Row): NewsRejectedCandidate {
+  return parseOrThrow(
+    newsRejectedCandidateSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      monitoringQueryId: row.monitoring_query_id,
+      newsPollRunId: row.news_poll_run_id,
+      externalId: row.external_id,
+      url: row.url,
+      title: row.title ?? "",
+      publisherDomain: row.publisher_domain ?? "",
+      reason: row.reason,
+      score: num(row.score) ?? 0,
+      publishedAt: iso(row.published_at),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "rejected candidate",
   );
 }

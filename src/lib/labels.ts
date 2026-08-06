@@ -6,12 +6,14 @@ import type {
   ConnectionHealthStatus,
   EscalationCategory,
   EscalationStatus,
+  GateRejectionReason,
   GeneratedBy,
   LocationStatus,
   MembershipRole,
   MembershipStatus,
   MentionSourceType,
   MentionStatus,
+  MonitoringQueryType,
   Platform,
   PlatformConnectionStatus,
   RecommendedAction,
@@ -249,6 +251,11 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "membership.status_changed": "Member status changed",
   "membership.removed": "Member removed",
   "brand_voice.updated": "Brand voice updated",
+  "monitoring_query.polled": "News query polled",
+  "monitoring_query.poll_failed": "News poll failed",
+  "monitoring_query.created": "News query created",
+  "monitoring_query.updated": "News query updated",
+  "monitoring_query.deleted": "News query deleted",
 };
 
 /** Sync-run outcomes, as a person would describe them. */
@@ -284,6 +291,21 @@ export const INTEGRATION_CAPABILITY_STATE_LABELS: Record<
   enabled: "Enabled",
   not_configured: "Not configured",
   unavailable: "Unavailable",
+};
+
+export const MONITORING_QUERY_TYPE_LABELS: Record<MonitoringQueryType, string> = {
+  brand: "Brand",
+  location: "Location",
+  person: "Person",
+  topic: "Topic",
+};
+
+/** Why the relevance gate refused a candidate article. Sentence case, per CLAUDE.md. */
+export const GATE_REJECTION_REASON_LABELS: Record<GateRejectionReason, string> = {
+  excluded_term: "Matched an excluded term",
+  probable_syndication: "Probable syndication",
+  domain_denied: "Publisher domain not allowed",
+  below_threshold: "Below relevance threshold",
 };
 
 export const CAPABILITY_LABELS: Record<string, string> = {

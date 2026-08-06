@@ -1,0 +1,35 @@
+-- ---------------------------------------------------------------------------
+-- Complete the EXECUTE revoke on the OAuth-state helpers
+--
+-- Pre-existing gap, fixed here in its own commit: this is workflow-02 code,
+-- not news monitoring's.
+--
+-- 20260802000200_google_integration_rls.sql revoked EXECUTE on
+-- `consume_oauth_state(text)` and `purge_expired_oauth_states()` from
+-- `public` only, with the comment "Only the service role calls them, and it
+-- bypasses RLS anyway, so no grant to `authenticated` is issued" — the right
+-- decision, incompletely executed. `revoke ... from public` removes only the
+-- implicit EXECUTE grant Postgres attaches to every new function by default.
+-- It does not remove the explicit grant Supabase's project bootstrap issues
+-- separately (`alter default privileges in schema public grant all on
+-- functions to postgres, anon, authenticated, service_role`) — migrations
+-- run as `postgres`, so a newly created function picks up that
+-- default-privileges grant to `anon` and `authenticated` in addition to the
+-- `PUBLIC` one, and revoking only `PUBLIC` leaves both of those in place.
+-- 20260807000400_analyze_mentions_organization_scan_rls.sql documents this
+-- mechanism at length for a different function; these two are older
+-- instances of the exact same gap, not a new decision.
+--
+-- Consequence before this migration: both functions stayed callable over
+-- PostgREST by anyone holding the anon key, no session required.
+-- `purge_expired_oauth_states()` takes no arguments and deletes rows, so
+-- that call was a standing, unauthenticated, no-argument DELETE endpoint.
+-- `consume_oauth_state(text)` is one step narrower — it needs a live state
+-- hash to do anything — but the same missing grant applies to it.
+--
+-- Nothing new to decide: the decision ("only the service role calls them")
+-- was already made and recorded three lines above the original revoke.
+-- ---------------------------------------------------------------------------
+
+revoke execute on function public.consume_oauth_state(text) from anon, authenticated;
+revoke execute on function public.purge_expired_oauth_states() from anon, authenticated;

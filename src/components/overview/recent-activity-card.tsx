@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   ChevronRight,
+  Newspaper,
   PencilLine,
   Plug,
   Send,
@@ -30,6 +31,7 @@ const ENTITY_ICONS: Record<AuditEntityType, LucideIcon> = {
   escalation: ShieldAlert,
   automation_rule: Workflow,
   brand_voice: Sparkles,
+  monitoring_query: Newspaper,
 };
 
 const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
@@ -45,6 +47,7 @@ const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
   escalation: "red",
   automation_rule: "amber",
   brand_voice: "purple",
+  monitoring_query: "neutral",
 };
 
 export interface RecentActivityCardProps {

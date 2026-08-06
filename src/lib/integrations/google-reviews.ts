@@ -211,6 +211,11 @@ export function reviewToMentionInput(
     sourceReplyUpdatedAt: review.ownerReply?.updatedAt ?? null,
     sourceMetadata,
     syncedAt,
+    // A Google review has no publisher or monitoring query — those concepts
+    // belong to news.
+    publisherName: null,
+    publisherDomain: null,
+    monitoringQueryId: null,
   };
 }
 

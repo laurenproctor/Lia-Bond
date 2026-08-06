@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 // Resolved by scripts/tsconfig-paths-hook.mjs, which the npm script preloads.
 import { SEED_DATASET } from "@/lib/seed/dataset";
 import { REFERENCE_NOW } from "@/lib/seed/clock";
+import { columnName, SEED_TABLE_COLUMNS } from "./seed-sql-columns.ts";
 
 type Scalar = string | number | boolean | null | undefined;
 type Row = Record<string, Scalar | Scalar[] | object>;
@@ -78,12 +79,7 @@ function literal(value: Scalar | Scalar[] | object, key?: string): string {
   );
 }
 
-/** camelCase -> snake_case, matching the column names in the migrations. */
-function columnName(key: string): string {
-  return key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-}
-
-function insert(table: string, rows: Row[], columns: string[]): string {
+function insert(table: string, rows: Row[], columns: readonly string[]): string {
   if (rows.length === 0) return `-- ${table}: no rows\n`;
 
   const columnList = columns.map(columnName).join(", ");
@@ -120,75 +116,58 @@ const sections: string[] = [
   ``,
 ];
 
+// Column lists live in seed-sql-columns.ts, shared with
+// tests/seed-generator-columns.test.ts, which asserts each list matches the
+// real migrations exactly (modulo the documented SEED_COLUMN_EXCLUSIONS) —
+// see that file's header for why this list has burned us three times.
 sections.push(
-  insert("users", SEED_DATASET.users, [
-    "id", "email", "fullName", "avatarUrl", "createdAt", "updatedAt",
-  ]),
-  insert("organizations", SEED_DATASET.organizations, [
-    "id", "name", "slug", "industry", "websiteUrl", "defaultTimezone",
-    "defaultLanguage", "createdAt", "updatedAt",
-  ]),
-  insert("memberships", SEED_DATASET.memberships, [
-    "id", "organizationId", "userId", "role", "status", "createdAt", "updatedAt",
-  ]),
-  insert("locations", SEED_DATASET.locations, [
-    "id", "organizationId", "name", "slug", "addressLine1", "addressLine2",
-    "city", "region", "postalCode", "countryCode", "timezone", "status",
-    "managerUserId", "createdAt", "updatedAt",
-  ]),
+  insert("users", SEED_DATASET.users, SEED_TABLE_COLUMNS.users),
+  insert("organizations", SEED_DATASET.organizations, SEED_TABLE_COLUMNS.organizations),
+  insert("memberships", SEED_DATASET.memberships, SEED_TABLE_COLUMNS.memberships),
+  insert("locations", SEED_DATASET.locations, SEED_TABLE_COLUMNS.locations),
   // No credential column appears here, and none ever should: OAuth material
   // lives in platform_connection_secrets, which is service-role only and is
   // deliberately not seeded. A fixture token is how a fixture token ends up
   // somewhere real.
-  insert("platform_connections", SEED_DATASET.platformConnections, [
-    "id", "organizationId", "platform", "externalAccountId",
-    "externalAccountName", "status", "capabilities", "tokenExpiresAt",
-    "lastSyncedAt", "grantedScopes", "providerMetadata", "lastHealthCheckAt",
-    "lastHealthStatus", "lastErrorCode", "lastErrorMessage",
-    "connectedByUserId", "connectedAt", "disconnectedAt", "createdAt",
-    "updatedAt",
-  ]),
-  insert("platform_profiles", SEED_DATASET.platformProfiles, [
-    "id", "organizationId", "locationId", "platformConnectionId",
-    "externalProfileId", "externalProfileName", "externalAccountId",
-    "profileUrl", "status", "verificationState", "providerMetadata",
-    "lastConfirmedAt", "syncCursor", "lastSyncedAt", "createdAt", "updatedAt",
-  ]),
-  insert("mentions", SEED_DATASET.mentions, [
-    "id", "organizationId", "locationId", "platformConnectionId",
-    "platformProfileId", "sourceType", "externalId", "externalParentId",
-    "sourceUrl", "title", "content", "authorName", "authorExternalId", "rating",
-    "language", "publishedAt", "receivedAt", "status", "sentiment", "riskLevel",
-    "relevanceScore", "engagementScore", "rawPayload", "createdAt", "updatedAt",
-  ]),
-  insert("mention_analyses", SEED_DATASET.mentionAnalyses, [
-    "id", "organizationId", "mentionId", "modelProvider", "modelName",
-    "promptVersion", "relevanceScore", "relevanceExplanation", "sentiment",
-    "sentimentScore", "riskLevel", "riskCategories", "riskExplanation", "topics",
-    "factsNeedingVerification", "recommendedAction", "recommendationExplanation",
-    "analyzedAt", "createdAt",
-  ]),
-  insert("response_drafts", SEED_DATASET.responseDrafts, [
-    "id", "organizationId", "mentionId", "responseType", "draftText",
-    "finalText", "status", "generatedBy", "generationProvider",
-    "generationModel", "promptVersion", "brandVoiceVersion", "policyVersion",
-    "assignedUserId", "approvedByUserId", "approvedAt", "publishedAt",
-    "externalResponseId", "publicationError", "createdAt", "updatedAt",
-  ]),
-  insert("approvals", SEED_DATASET.approvals, [
-    "id", "organizationId", "responseDraftId", "requestedByUserId",
-    "assignedToUserId", "status", "decisionNote", "decidedAt", "createdAt",
-    "updatedAt",
-  ]),
-  insert("escalations", SEED_DATASET.escalations, [
-    "id", "organizationId", "mentionId", "category", "severity", "status",
-    "title", "summary", "assignedUserId", "dueAt", "resolvedAt",
-    "resolutionNote", "createdAt", "updatedAt",
-  ]),
-  insert("automation_rules", SEED_DATASET.automationRules, [
-    "id", "organizationId", "name", "description", "status", "priority",
-    "conditions", "actions", "lastRunAt", "createdAt", "updatedAt",
-  ]),
+  insert(
+    "platform_connections",
+    SEED_DATASET.platformConnections,
+    SEED_TABLE_COLUMNS.platform_connections,
+  ),
+  insert(
+    "platform_profiles",
+    SEED_DATASET.platformProfiles,
+    SEED_TABLE_COLUMNS.platform_profiles,
+  ),
+  // Must precede `mentions`: a seeded mention's monitoring_query_id (below)
+  // references this table, and generation order is insertion order.
+  insert(
+    "monitoring_queries",
+    SEED_DATASET.monitoringQueries,
+    SEED_TABLE_COLUMNS.monitoring_queries,
+  ),
+  insert("mentions", SEED_DATASET.mentions, SEED_TABLE_COLUMNS.mentions),
+  insert(
+    "mention_analyses",
+    SEED_DATASET.mentionAnalyses,
+    SEED_TABLE_COLUMNS.mention_analyses,
+  ),
+  insert(
+    "response_drafts",
+    SEED_DATASET.responseDrafts,
+    SEED_TABLE_COLUMNS.response_drafts,
+  ),
+  insert("approvals", SEED_DATASET.approvals, SEED_TABLE_COLUMNS.approvals),
+  insert("escalations", SEED_DATASET.escalations, SEED_TABLE_COLUMNS.escalations),
+  insert(
+    "automation_rules",
+    SEED_DATASET.automationRules,
+    SEED_TABLE_COLUMNS.automation_rules,
+  ),
+  // Flattened before writing: the domain type nests the five axes under
+  // `axes`, the migration holds them as five columns. The mapping is here
+  // rather than in the dataset so the seed stays shaped like the type the
+  // rest of the application reads.
   insert(
     "brand_voice_profiles",
     SEED_DATASET.brandVoiceProfiles.map((profile) => ({
@@ -207,17 +186,9 @@ sections.push(
       createdAt: profile.createdAt,
       updatedAt: profile.updatedAt,
     })),
-    [
-      "id", "organizationId", "name", "axisWarmth", "axisDetail",
-      "axisFormality", "axisConfidence", "axisHospitality", "approvedPhrases",
-      "prohibitedPhrases", "version", "updatedByUserId", "createdAt", "updatedAt",
-    ],
+    SEED_TABLE_COLUMNS.brand_voice_profiles,
   ),
-  insert("audit_events", SEED_DATASET.auditEvents, [
-    "id", "organizationId", "actorUserId", "actorType", "eventType",
-    "entityType", "entityId", "previousState", "newState", "metadata",
-    "occurredAt",
-  ]),
+  insert("audit_events", SEED_DATASET.auditEvents, SEED_TABLE_COLUMNS.audit_events),
 );
 
 sections.push("commit;", "");

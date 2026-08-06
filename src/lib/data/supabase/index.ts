@@ -72,6 +72,7 @@ import {
   toResponseDraft,
   toUser,
 } from "@/lib/data/supabase/mappers";
+import { createMonitoringRepositories } from "@/lib/data/supabase/monitoring";
 
 /**
  * The Supabase adapter.
@@ -96,6 +97,25 @@ function rows(data: unknown): Row[] {
 function isoOrNull(value: unknown): string | null {
   return value === null || value === undefined ? null : new Date(String(value)).toISOString();
 }
+
+/**
+ * Explicit upper bound on `organizations_with_unanalyzed_mentions()`.
+ *
+ * Moving the anti-join into that function (see the migration) fixed the
+ * failure class where an unbounded `.select()` on `mentions` truncates
+ * silently past PostgREST's default row cap — but a `returns table` function
+ * is still subject to the same cap if nothing overrides it, so an explicit,
+ * documented ceiling replaces an implicit, undocumented one rather than
+ * eliminating the ceiling outright.
+ *
+ * Five figures because the result here is "organizations with an analysis
+ * backlog," not "mentions": this holds for any tenant count Lia is plausibly
+ * operating at while this comment is accurate. What breaks first if it stops
+ * holding: `listWithUnanalyzedMentions` truncates the same way the pre-fix
+ * version did, just at ~5,000 tenants with a simultaneous backlog instead of
+ * ~1,000 mentions — silently, unless the warning below fires.
+ */
+const MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP = 5000;
 
 /**
  * A URL-safe slug for a location, unique within its organization.
@@ -367,6 +387,55 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         const created = await this.getById(data, input.userId);
         if (!created) throw notFound("Organization");
         return created;
+      },
+      // Deliberately unscoped and run under the service-role client — see the
+      // doc comment on `listWithUnanalyzedMentions` in types.ts and on
+      // `serviceClient` above.
+      //
+      // Calls a database function (`supabase/migrations/…
+      // _analyze_mentions_organization_scan.sql`) rather than reading
+      // `mentions` and `mention_analyses` in full and folding the anti-join
+      // into application code, which was this method's first version. Both
+      // tables are unbounded — they grow with product usage — and a plain
+      // `.select()` with no `.range()` is capped by PostgREST at a fixed row
+      // count; past that cap the read truncates with no error, and an
+      // organization whose unanalysed mentions fell outside the returned page
+      // would simply stop being swept, silently, forever. The function moves
+      // the anti-join into Postgres so the result set this reads is
+      // organizations — small, bounded by tenant count — never mentions.
+      async listWithUnanalyzedMentions() {
+        // `.range()` is explicit rather than omitted: a `returns table`
+        // function is still subject to PostgREST's own default cap, so
+        // leaving it implicit would just move the silent-truncation risk
+        // this method exists to fix down one layer. See
+        // `MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP`'s own comment for the
+        // reasoning behind the number and what breaks first.
+        const { data, error } = await serviceClient()
+          .rpc("organizations_with_unanalyzed_mentions")
+          .range(0, MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP - 1);
+
+        if (error) fail(error, "find organizations with unanalysed mentions");
+        const returned = rows(data);
+
+        // Not proof of truncation — the cap could land exactly on the true
+        // count — but the only signal available without a second, costlier
+        // count query, and cheap insurance against the exact failure mode
+        // this method was rewritten to fix. No tenant identifier or count
+        // in the message: this is a capacity signal for an operator to act
+        // on, not a coverage report.
+        if (returned.length >= MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP) {
+          console.warn(
+            "[data:supabase] organizations_with_unanalyzed_mentions reached its row cap; the analyse-mentions sweep may be missing organizations",
+          );
+        }
+
+        return [
+          ...new Set(
+            returned.flatMap((row) =>
+              typeof row.organization_id === "string" ? [row.organization_id] : [],
+            ),
+          ),
+        ];
       },
     },
 
@@ -1336,6 +1405,10 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
     },
 
+    // News monitoring's own file: see the doc comment at the top of
+    // `supabase/monitoring.ts`.
+    ...createMonitoringRepositories(client),
+
     mentions: {
       async list(scope, filter = {}) {
         let query = from("mentions", scope).order("published_at", { ascending: false });
@@ -1494,6 +1567,10 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
               source_reply_updated_at: value.sourceReplyUpdatedAt,
               source_metadata: value.sourceMetadata,
               last_synced_at: value.lastSyncedAt,
+              publisher_name: value.publisherName,
+              publisher_domain: value.publisherDomain,
+              is_syndicated: value.isSyndicated,
+              monitoring_query_id: value.monitoringQueryId,
             },
             { onConflict: "platform_connection_id,source_type,external_id" },
           )
@@ -1564,6 +1641,8 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           source_reply_updated_at: value.sourceReplyUpdatedAt,
           source_metadata: value.sourceMetadata,
           last_synced_at: value.syncedAt,
+          publisher_name: value.publisherName,
+          publisher_domain: value.publisherDomain,
         };
 
         if (existing) {
@@ -1591,6 +1670,10 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
               // First sight, so this genuinely is when Lia received it. The
               // update path above never touches it again.
               received_at: value.syncedAt,
+              // Set only on creation, mirroring `received_at` above: the
+              // query that first found this article keeps the attribution
+              // even if a second query later matches the same story.
+              monitoring_query_id: value.monitoringQueryId,
               ...sourceOwned,
             },
             { onConflict: "platform_connection_id,source_type,external_id" },

@@ -357,6 +357,7 @@ export const AUDIT_ENTITY_TYPES = [
   "escalation",
   "automation_rule",
   "brand_voice",
+  "monitoring_query",
 ] as const;
 export const auditEntityTypeSchema = vocabulary(AUDIT_ENTITY_TYPES).schema;
 export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>;
@@ -414,6 +415,51 @@ export const AUDIT_EVENT_TYPES = [
   "membership.status_changed",
   "membership.removed",
   "brand_voice.updated",
+  // News polling. Metadata carries counts and a normalised error code —
+  // never an article title, a URL, or a publisher name.
+  "monitoring_query.polled",
+  "monitoring_query.poll_failed",
+  // Monitoring query lifecycle — creating, editing, and removing what Lia
+  // watches. `newState`/`previousState` carry the query's own fields (keywords,
+  // domains, thresholds), never article content, which the query has no
+  // relationship to until a poll runs.
+  "monitoring_query.created",
+  "monitoring_query.updated",
+  "monitoring_query.deleted",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Monitoring                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What a monitoring query is looking for.
+ *
+ * Not decoration: the relevance gate weights signals differently per type. A
+ * location query weights publisher locality heavily; a brand query does not.
+ */
+export const MONITORING_QUERY_TYPES = [
+  "brand",
+  "location",
+  "person",
+  "topic",
+] as const;
+export const monitoringQueryTypeSchema = vocabulary(MONITORING_QUERY_TYPES).schema;
+export type MonitoringQueryType = z.infer<typeof monitoringQueryTypeSchema>;
+
+/**
+ * Why the gate refused a candidate.
+ *
+ * Lia's own vocabulary. No provider ever supplies one of these, and the reason
+ * is what makes the gate tunable rather than a black box (D64).
+ */
+export const GATE_REJECTION_REASONS = [
+  "excluded_term",
+  "probable_syndication",
+  "domain_denied",
+  "below_threshold",
+] as const;
+export const gateRejectionReasonSchema = vocabulary(GATE_REJECTION_REASONS).schema;
+export type GateRejectionReason = z.infer<typeof gateRejectionReasonSchema>;

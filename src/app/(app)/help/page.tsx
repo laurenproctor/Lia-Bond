@@ -61,6 +61,11 @@ export default async function HelpPage() {
               Review text, customer names, and your connected accounts are never
               attached.
             </p>
+            <p className="mt-3 text-[13px] leading-6 text-gray-500">
+              Anything you attach yourself is the exception: a screenshot shows
+              us whatever was on screen when you took it. Check it before you
+              send, and remember that anyone you copy receives it too.
+            </p>
           </Card>
         </div>
       </div>

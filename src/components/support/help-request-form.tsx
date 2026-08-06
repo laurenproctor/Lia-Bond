@@ -6,8 +6,10 @@ import {
   submitHelpRequestAction,
   type HelpRequestReceipt,
 } from "@/app/actions/support";
+import { AttachmentDropzone } from "@/components/support/attachment-dropzone";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { ATTACHMENT_LIMITS_HINT } from "@/lib/support/help-attachments";
 import {
   MAX_CC_RECIPIENTS,
   MAX_HELP_MESSAGE_LENGTH,
@@ -39,7 +41,8 @@ export interface HelpRequestFormProps {
  * is a reply-to, not an identity: the server stamps the signed-in account into
  * every message regardless of what is typed here.
  *
- * Submission is one-way. Nothing is stored, so the confirmation is the only
+ * Submission is one-way. Nothing is stored — attachments included; they ride
+ * along on the message and Lia keeps no copy — so the confirmation is the only
  * receipt, and it names the address the message went to rather than saying
  * "sent" and leaving the person to wonder where.
  */
@@ -49,12 +52,17 @@ export function HelpRequestForm({ defaultEmail }: HelpRequestFormProps) {
   const ccId = useId();
   const messageId = useId();
   const countId = useId();
+  const attachmentsId = useId();
 
   const formRef = useRef<HTMLFormElement>(null);
 
   // "" is the unselected state — the picker opens on no topic at all.
   const [topic, setTopic] = useState<HelpTopic | "">("");
   const [messageLength, setMessageLength] = useState(0);
+  // Held in React, not in the form: `form.reset()` clears a file input, but a
+  // file input cannot be *given* files, so removing one from the list has to
+  // work the other way round.
+  const [files, setFiles] = useState<File[]>([]);
   const [receipt, setReceipt] = useState<HelpRequestReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -65,12 +73,30 @@ export function HelpRequestForm({ defaultEmail }: HelpRequestFormProps) {
     setFieldErrors({});
 
     startTransition(async () => {
-      const result = await submitHelpRequestAction({
-        topic: formData.get("topic"),
-        replyTo: formData.get("replyTo"),
-        cc: formData.get("cc"),
-        message: formData.get("message"),
-      });
+      let result;
+
+      try {
+        result = await submitHelpRequestAction(
+          {
+            topic: formData.get("topic"),
+            replyTo: formData.get("replyTo"),
+            cc: formData.get("cc"),
+            message: formData.get("message"),
+          },
+          files,
+        );
+      } catch {
+        // Attachments make the request big enough that it can fail before the
+        // action runs — a dropped connection, or a proxy with a smaller body
+        // limit than ours. The action's own failures come back as values, so
+        // anything thrown here is the transport.
+        setError(
+          files.length > 0
+            ? "We couldn't upload that. Check your connection, or send the message with fewer attachments."
+            : "We couldn't reach the server. Check your connection and try again.",
+        );
+        return;
+      }
 
       if (!result.ok) {
         setError(result.error);
@@ -82,6 +108,7 @@ export function HelpRequestForm({ defaultEmail }: HelpRequestFormProps) {
       formRef.current?.reset();
       setTopic("");
       setMessageLength(0);
+      setFiles([]);
     });
   }
 
@@ -206,6 +233,21 @@ export function HelpRequestForm({ defaultEmail }: HelpRequestFormProps) {
         </p>
       </Field>
 
+      <Field
+        id={attachmentsId}
+        label="Attach a screenshot or video (optional)"
+        hint={ATTACHMENT_LIMITS_HINT}
+        error={fieldErrors.attachments}
+      >
+        <AttachmentDropzone
+          id={attachmentsId}
+          files={files}
+          onChange={setFiles}
+          disabled={pending}
+          error={fieldErrors.attachments}
+        />
+      </Field>
+
       {error ? (
         <p
           role="alert"
@@ -297,8 +339,11 @@ function Confirmation({
       {receipt.delivered ? (
         <p className="text-[13.5px] leading-6 text-gray-700">
           Your request is on its way to{" "}
-          <span className="font-medium text-gray-950">{receipt.sentTo}</span>.
-          We usually reply within one business day, and the reply will come
+          <span className="font-medium text-gray-950">{receipt.sentTo}</span>
+          {receipt.attached > 0
+            ? `, with ${receipt.attached === 1 ? "your attachment" : `all ${receipt.attached} attachments`}`
+            : ""}
+          . We usually reply within one business day, and the reply will come
           straight back to you
           {receipt.cc.length > 0 ? ` and to ${receipt.cc.join(", ")}` : ""}.
         </p>

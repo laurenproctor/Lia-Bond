@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  describeAttachment,
+  type AttachmentDescriptor,
+} from "@/lib/support/help-attachments";
+import {
   HELP_TOPICS,
   HELP_TOPIC_LABELS,
   type HelpTopic,
@@ -90,6 +94,9 @@ export interface ComposeHelpRequestInput {
   origin: string;
   /** True when the sender was looking at demo records, not their own data. */
   demoMode: boolean;
+  /** What rides along on the message. Named in the body so a stripped
+   *  attachment shows up as a gap rather than as nothing at all. */
+  attachments?: AttachmentDescriptor[];
   sentAt: Date;
 }
 
@@ -111,6 +118,7 @@ export function composeHelpRequest({
   organization,
   origin,
   demoMode,
+  attachments = [],
   sentAt,
 }: ComposeHelpRequestInput): ComposedHelpRequest {
   const topicLabel = HELP_TOPIC_LABELS[request.topic satisfies HelpTopic];
@@ -127,6 +135,10 @@ export function composeHelpRequest({
 
   if (request.cc.length > 0) {
     header.push(["Copied", request.cc.join(", ")]);
+  }
+
+  if (attachments.length > 0) {
+    header.push(["Attached", attachments.map(describeAttachment).join(", ")]);
   }
 
   header.push(["Deployment", origin]);

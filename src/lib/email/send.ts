@@ -29,6 +29,13 @@ const RESEND_ENDPOINT = "https://api.resend.com/emails";
 /** Long enough for a cold Lambda at Resend, short enough to fail a form fast. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+export interface OutboundAttachment {
+  filename: string;
+  contentType: string;
+  /** Base64. Resend takes attachment bodies inline, not as uploads. */
+  content: string;
+}
+
 export interface OutboundEmail {
   to: string[];
   cc?: string[];
@@ -37,6 +44,7 @@ export interface OutboundEmail {
   subject: string;
   /** Plain text. Lia sends no HTML mail; there is nothing to lay out. */
   text: string;
+  attachments?: OutboundAttachment[];
 }
 
 export interface EmailDelivery {
@@ -70,6 +78,13 @@ export async function sendEmail(message: OutboundEmail): Promise<EmailDelivery> 
         message.cc?.length ? `cc: ${message.cc.join(", ")}` : null,
         message.replyTo?.length ? `reply-to: ${message.replyTo.join(", ")}` : null,
         `subject: ${message.subject}`,
+        // Names and sizes only. The bodies are megabytes of base64 and would
+        // bury the message they were sent to explain.
+        message.attachments?.length
+          ? `attachments: ${message.attachments
+              .map((file) => `${file.filename} (${attachedBytes(file)} bytes)`)
+              .join(", ")}`
+          : null,
         "",
         message.text,
       ]
@@ -87,9 +102,24 @@ export async function sendEmail(message: OutboundEmail): Promise<EmailDelivery> 
     ...(message.replyTo?.length ? { reply_to: message.replyTo } : {}),
     subject: message.subject,
     text: message.text,
+    ...(message.attachments?.length
+      ? {
+          attachments: message.attachments.map((file) => ({
+            filename: file.filename,
+            content: file.content,
+            content_type: file.contentType,
+          })),
+        }
+      : {}),
   });
 
   return { mode: "live", id: response.id };
+}
+
+/** Decoded size of a base64 body, for the log line. */
+function attachedBytes(file: OutboundAttachment): number {
+  const padding = file.content.endsWith("==") ? 2 : file.content.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((file.content.length * 3) / 4) - padding);
 }
 
 /* -------------------------------------------------------------------------- */

@@ -47,7 +47,7 @@
 | `src/lib/data/supabase/monitoring.ts` | Supabase adapter for the same |
 | `src/app/actions/monitoring.ts` | Server actions: query CRUD, manual poll |
 | `src/app/api/cron/news-poll/route.ts` | Scheduled poll entry point |
-| `src/app/api/cron/analyze-mentions/route.ts` | Scheduled analysis entry point |
+| `src/app/api/cron/analyze-mentions/route.ts` | Scheduled analysis entry point (also uses `getServiceDataSource()`) |
 | `src/app/(app)/integrations/news-media/page.tsx` | Connection detail screen |
 | `src/components/integrations/monitoring-query-form.tsx` | Query editor (client) |
 | `src/components/integrations/monitoring-query-list.tsx` | Query list (server) |
@@ -56,7 +56,7 @@
 | `supabase/migrations/20260806000200_news_monitoring_rls.sql` | Row-level security |
 | `vercel.ts` | Cron schedules |
 
-**Modify:** `src/domain/enums.ts`, `src/domain/entities/mention.ts`, `src/domain/index.ts`, `src/lib/data/types.ts`, `src/lib/data/demo/index.ts`, `src/lib/data/demo/store.ts`, `src/lib/data/supabase/index.ts`, `src/lib/auth/permissions.ts`, `src/lib/env.ts`, `src/lib/seed/dataset.ts`, `src/app/(app)/media/[id]/page.tsx`, `docs/architecture/current-state.md`.
+**Modify:** `src/lib/data/index.ts`, `src/domain/enums.ts`, `src/domain/entities/mention.ts`, `src/domain/index.ts`, `src/lib/data/types.ts`, `src/lib/data/demo/index.ts`, `src/lib/data/demo/store.ts`, `src/lib/data/supabase/index.ts`, `src/lib/auth/permissions.ts`, `src/lib/env.ts`, `src/lib/seed/dataset.ts`, `src/app/(app)/media/[id]/page.tsx`, `docs/architecture/current-state.md`.
 
 New repositories live in their own adapter files rather than growing `demo/index.ts` (1,794 lines) and `supabase/index.ts` (2,082 lines) further.
 
@@ -2377,7 +2377,14 @@ Create `src/lib/monitoring/poll-service.ts` exporting `pollMonitoringQuery` and 
 8. `newsRejectedCandidates.purgeOlderThan(scope, new Date(nowMs - REJECTION_RETENTION_MS).toISOString())`. Retention runs here rather than in its own job because this is the only code path that writes the table, so it cannot fall behind what it is trimming.
 9. `recordAuditEvent(...)` — follow the existing call sites for the exact signature. **The event must not contain an article title, a URL, or a publisher name**, only counts and the query id.
 
-**`pollDueQueries(options)`** — options are `{ dataSource, monitor, now, limit }`. Returns `{ polled, accepted, rejected, skippedForBudget }`. Calls `monitoringQueries.listDue`, and for each row constructs its own `OrganizationScope` from `organizationId` with a synthetic system actor, per D70. Stops as soon as `remainingScheduledRequests` is exhausted and reports the unpolled count as `skippedForBudget`, so a sweep that covered eight of forty queries cannot read as full coverage.
+**`pollDueQueries(options)`** — options are `{ dataSource, monitor, now, limit }`. Returns `{ polled, accepted, rejected, skippedForBudget }`. Calls `monitoringQueries.listDue`, and for each row constructs its own `OrganizationScope` from `organizationId` with the system actor below, per D70. Stops as soon as `remainingScheduledRequests` is exhausted and reports the unpolled count as `skippedForBudget`, so a sweep that covered eight of forty queries cannot read as full coverage.
+
+**The `dataSource` passed under cron must be service-role.** This was a gap in the first draft of this plan and is the single most likely way this task fails silently: `getDataSource()` builds its Supabase client from the caller's session (`createSupabaseServerClient`), and cron has no session, so every policy resolving through `auth.uid()` would reject the write. Two additions close it:
+
+1. In `src/lib/data/index.ts`, add `getServiceDataSource()` alongside `getDataSource()`. It returns the demo adapter in demo mode, and otherwise `createSupabaseDataSource(createSupabaseServiceClient())` — the service client already exists at `src/lib/supabase/server.ts:68`. Document on it that it **bypasses RLS**, that only the cron path may call it, and that its callers therefore carry their own tenancy discipline (D70).
+2. Export `SYSTEM_ACTOR_ID` from `src/lib/monitoring/poll-service.ts` and build the per-row scope as `{ organizationId: query.organizationId, userId: SYSTEM_ACTOR_ID, role: "owner" }`.
+
+`SYSTEM_ACTOR_ID` never reaches the database. `public.users` has no such row, so an audit event carrying it would violate a foreign key — the scheduled path must therefore record audit with `actorType: "system"` and `actorUserId: null`. The sentinel exists only to satisfy the `OrganizationScope` type, which is the correct trade: widening `userId` to `string | null` would weaken the tenancy type for every call site in the codebase to accommodate one caller.
 
 The `news_media` connection is created on demand if absent (D62) — one row per organization, status `connected`, no credential row.
 
@@ -2428,7 +2435,20 @@ describe("monitoring permissions", () => {
     expect(can("analyst", "monitoring.manage_queries")).toBe(false);
   });
 
-  it("grants poll_now to exactly the roles that hold sync_reviews", () => {
+  it("grants poll_now to exactly three roles", () => {
+    expect(can("owner", "monitoring.poll_now")).toBe(true);
+    expect(can("admin", "monitoring.poll_now")).toBe(true);
+    expect(can("communications_lead", "monitoring.poll_now")).toBe(true);
+    expect(can("location_manager", "monitoring.poll_now")).toBe(false);
+    expect(can("approver", "monitoring.poll_now")).toBe(false);
+    expect(can("analyst", "monitoring.poll_now")).toBe(false);
+  });
+
+  // Asserted separately from the explicit list above, and deliberately not
+  // instead of it: this pins the *intent* (poll_now tracks sync_reviews) while
+  // the list pins the actual roles. On its own it would pass if both matrices
+  // were wrong in the same direction.
+  it("keeps poll_now aligned with integration.sync_reviews", () => {
     for (const role of [
       "owner",
       "admin",
@@ -2571,7 +2591,7 @@ Create `src/app/api/cron/news-poll/route.ts`:
 ```ts
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
-import { getDataSource } from "@/lib/data";
+import { getServiceDataSource } from "@/lib/data";
 import { getNewsMonitor, isNewsMonitorAvailable } from "@/news/registry";
 import { pollDueQueries } from "@/lib/monitoring/poll-service";
 
@@ -2603,7 +2623,11 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ status: "not_configured", polled: 0 }, { status: 200 });
   }
 
-  const dataSource = await getDataSource();
+  // Service-role, not `getDataSource()`. Cron carries no session, so a
+  // session-bound client would be rejected by every policy resolving through
+  // auth.uid(). RLS is therefore not the backstop on this path — the poll
+  // service constructs a scope per query row instead (D70).
+  const dataSource = await getServiceDataSource();
   const outcome = await pollDueQueries({
     dataSource,
     monitor: getNewsMonitor(),

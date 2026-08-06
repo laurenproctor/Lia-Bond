@@ -51,6 +51,30 @@ export function conflict(message: string): DataError {
   return new DataError("conflict", message);
 }
 
+/**
+ * A poll is already open for this monitoring query.
+ *
+ * The Supabase adapter raises this from the partial unique index
+ * (`news_poll_runs_one_active`); the demo adapter raises it from a
+ * read-then-write check against the in-memory store, which is safe there
+ * because demo mode has no concurrent writers. Its own type rather than a
+ * generic conflict, for the same reason `SyncRunInProgressError` is: the
+ * caller has to be able to tell "somebody else is already doing this" —
+ * which is fine and needs no remediation — from every other reason a run
+ * could fail to open.
+ */
+export class PollRunInProgressError extends Error {
+  readonly activeRunId: string;
+  readonly monitoringQueryId: string;
+
+  constructor(activeRunId: string, monitoringQueryId: string) {
+    super(`A poll is already running for monitoring query ${monitoringQueryId}.`);
+    this.name = "PollRunInProgressError";
+    this.activeRunId = activeRunId;
+    this.monitoringQueryId = monitoringQueryId;
+  }
+}
+
 const FALLBACK_MESSAGES: Record<DataErrorCode, string> = {
   not_authenticated: "Sign in to continue.",
   not_a_member: "You don't have access to this organization.",

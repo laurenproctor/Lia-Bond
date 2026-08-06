@@ -58,6 +58,36 @@ describe("isProductPath", () => {
     }
   });
 
+  it("does not protect the cron routes, which have no session to gate on", () => {
+    // The one carve-out inside "/api", and the reason `SESSIONLESS_PATHS` is
+    // checked before `PRODUCT_PATHS`. Vercel Cron invokes these with no
+    // browser session at all, so gating them would redirect every scheduled
+    // invocation to "/sign-in" and the handler's own `CRON_SECRET` check
+    // would never run — every poll and analysis sweep silently stops.
+    //
+    // This assertion exists because that failure is invisible: nothing errors,
+    // the routes still build, and the only symptom is data that quietly stops
+    // arriving. The two branches that own these routes and this gate were
+    // developed in parallel and never saw each other until they were merged.
+    for (const path of [
+      "/api/cron",
+      "/api/cron/news-poll",
+      "/api/cron/analyze-mentions",
+    ]) {
+      expect(isProductPath(path), path).toBe(false);
+    }
+  });
+
+  it("still protects an API path that only shares a prefix with the carve-out", () => {
+    // Segment match, not `startsWith`, on the exemption too — otherwise a
+    // future "/api/cronjobs" or "/api/cron-admin" would inherit the bypass and
+    // be reachable with no session at all. The carve-out is the more dangerous
+    // direction of the two, so it gets its own assertion.
+    for (const path of ["/api/cronjobs", "/api/cron-admin"]) {
+      expect(isProductPath(path), path).toBe(true);
+    }
+  });
+
   it("does not protect a marketing path that only shares a prefix", () => {
     // A hypothetical marketing page sharing a prefix with "/overview" must
     // not be swept into the gate by a naive `startsWith`.

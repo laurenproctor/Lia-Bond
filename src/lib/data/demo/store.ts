@@ -1,4 +1,11 @@
-import type { AnalysisRun, Invitation, OAuthState, PlatformSyncRun } from "@/domain";
+import type {
+  AnalysisRun,
+  Invitation,
+  NewsPollRun,
+  NewsRejectedCandidate,
+  OAuthState,
+  PlatformSyncRun,
+} from "@/domain";
 import type { SealedCredentialRecord } from "@/lib/data/types";
 import type { SeedDataset } from "@/lib/seed/dataset";
 import { SEED_DATASET } from "@/lib/seed/dataset";
@@ -76,6 +83,19 @@ interface RuntimeStore {
   /** Invitation id → token hash, held beside the records as the database does. */
   invitationTokenHashes: Map<string, string>;
   invitationSequence: number;
+  /**
+   * News poll history and the rejections each poll produced.
+   *
+   * Runtime-only for the same reason sync and analysis runs are: a seeded
+   * poll run would claim Lia had already spent provider budget it never
+   * spent. `monitoringQueries` itself is standing configuration, not event
+   * history, so it lives in `SeedDataset` instead — see the doc comment
+   * there.
+   */
+  newsPollRuns: NewsPollRun[];
+  newsPollRunSequence: number;
+  newsRejectedCandidates: NewsRejectedCandidate[];
+  newsRejectedCandidateSequence: number;
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -90,6 +110,10 @@ function freshRuntimeStore(): RuntimeStore {
     invitations: [],
     invitationTokenHashes: new Map(),
     invitationSequence: 0,
+    newsPollRuns: [],
+    newsPollRunSequence: 0,
+    newsRejectedCandidates: [],
+    newsRejectedCandidateSequence: 0,
   };
 }
 
