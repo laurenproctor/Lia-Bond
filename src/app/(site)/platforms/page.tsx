@@ -33,6 +33,17 @@ const BADGE: Record<Publishing, string> = {
   monitor: "bg-site-tint text-site-muted ring-site-border",
 };
 
+/**
+ * The publishing modes the table actually uses, in a stable display order.
+ *
+ * Derived rather than listed so the legend below can only ever explain an
+ * answer some row gives.
+ */
+const MODE_ORDER: readonly Publishing[] = ["direct", "manual", "monitor"];
+const PUBLISHING_MODES_IN_USE = MODE_ORDER.filter((mode) =>
+  PLATFORM_ROWS.some((row) => row.publishing === mode),
+);
+
 export default function PlatformsPage() {
   return (
     <>
@@ -108,10 +119,18 @@ export default function PlatformsPage() {
 
       <Section tinted>
         <SectionHeading className="mb-[clamp(28px,4vw,44px)] max-w-[620px]">
-          What those three answers mean.
+          What those answers mean.
         </SectionHeading>
+        {/*
+          Derived from the rows rather than hard-coded, so this can only ever
+          explain an answer the table actually gives. Hard-coding all three
+          modes meant the page described "Publish from Lia" while no platform
+          offered it — the same overclaim the table itself was corrected for,
+          moved one section down. When direct publishing ships, adding it to a
+          row brings its explanation back automatically.
+        */}
         <dl className="grid grid-cols-1 gap-7 md:grid-cols-3">
-          {(["direct", "manual", "monitor"] as const).map((mode) => (
+          {PUBLISHING_MODES_IN_USE.map((mode) => (
             <div key={mode}>
               <dt className="mb-2 text-[16px] font-semibold text-site-ink">
                 {PUBLISHING_LABELS[mode]}
