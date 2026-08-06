@@ -26,10 +26,16 @@ export function AccessForm({
 }) {
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
+  // Separate from `error`: a failure can be generic (a honeypot rejection, a
+  // server problem) with nothing wrong with what was typed into this input.
+  // Only a message keyed to "email" in `fieldErrors` means the email field
+  // itself is what failed, and only that should mark the input invalid.
+  const [emailError, setEmailError] = useState<string | null>(null);
 
   async function onSubmit(formData: FormData) {
     setState("sending");
     setError(null);
+    setEmailError(null);
 
     const result = await submitEarlyAccessAction({
       email: formData.get("email"),
@@ -46,6 +52,7 @@ export function AccessForm({
 
     setState("idle");
     setError(result.error);
+    setEmailError(result.fieldErrors?.email ?? null);
   }
 
   if (state === "sent") {
@@ -71,7 +78,12 @@ export function AccessForm({
 
   return (
     <form action={onSubmit} className={className}>
-      <div className="mx-auto flex max-w-[520px] flex-wrap gap-3">
+      {/* `relative`: the honeypot below is positioned `absolute` against the
+          nearest positioned ancestor, and this component should not depend on
+          an ancestor elsewhere in the tree happening to supply one — that
+          would make its off-screen placement, and so its effectiveness,
+          coincidental to wherever it is mounted. */}
+      <div className="relative mx-auto flex max-w-[520px] flex-wrap gap-3">
         <label htmlFor="access-email" className="sr-only">
           Your work email
         </label>
@@ -83,8 +95,8 @@ export function AccessForm({
           autoComplete="email"
           placeholder="Your work email"
           disabled={state === "sending"}
-          aria-describedby={error ? "access-error" : undefined}
-          aria-invalid={error ? true : undefined}
+          aria-describedby={emailError ? "access-error" : undefined}
+          aria-invalid={emailError ? true : undefined}
           className="min-w-[220px] flex-1 rounded-[10px] border border-site-field px-4 py-3.5 text-[15px] text-site-ink outline-none placeholder:text-site-muted focus:border-site-blue disabled:opacity-60"
         />
 

@@ -1,12 +1,13 @@
 /**
  * The public marketing surface, in one place.
  *
- * Three consumers read this table: the site navigation, the site footer, and
- * `src/app/sitemap.ts`. `src/middleware.ts` is not a consumer — the gate
- * there is a product denylist (see the comment on `PRODUCT_PATHS` in that
- * file), so a marketing route only needs to exist here to show up in the
- * sitemap and the nav; it was never at risk of being redirected to
- * `/sign-in`, and adding one does not require touching the middleware.
+ * Three consumers read this table: `SiteNav` reads `SITE_NAV`, `SiteFooter`
+ * reads `SITE_FOOTER`, and `src/app/sitemap.ts` reads `SITE_ROUTES` directly.
+ * `src/middleware.ts` is not a consumer — the gate there is a product
+ * denylist (see the comment on `PRODUCT_PATHS` in that file), so a marketing
+ * route only needs to exist here to show up in the sitemap and the nav; it was
+ * never at risk of being redirected to `/sign-in`, and adding one does not
+ * require touching the middleware.
  *
  * No `server-only` import: the navigation and footer render this on the client
  * side of the tree in places, and nothing here is a secret.
@@ -109,32 +110,3 @@ export const SITE_FOOTER: readonly SiteFooterColumn[] = [
     ],
   },
 ] as const;
-
-/**
- * Generated files that Next serves from the app directory. Not product
- * routes, and not otherwise in `SITE_ROUTES`, but the sitemap and the robots
- * file are still part of the public site's surface, so they belong in the
- * same set for anything that asks "is this a site path".
- */
-const GENERATED_PUBLIC_FILES = ["/robots.txt", "/sitemap.xml"] as const;
-
-const PUBLIC_SITE_PATHS: ReadonlySet<string> = new Set([
-  ...SITE_ROUTES.map((route) => route.path),
-  ...GENERATED_PUBLIC_FILES,
-]);
-
-/**
- * Exact match only, deliberately.
- *
- * A prefix test would admit `/pricing-internal` and any future private route
- * that happened to share a prefix with a marketing page. The table is complete,
- * so there is nothing to gain by being loose.
- *
- * Not read by `src/middleware.ts`. The gate there redirects only known
- * product routes (a denylist), so this function has no role in deciding what
- * gets bounced to `/sign-in` — it exists for `src/app/sitemap.ts` and other
- * consumers that need to ask "is this part of the public marketing site".
- */
-export function isSitePath(pathname: string): boolean {
-  return PUBLIC_SITE_PATHS.has(pathname);
-}

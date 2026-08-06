@@ -112,6 +112,11 @@
   /* Reference #B97A52 — 3.23:1. */
   --color-site-amber-meta: #9c633f;
 
+  /* The wordmark's own cream, used only on the dark footer surface where the
+     rest of the ink/white scale reads too stark against `site-ink`. Ornament,
+     not text a contrast rule needs to clear. */
+  --color-site-cream: #f3efe6;
+
   --font-site: var(--font-geist), ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", Roboto, sans-serif;
 }

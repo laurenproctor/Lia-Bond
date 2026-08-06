@@ -40,11 +40,15 @@ export function PricingTier({
         </span>
       ) : null}
 
-      <h3
+      {/* `h2`, not `h3`: three of these cards are the page's first heading
+          level after `PageHeading`'s `h1` (`/pricing`), so they sit at the
+          same depth as "Questions, answered" further down the page — a hard
+          `h3` here would skip a level on every render. */}
+      <h2
         className={`mb-1.5 text-[14px] font-semibold ${featured ? "text-white" : "text-site-ink"}`}
       >
         {name}
-      </h3>
+      </h2>
       <p
         className={`mb-5.5 text-[13.5px] leading-[1.5] ${featured ? "text-site-muted-dark" : "text-site-muted"}`}
       >

@@ -3,9 +3,10 @@ import { LogoMark } from "@/components/site/logo-mark";
 import { SITE_FOOTER } from "@/lib/site/routes";
 
 /**
- * Rendered from the route table, so a page added to the table appears here
- * without a second edit — and cannot appear here while missing from the
- * middleware allowlist.
+ * Rendered from the route table, so a page added to `SITE_FOOTER` in
+ * `src/lib/site/routes.ts` appears here without a second edit. There is no
+ * middleware allowlist to stay in step with any more — `src/middleware.ts`
+ * gates on a product denylist, and has no opinion on what shows up here.
  *
  * `data-surface="dark"` switches the focus ring to white, reusing the rule the
  * product already defines for its navy surfaces.
@@ -15,7 +16,7 @@ export function SiteFooter() {
     <footer className="bg-site-ink text-white" data-surface="dark">
       <div className="mx-auto grid w-full max-w-[1200px] grid-cols-1 gap-10 px-[clamp(24px,6vw,106px)] pt-[clamp(56px,6vw,84px)] pb-9 sm:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1fr] lg:gap-[clamp(40px,6vw,110px)]">
         <div>
-          <div className="mb-4 text-[#f3efe6]">
+          <div className="mb-4 text-site-cream">
             <LogoMark className="text-[34px]" />
           </div>
           <p className="mb-2 max-w-[260px] text-[18px] leading-[1.4] text-site-border">

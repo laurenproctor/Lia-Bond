@@ -1,14 +1,26 @@
 /**
  * What Lia can actually do on each platform.
  *
- * Every value here is derived from `ConnectorCapabilities` in
- * `src/domain/entities/platform.ts` and the connections in
- * `src/lib/seed/dataset.ts` — not from marketing copy. CLAUDE.md rule 6:
- * never imply direct publishing where the source does not support it.
+ * Every value here must be derived from a real connector's declared
+ * `ConnectorCapabilities` — today that is `GOOGLE_CONNECTOR_CAPABILITIES` in
+ * `src/integrations/google-business-profile/connector.ts` — or, for a
+ * platform with no connector at all, from the plain fact that nothing has
+ * been built yet. CLAUDE.md rule 6: never imply a capability the source does
+ * not support.
  *
- * `resolvePublishingMode` in the platform entity is the same rule expressed in
- * code: `canPublishResponses` means "direct", readable-but-not-publishable
- * means "manual", and neither means "unavailable".
+ * `src/lib/seed/dataset.ts` is NOT a source for this file. It is demo
+ * fixture data for populating the product UI with plausible-looking records,
+ * and it sets `canPublishResponses: true` on connections — Google included —
+ * that no real connector grants. Deriving a public claim from it is exactly
+ * how this file previously ended up promising direct publishing to Google and
+ * Reddit that the product cannot do. If a row here cannot be justified by
+ * pointing at a connector file under `src/integrations/`, it is wrong.
+ *
+ * `resolvePublishingMode` in `src/domain/entities/platform.ts` is the same
+ * rule expressed in code: `canPublishResponses` means "direct",
+ * readable-but-not-publishable means "manual", and neither means
+ * "unavailable". No connector in this codebase sets `canPublishResponses`,
+ * so no row below may be `"direct"`.
  *
  * The design reference also advertised Booking.com. It is not in the `PLATFORMS`
  * vocabulary and is deliberately absent rather than promised.
@@ -41,14 +53,14 @@ export const PUBLISHING_NOTES: Record<Publishing, string> = {
 export const PLATFORM_ROWS: readonly PlatformRow[] = [
   {
     name: "Google Business Profile",
-    note: "Reviews across every location, with replies posted from Lia once approved.",
-    publishing: "direct",
+    note: "Reviews across every location. Lia drafts the reply; you post it from Google once you approve it.",
+    publishing: "manual",
     available: true,
   },
   {
     name: "Reddit",
-    note: "Threads and comments that name your brand, with replies from your own account.",
-    publishing: "direct",
+    note: "Threads and comments that name your brand. Lia drafts a reply for you to post from your own account.",
+    publishing: "manual",
     available: true,
   },
   {

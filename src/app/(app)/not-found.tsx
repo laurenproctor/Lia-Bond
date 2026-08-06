@@ -10,10 +10,16 @@ import { EmptyState } from "@/components/ui/empty-state";
  * `not-found.tsx` now belongs to the marketing site, which is where an
  * unmatched URL lands; this one keeps the offer that makes sense to somebody
  * already signed in.
+ *
+ * Renders as a `div`, not a `main`: this tree mounts inside `(app)/layout.tsx`
+ * → `AppShell`, which already opens the page's one `<main id="main">`
+ * (`src/components/shell/app-shell.tsx`). A second `<main>` here would be two
+ * main landmarks on the same page — invalid HTML, and a screen reader's
+ * "skip to main content" would have to guess which one.
  */
 export default function AppNotFound() {
   return (
-    <main className="flex min-h-dvh items-center justify-center px-5">
+    <div className="flex min-h-dvh items-center justify-center px-5">
       <div className="lia-card w-full max-w-md">
         <EmptyState
           icon={Compass}
@@ -29,6 +35,6 @@ export default function AppNotFound() {
           }
         />
       </div>
-    </main>
+    </div>
   );
 }

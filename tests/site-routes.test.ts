@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  INDUSTRIES,
-  SITE_FOOTER,
-  SITE_NAV,
-  SITE_ROUTES,
-  isSitePath,
-} from "@/lib/site/routes";
+import { INDUSTRIES, SITE_FOOTER, SITE_NAV, SITE_ROUTES } from "@/lib/site/routes";
 import { PRODUCT_PATHS, isProductPath } from "@/middleware";
 
 /**
@@ -19,33 +13,8 @@ import { PRODUCT_PATHS, isProductPath } from "@/middleware";
  * That inversion is deliberate: the old allowlist bounced every URL it did
  * not recognise to `/sign-in`, which meant a mistyped marketing link or a
  * dead search-engine result landed a stranger on a login form instead of a
- * 404. `isSitePath` still matters — it is what the sitemap and the nav read
- * — but it has no role in deciding what gets redirected any more.
+ * 404.
  */
-
-describe("isSitePath", () => {
-  it("admits every route in the table", () => {
-    for (const route of SITE_ROUTES) {
-      expect(isSitePath(route.path), route.path).toBe(true);
-    }
-  });
-
-  it("admits the generated crawl files", () => {
-    expect(isSitePath("/robots.txt")).toBe(true);
-    expect(isSitePath("/sitemap.xml")).toBe(true);
-  });
-
-  it("does not admit product routes", () => {
-    for (const path of ["/overview", "/mentions", "/settings", "/escalations"]) {
-      expect(isSitePath(path), path).toBe(false);
-    }
-  });
-
-  it("does not admit a prefix match", () => {
-    // "/pricing-internal" starts with a real route but is not one.
-    expect(isSitePath("/pricing-internal")).toBe(false);
-  });
-});
 
 /**
  * `isProductPath` is the actual authentication gate: `src/middleware.ts`

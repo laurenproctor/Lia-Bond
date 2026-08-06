@@ -17,7 +17,7 @@ import {
 export const metadata: Metadata = {
   title: "Platforms",
   description:
-    "Where Lia reads, where it can publish for you, and where it hands you a draft to post yourself.",
+    "Where Lia reads, and exactly how a reply reaches each platform — drafted for you to send, or nothing to reply to at all.",
 };
 
 // The design reference badged "direct" publishing in green, but the site-*
@@ -42,8 +42,9 @@ export default function PlatformsPage() {
           Every source, and exactly what we can do with it.
         </PageHeading>
         <Lede className="max-w-[620px]">
-          Some platforms let software post a reply. Most do not. Lia tells you
-          which is which up front rather than showing you a button that quietly
+          Not every platform lets software post a reply back. Lia tells you
+          exactly how each one works — copied for you to send, or nothing to
+          reply to at all — rather than showing you a button that quietly
           fails.
         </Lede>
       </header>

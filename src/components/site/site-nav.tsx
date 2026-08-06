@@ -62,33 +62,40 @@ export function SiteNav() {
         </button>
       </div>
 
-      {open ? (
-        <div
-          id="site-nav-mobile"
-          className="border-t border-site-border bg-white px-[clamp(24px,6vw,106px)] py-4 md:hidden"
-        >
-          <div className="flex flex-col gap-4">
-            {SITE_NAV.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setOpen(false)}
-                className="text-[15px] font-medium text-site-body"
-              >
-                {item.label}
-              </Link>
-            ))}
+      {/* Always mounted, never just conditionally rendered: the toggle button
+          above sets `aria-controls="site-nav-mobile"` on every page load, and
+          an IDREF that points at an element which only exists while open is
+          dangling the rest of the time — invalid per the ARIA spec, and a
+          screen reader has nothing to announce when the button says it
+          controls something. `hidden` removes the panel from the
+          accessibility tree and layout without unmounting it, so the
+          reference always resolves. */}
+      <div
+        id="site-nav-mobile"
+        hidden={!open}
+        className="border-t border-site-border bg-white px-[clamp(24px,6vw,106px)] py-4 md:hidden"
+      >
+        <div className="flex flex-col gap-4">
+          {SITE_NAV.map((item) => (
             <Link
-              href="/sign-in"
+              key={item.href}
+              href={item.href}
               onClick={() => setOpen(false)}
               className="text-[15px] font-medium text-site-body"
             >
-              Sign in
+              {item.label}
             </Link>
-            <PrimaryNavCta onNavigate={() => setOpen(false)} />
-          </div>
+          ))}
+          <Link
+            href="/sign-in"
+            onClick={() => setOpen(false)}
+            className="text-[15px] font-medium text-site-body"
+          >
+            Sign in
+          </Link>
+          <PrimaryNavCta onNavigate={() => setOpen(false)} />
         </div>
-      ) : null}
+      </div>
     </nav>
   );
 }
