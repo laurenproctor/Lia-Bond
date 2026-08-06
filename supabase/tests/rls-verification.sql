@@ -3,21 +3,16 @@
 -- Repeatable manual check that the policies in
 -- 20260801000200_row_level_security.sql actually isolate tenants.
 --
--- Execution status, as of the onboarding workflow:
+-- Execution status: **all 34 checks pass** against a local stack
+-- (`supabase start`, then `supabase db reset`), as of the onboarding workflow.
 --
--- Sections 1-7 and 9 pass against a local stack (`supabase start` +
--- `supabase db reset`). **Section 8 fails**, and the failure is in the
--- assertion rather than in the policy: "an analyst cannot delete a monitoring
--- query" expects an exception, but a DELETE filtered by an RLS `USING` clause
--- matches zero rows *silently* rather than raising — unlike an INSERT, which
--- fails its `WITH CHECK` and does raise. Verified directly: an analyst's
--- `delete from public.monitoring_queries` affects 0 rows, so the row is
--- protected. The check should assert `row_count = 0`, the way section 3's
--- cross-tenant UPDATE check already does. Left for whoever owns news
--- monitoring.
---
--- Because `psql -v ON_ERROR_STOP=1` halts there, section 9 has to be run on its
--- own until that is fixed. Everything before section 8 runs on the way past.
+-- It did not, until section 8's delete check was corrected. That check expected
+-- an exception from an analyst's DELETE, but a DELETE gated by an RLS `using`
+-- clause matches zero rows *silently* — unlike an INSERT, which fails its
+-- `with check` and raises 42501. The policy was working the whole time; the
+-- assertion was testing for the wrong shape of refusal, and because
+-- `ON_ERROR_STOP=1` halts on the first failure it also hid every section after
+-- it. See the note above section 8.
 --
 -- Usage:
 --   supabase start
@@ -343,10 +338,20 @@ $$;
 --    read-only `viewer` or `analyst` — satisfies. Corrected in
 --    20260807000500_news_monitoring_write_roles_rls.sql.)
 --
--- A write attempted under RLS `with check` fails the whole statement with
--- SQLSTATE 42501 (insufficient_privilege) rather than silently inserting
--- zero rows, so each attempt below is wrapped to turn that exception into a
--- boolean this harness can assert on.
+-- Two different refusal shapes, and conflating them is how this section came
+-- to assert something false:
+--
+-- - An **INSERT** blocked by a `with check` clause fails the whole statement
+--   with SQLSTATE 42501 (insufficient_privilege), so it is wrapped to turn the
+--   exception into a boolean.
+-- - A **DELETE** or **UPDATE** blocked by a `using` clause matches zero rows
+--   *silently*. There is no exception to catch — the row is simply not visible
+--   to the statement — so the assertion is on `row_count`, exactly as section
+--   3's cross-tenant UPDATE check does.
+--
+-- The delete check below originally expected an exception and therefore failed
+-- against a real database while the policy it was testing was working
+-- correctly.
 -- ---------------------------------------------------------------------------
 
 do $$
@@ -355,6 +360,7 @@ declare
   ushg_query_id uuid;
   ushg_run_id uuid;
   raised boolean;
+  affected integer;
 begin
   select * into f from rls_fixtures;
 
@@ -382,13 +388,17 @@ begin
     'an analyst cannot insert a monitoring query (member of the org, but not owner/admin/communications_lead)'
   );
 
-  raised := false;
-  begin
-    delete from public.monitoring_queries where id = ushg_query_id;
-  exception when insufficient_privilege then
-    raised := true;
-  end;
-  perform pg_temp.check(raised, 'an analyst cannot delete a monitoring query');
+  -- No exception to catch: `monitoring_queries_delete_write_roles` gates this
+  -- with a `using` clause, so the row is invisible to the statement and the
+  -- delete matches nothing. Asserting on row_count is what actually proves the
+  -- row survived.
+  delete from public.monitoring_queries where id = ushg_query_id;
+  get diagnostics affected = row_count;
+  perform pg_temp.check(affected = 0, 'an analyst cannot delete a monitoring query');
+  perform pg_temp.check(
+    exists (select 1 from public.monitoring_queries where id = ushg_query_id),
+    'the monitoring query an analyst tried to delete is still there'
+  );
 
   raised := false;
   begin

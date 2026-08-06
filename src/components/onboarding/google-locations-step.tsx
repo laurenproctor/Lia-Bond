@@ -306,7 +306,12 @@ export function GoogleLocationsStep({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          {/* Wraps, and the select is allowed to shrink. At 375px an account
+              picker and a Refresh button do not fit on one line, and a grid or
+              flex child defaults to `min-width: auto` — so without `min-w-0`
+              the select refuses to narrow below its longest option and pushes
+              the page into a horizontal scroll. */}
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             {accounts.length > 1 ? (
               <>
                 <label htmlFor="google-account" className="sr-only">
@@ -316,7 +321,7 @@ export function GoogleLocationsStep({
                   id="google-account"
                   value={accountId ?? ""}
                   onChange={(event) => setAccountId(event.target.value)}
-                  className="min-h-[44px] rounded-xl border border-site-field bg-white px-3 text-[13.5px] text-site-ink"
+                  className="min-h-[44px] min-w-0 flex-1 rounded-xl border border-site-field bg-white px-3 text-[13.5px] text-site-ink"
                 >
                   {accounts.map((account) => (
                     <option
