@@ -24,6 +24,16 @@ import {
 
 /** Below this, polling would burn the daily request budget (D85). */
 export const MIN_POLL_INTERVAL_MINUTES = 60;
+/**
+ * The admission floor a query starts at.
+ *
+ * One value, declared beside the schema it belongs to, so the integration
+ * screen's editor and the onboarding configurator cannot drift onto two
+ * different ideas of "default". Matches the seed data's own default.
+ */
+export const DEFAULT_RELEVANCE_THRESHOLD = 0.35;
+/** Four hours. What the query editor has always offered a new query. */
+export const DEFAULT_POLL_INTERVAL_MINUTES = MIN_POLL_INTERVAL_MINUTES * 4;
 /** The GNews free tier returns at most this many articles per request. */
 export const MAX_ARTICLES_PER_POLL = 10;
 /** A repeated headline inside this window is treated as syndication (D86). */
@@ -97,6 +107,29 @@ export const updateMonitoringQueryInputSchema =
   createMonitoringQueryInputSchema.partial();
 export type UpdateMonitoringQueryInput = z.infer<
   typeof updateMonitoringQueryInputSchema
+>;
+
+/**
+ * What the onboarding configurator may set.
+ *
+ * A strict subset of `createMonitoringQueryInputSchema`, picked rather than
+ * restated so the fields cannot drift from the real schema. Everything absent
+ * — query type, location binding, publisher lists, the admission threshold,
+ * the poll interval — is filled with the documented defaults on the server
+ * (`saveOnboardingNewsQuery`), because those are tuning controls that belong
+ * on the full News & Media screen, not decisions to demand from somebody four
+ * minutes into their account.
+ */
+export const onboardingNewsMonitoringInputSchema = createMonitoringQueryInputSchema.pick({
+  name: true,
+  keywords: true,
+  exclusions: true,
+  sourceCountry: true,
+  language: true,
+  enabled: true,
+});
+export type OnboardingNewsMonitoringInput = z.infer<
+  typeof onboardingNewsMonitoringInputSchema
 >;
 
 /**

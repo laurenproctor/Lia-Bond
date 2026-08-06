@@ -1,9 +1,13 @@
 /**
- * The Google mark, and the tiles for platforms that are not available yet.
+ * The Google mark, in onboarding's large marketing-brand treatment.
  *
  * Kept apart from `components/ui/source-badge.tsx` because that component is
- * the product's dense inline glyph, sized for table rows. This is the large
- * marketing-brand treatment onboarding uses.
+ * the product's dense inline glyph, sized for table rows.
+ *
+ * This file used to also hold `PlatformTile`, the inert Yelp/Tripadvisor/
+ * Trustpilot tiles of the Google-only step 2. The three-source redesign
+ * replaced those with real source cards (`onboarding-source-card.tsx`), so
+ * the tile is gone rather than kept as dead code.
  */
 
 /** Google's four-colour G, drawn rather than fetched — no external requests. */
@@ -35,44 +39,3 @@ export function GoogleGlyph() {
   );
 }
 
-/**
- * A platform Lia does not connect to yet.
- *
- * An `<li>` with no interactive element in it. Deliberately **not** a disabled
- * button: a disabled control implies the capability exists and is temporarily
- * unavailable, and there is no Yelp connector behind this at all. The status
- * word is text a screen reader reads in order, not an `aria-disabled` attribute
- * on something that was never operable.
- */
-export function PlatformTile({
-  name,
-  description,
-  tint,
-  initial,
-}: {
-  name: string;
-  description: string;
-  /** Tailwind classes for the mark's background and letter colour. */
-  tint: string;
-  initial: string;
-}) {
-  return (
-    <li className="flex flex-col gap-3 rounded-2xl border border-site-border bg-site-tint/60 p-4">
-      <div className="flex items-center gap-3">
-        <span
-          className={`flex size-9 shrink-0 items-center justify-center rounded-full text-[15px] font-bold ${tint}`}
-          aria-hidden
-        >
-          {initial}
-        </span>
-        <div className="min-w-0">
-          <p className="truncate text-[14px] font-bold text-site-ink">{name}</p>
-          <p className="text-[11.5px] font-semibold text-site-muted">
-            Available after setup
-          </p>
-        </div>
-      </div>
-      <p className="text-[12.5px] leading-relaxed text-site-body">{description}</p>
-    </li>
-  );
-}

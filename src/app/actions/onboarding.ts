@@ -7,8 +7,10 @@ import {
   INVITABLE_ROLES,
   INVITATION_TTL_DAYS,
   ONBOARDING_READY_PATH,
+  onboardingNewsMonitoringInputSchema,
   updateBrandVoiceInputSchema,
   updateOnboardingOrganizationInputSchema,
+  type MonitoringQuery,
   type OrganizationOnboarding,
 } from "@/domain";
 import { authorize } from "@/lib/actions/guard";
@@ -21,7 +23,7 @@ import {
 import { recordAuditEvent } from "@/lib/audit/record";
 import { saveBrandVoice } from "@/lib/brand-voice/save";
 import { appOrigin } from "@/lib/env";
-import { conflict } from "@/lib/data/errors";
+import { conflict, DataError } from "@/lib/data/errors";
 import {
   completeBrandVoiceStep,
   completeLocationsStep,
@@ -39,6 +41,11 @@ import {
   saveGoogleLocationMappings,
   saveMappingsInputSchema,
 } from "@/lib/integrations/google-mapping";
+import { saveOnboardingNewsQuery } from "@/lib/onboarding/news";
+import { NEWS_ERROR_MESSAGES } from "@/lib/monitoring/poll-service";
+import { NewsError } from "@/news/errors";
+import type { NewsMonitor } from "@/news/monitor";
+import { getNewsMonitor } from "@/news/registry";
 
 /**
  * Onboarding server actions.
@@ -136,6 +143,58 @@ export async function skipOnboardingSourceAction(): Promise<
     await skipSourceStep(context);
     revalidateOnboarding();
     return { nextPath: "/onboarding/locations" };
+  });
+}
+
+/**
+ * Save the optional News monitoring configuration offered on step 2.
+ *
+ * Backed entirely by the real monitoring-query architecture: the same input
+ * vocabulary (`onboardingNewsMonitoringInputSchema` is a pick of the create
+ * schema), the same `createMonitoringQuery` service with its implicit
+ * `news_media` connection, and the same audit events. Which persisted query
+ * this action edits is decided by `findOnboardingNewsQuery` — the oldest
+ * organization-wide brand query — so pressing save five times updates one
+ * row rather than creating five.
+ *
+ * Deliberately does **not** touch onboarding progress. News is optional;
+ * only `completeOnboardingSourceAction` / `skipOnboardingSourceAction`
+ * settle step 2, and both remain gated on Google alone.
+ */
+export async function saveOnboardingNewsMonitoringAction(
+  input: unknown,
+): Promise<ActionResult<MonitoringQuery>> {
+  return runAction("onboarding.news_monitoring", async () => {
+    const parsed = onboardingNewsMonitoringInputSchema.parse(input);
+    // The monitoring permission, not `onboarding.manage`: this writes a
+    // monitoring query, and the authority to do that is the same one the News
+    // & Media screen requires. Owners and admins — the only roles the wizard
+    // admits — hold it.
+    const context = await authorize("monitoring.manage_queries");
+
+    // Same translation `resolveMonitor` makes in `actions/monitoring.ts`:
+    // Lia's own sentence for the code, never the provider's message.
+    let monitor: NewsMonitor;
+    try {
+      monitor = getNewsMonitor();
+    } catch (error) {
+      if (error instanceof NewsError) {
+        throw new DataError("unavailable", NEWS_ERROR_MESSAGES[error.code]);
+      }
+      throw error;
+    }
+
+    const query = await saveOnboardingNewsQuery(
+      context,
+      parsed,
+      monitor,
+      new Date().toISOString(),
+    );
+
+    revalidateOnboarding();
+    revalidatePath("/integrations/news-media");
+
+    return query;
   });
 }
 

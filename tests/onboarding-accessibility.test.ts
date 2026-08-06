@@ -228,22 +228,69 @@ describe("the brand-voice sliders", () => {
 
 describe("unavailable integrations", () => {
   it("announces the status as text, in reading order", () => {
-    expect(source("src/components/onboarding/platform-tile.tsx")).toContain(
-      "Available after setup",
+    // The vocabulary lives in one closed map, so a card cannot invent a state
+    // ("Active", "Live") the system behind it cannot prove.
+    const badge = source("src/components/onboarding/source-status-badge.tsx");
+    expect(badge).toContain('unavailable: "Available after setup"');
+  });
+
+  it("explains the disabled Reddit control to assistive technology", () => {
+    // The Reddit card's button is genuinely disabled — the capability is on
+    // the roadmap, not behind the button — and the reason travels with the
+    // control rather than sitting loose beside it.
+    const card = source("src/components/onboarding/reddit-source-card.tsx");
+    expect(card).toContain("disabled");
+    expect(card).toContain("aria-describedby={explanationId}");
+    expect(card).toContain(
+      "does not have an operational Reddit connection",
     );
   });
 
-  it("is not a control at all, disabled or otherwise", () => {
-    // A disabled button implies a capability that exists and is temporarily
-    // unavailable. There is no Yelp connector behind this, so the tile is inert
-    // markup rather than something switched off.
-    const tile = code("src/components/onboarding/platform-tile.tsx");
-    const marks = tile.slice(tile.indexOf("export function PlatformTile"));
+  it("claims no activity Reddit does not have", () => {
+    const card = code("src/components/onboarding/reddit-source-card.tsx");
+    expect(card).not.toMatch(/Active|Connected|Last checked|Threads/);
+    // No counts: every number on step 2 must come from a persisted
+    // operational record, and Reddit has none.
+    expect(card).not.toMatch(/\d+ (terms|communities)/);
+  });
+});
 
-    expect(marks).not.toContain("<button");
-    expect(marks).not.toContain("disabled");
-    expect(marks).not.toContain("aria-disabled");
-    expect(marks).not.toContain("onClick");
+describe("the news configurator", () => {
+  const step = source("src/components/onboarding/connect-sources-step.tsx");
+  const card = source("src/components/onboarding/news-source-card.tsx");
+  const configurator = source(
+    "src/components/onboarding/news-monitoring-configurator.tsx",
+  );
+
+  it("announces the expanded state on its trigger", () => {
+    expect(card).toContain("aria-expanded={expanded}");
+    expect(card).toContain('aria-controls="news-monitoring-configurator"');
+    expect(configurator).toContain('id="news-monitoring-configurator"');
+  });
+
+  it("moves focus to the heading when it opens", () => {
+    expect(configurator).toContain("headingRef.current?.focus()");
+    expect(configurator).toContain("tabIndex={-1}");
+  });
+
+  it("returns focus to the trigger when it closes", () => {
+    expect(step).toContain("newsButtonRef.current?.focus()");
+  });
+
+  it("announces validation failures and saves", () => {
+    // Failures use the shared alert treatment; the save confirmation is a
+    // status, so it is announced without stealing focus.
+    expect(configurator).toContain("OnboardingError");
+    expect(configurator).toContain('role="status"');
+  });
+
+  it("names every chip's remove button after its term", () => {
+    expect(configurator).toContain("Remove {term}");
+  });
+
+  it("labels every field", () => {
+    expect(configurator).toContain("<label htmlFor={id}");
+    expect(configurator).not.toMatch(/placeholder=\{label\}/);
   });
 });
 

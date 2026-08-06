@@ -33,7 +33,7 @@ flowchart LR
 | Route | Step | Purpose |
 | --- | --- | --- |
 | `/onboarding/organization` | 1 | Enrich the organization created at signup |
-| `/onboarding/connect-sources` | 2 | Connect Google Business Profile, or skip |
+| `/onboarding/connect-sources` | 2 | Three sources: connect Google, optionally configure News & Media, see Reddit's real status. Or skip. |
 | `/onboarding/locations` | 3 | Map Google listings, or add a location by hand |
 | `/onboarding/brand-voice` | 4 | Set the five-axis voice |
 | `/onboarding/team` | 5 | Issue invitation links |
@@ -151,31 +151,123 @@ Step 2's skip requires a deliberate confirmation that states the three
 consequences by name. It is a text button, not an outlined one — skipping stays
 reachable but must not read as the primary path.
 
-## 7. Google OAuth return path
+## 7. Step 2 — three sources
+
+Step 2 presents Google Business Profile, News & Media, and Reddit as three
+source cards inside one working card, with the same aside-and-card layout as
+every other step. The three are not equals and the screen does not pretend
+they are:
+
+- **Google** is the prerequisite. The step completes when it is connected, or
+  when the person confirms — deliberately — that they are continuing without
+  it. Nothing else can satisfy that prerequisite.
+- **News & Media** is optional persisted configuration against the real
+  monitoring-query system (section 7.2). It never blocks progress.
+- **Reddit** is presented exactly as capable as the repository is, which
+  today is not at all (section 7.3).
+
+Every status word and count on the screen derives from persisted rows. A card
+may say *Recommended*, *Optional*, *Connected*, *Configured*, or *Available
+after setup* (`source-status-badge.tsx` is the closed vocabulary); nothing is
+ever labelled *Active*, because a saved row proves configuration, not
+activity.
+
+### 7.1 Google OAuth return path
 
 The CTA is a real `<form method="post">` to the existing
 `/api/integrations/google-business-profile/connect` route. A GET that mints
 OAuth state and redirects to a consent screen can be fired by an `<img>` tag on
 any page on the internet; POST means the request came from a form on Lia.
 
-`ALLOWED_REDIRECT_PATHS` gained `/onboarding/connect-sources` and
-`/onboarding/locations`. Step 2 asks for the latter, so a successful grant lands
-on step 3 rather than returning to a step just completed. The value is validated
-against the closed list twice — when the state is issued, and again when it is
-consumed — so the hidden field is a preference, not an instruction. An unlisted
-path is silently ignored rather than rejected, which is the safest handling for
-the parameter an open-redirect attack wants.
+`ALLOWED_REDIRECT_PATHS` contains `/onboarding/connect-sources` and
+`/onboarding/locations`. Step 2 asks for **`/onboarding/connect-sources`** —
+the grant returns to the three-source screen, so the person can configure the
+optional monitoring beside the connection they just made before moving on. The
+value is validated against the closed list twice — when the state is issued,
+and again when it is consumed — so the hidden field is a preference, not an
+instruction. An unlisted path is silently ignored rather than rejected, which
+is the safest handling for the parameter an open-redirect attack wants.
 
 Nothing about the grant reaches the URL: the callback appends `connected=1` and
 the account name, never a code, a token, or the state value.
 
-If Google was connected on a previous visit, step 2 shows the connection and
-replaces the CTA with **Continue**, which calls
-`completeOnboardingSourceAction`. That action re-reads the connection
-server-side — a client that could mark the step complete without one would let
-anybody past the only step with a real external prerequisite. No duplicate
-connection is created: `platform_connections` is upserted on
-`(organization, platform)`.
+**The callback settles the source step itself** when the grant's return path
+is an onboarding path: it re-reads the onboarding row, and unless the
+organization has already finished setup it calls `completeSourceStep` —
+best-effort, with failure swallowed, because losing the redirect over a
+progress write would strand somebody who just granted access. This is what
+makes the return loop-free: step 2 renders as a settled, revisitable step, and
+**Save and continue** merely records the (idempotent) completion again on the
+way to step 3. Both repository adapters clear `source_skipped_at` when they
+set `source_completed_at`, so someone who skipped, came back, and connected
+does not trip the both-timestamps check constraint. A grant that started from
+`/integrations` never touches onboarding — the gate is the stored return
+path, and a completed organization is refused belt-and-braces on its own
+status.
+
+If Google was connected on a previous visit, step 2 shows the connection with
+the safe account name and a quiet **Manage connection** reauthorization form;
+the primary action stays **Save and continue**, and nobody is pushed through
+OAuth again for revisiting the step. `completeOnboardingSourceAction` still
+re-reads the connection server-side — a client that could mark the step
+complete without one would let anybody past the only step with a real
+external prerequisite. No duplicate connection is created:
+`platform_connections` is upserted on `(organization, platform)`.
+
+### 7.2 News & Media configuration
+
+The card is backed entirely by the existing monitoring-query architecture —
+there is no onboarding-only news table, no second validation schema, and no
+parallel write path.
+
+- **Input** is `onboardingNewsMonitoringInputSchema`, a `pick` of the real
+  create schema: name, keywords, exclusions, country, language, enabled. The
+  advanced fields the wizard never shows get the documented defaults on
+  create — `queryType: "brand"`, `locationId: null`, empty publisher lists,
+  `DEFAULT_RELEVANCE_THRESHOLD` (0.35), `DEFAULT_POLL_INTERVAL_MINUTES` (240)
+  — and are **left untouched on update**, so tuning done on the News & Media
+  screen survives a revisit to step 2.
+- **The save path** is `saveOnboardingNewsMonitoringAction` →
+  `saveOnboardingNewsQuery` → the existing `createMonitoringQuery` service,
+  which provisions the implicit `news_media` connection (D80) and records the
+  same audit events a save from the News & Media screen records. The action
+  requires `monitoring.manage_queries`, the same permission that screen
+  requires.
+- **Which query onboarding manages** is decided by `findOnboardingNewsQuery`:
+  the **oldest organization-wide brand query** (`queryType = 'brand'`,
+  `locationId IS NULL`, ordered by `createdAt` then id). Structural, persisted
+  fields — never the display name, which anybody can edit. Repeated saves
+  therefore edit one row rather than accreting "Brand watch" copies, and a
+  brand query created by hand is edited rather than shadowed. The known
+  limitation: a hand-created organization-wide brand query is
+  indistinguishable from an onboarding-created one, because
+  `monitoring_queries` has no origin column and a migration for bookkeeping
+  was not worth it.
+- **Prefill** comes from real organization data only: the organization's name
+  as the first keyword, its website host as a one-press suggestion. No
+  fabricated aliases, people, or location names — step 3 has not chosen
+  locations yet, and the wizard does not pretend otherwise.
+- **The summary** on the card (`summarizeNewsMonitoring`,
+  `lastSuccessfulNewsPollAt`) is derived from persisted queries and
+  `news_poll_runs`: enabled-query count, unique keyword count, language and
+  country only when every enabled query agrees, and the last **completed**
+  poll's time — otherwise "Not checked yet". The badge says *Configured*, not
+  *Active*.
+- **Location queries are not auto-created after step 3.** The data model
+  cannot distinguish onboarding-generated queries from user-created ones
+  without a migration, so automatic per-location monitoring is left to the
+  full News & Media screen and recorded here as a limitation.
+
+### 7.3 Reddit
+
+There is no Reddit connector, monitor, persistence, or polling service in
+this repository — `getConnector("reddit")` throws, and
+`tests/onboarding-sources.test.ts` pins that fact to the card. The card
+renders the *Available after setup* badge, honest copy, and a genuinely
+disabled **Configure after setup** button whose reason travels with it via
+`aria-describedby`. No configuration form, no counts, no last-checked time,
+and no write path of any kind. `docs/architecture/current-state.md` records
+the capability gap.
 
 ## 8. Location mapping
 
@@ -363,7 +455,8 @@ Eight suites, all against the demo adapter and the real source:
 | `onboarding-preview.test.ts` | determinism, no provider, every axis has an effect, phrase handling |
 | `onboarding-ready.test.ts` | quick-win hierarchy end to end, import status from real runs, no percentage field |
 | `onboarding-permissions.test.ts` | permission matrix, RLS policy text, OAuth allowlist, audit vocabulary, no credentials in client code, mock mode |
-| `onboarding-accessibility.test.ts` | `aria-current`, labels, sliders, hidden decoration, inert platform tiles, heading order, no product palette |
+| `onboarding-accessibility.test.ts` | `aria-current`, labels, sliders, hidden decoration, the disabled Reddit control's explanation, the configurator's focus and announcement behaviour, heading order, no product palette |
+| `onboarding-sources.test.ts` | step 2's three-source model: deterministic onboarding-query selection, dedupe-safe News saves through the real service, schema-compliant defaults, truthful summaries, Reddit's absent capability, Google-only completion |
 | `onboarding-activation.test.ts` | the overview banner appears only while its condition holds, and disappears |
 
 `supabase/tests/rls-verification.sql` gained a section 9 covering
@@ -389,6 +482,11 @@ local Postgres.**
   without `completed_at`, a step both completed and skipped, an unknown
   organization size, a second row for one organization, and an orphan row;
 - RLS is on, there is no delete policy, and section 9's seven checks pass;
+- `supabase/tests/rls-verification.sql` now passes **end to end — all 34
+  checks**. It did not before: section 8's analyst-delete assertion expected
+  an exception where an RLS `using` clause filters silently, which failed
+  against a real database and hid every section after it. Corrected to assert
+  `row_count = 0`, matching section 3's cross-tenant UPDATE check;
 - 21 assertions against the **Supabase adapter** under a real signed-in user
   session — so every policy applied — covering the `nowIfUnset` sentinel's
   idempotence, the skip/complete transitions, the completion refusal,
@@ -402,32 +500,45 @@ column list matches the new table's real columns.
 
 ## 15. Known limitations
 
-1. **The pre-existing `rls-verification.sql` fails in section 8, before section
-   9 is reached.** The check "an analyst cannot delete a monitoring query"
-   expects an exception, but a DELETE filtered by an RLS `USING` clause matches
-   zero rows silently rather than raising — so the assertion is wrong, not the
-   policy. Confirmed directly: an analyst's `delete from monitoring_queries`
-   affects 0 rows. That belongs to news monitoring, not to onboarding, and was
-   left alone. Section 9 was run separately and passes; running the file
-   end-to-end needs that section-8 assertion fixed first.
-2. **No real browser was driven.** The walkthrough was HTTP-level against a dev
+1. **No real browser was driven.** The walkthrough was HTTP-level against a dev
    server in demo + Google mock mode. Rendering, both guards, all five steps,
    both step-3 paths, the ready screen, and a full mock OAuth round trip were
    verified; layout at 375 / 768 / 1024 / 1440 px was **not**.
-3. **No real Google OAuth flow has run.** Mock mode exercises state issue,
+2. **No real Google OAuth flow has run.** Mock mode exercises state issue,
    callback, code exchange, discovery, and mapping, but no live Google Cloud
    project was involved.
-4. **Review import is manual.** There is no scheduled review sync, so a customer
+3. **Review import is manual.** There is no scheduled review sync, so a customer
    who closes the ready screen without pressing *Start importing reviews* has an
    empty workspace until they press it on the integrations screen. The
    activation banner on `/overview` is what surfaces that.
-5. **Step 1's two writes are not atomic** (organization row, then onboarding
+4. **Step 1's two writes are not atomic** (organization row, then onboarding
    row). Ordered so a crash leaves the details saved and the step unmarked,
    which is recoverable by pressing the button again.
-6. **The activation banner's dismissal is per-session.** Persisting it would
+5. **The activation banner's dismissal is per-session.** Persisting it would
    need a column, and the banner already removes itself when its condition stops
    being true.
-7. **An invited admin joining an organization whose owner abandoned setup will
+6. **An invited admin joining an organization whose owner abandoned setup will
    be diverted into the wizard.** The guard is role-based and state-based rather
    than signup-path-based; that organization genuinely is unconfigured, and the
    admin has the authority to finish it.
+7. **A cancelled Google grant loses its message during onboarding.** The
+   callback's failure path redirects to `/integrations?error=…`, and the
+   product shell's guard immediately diverts an unfinished organization back
+   into the wizard — dropping the query string. The person lands on step 2
+   with Google accurately shown as disconnected, but without the sentence
+   explaining why. Fixing it would mean redirecting failures to a path taken
+   from an unconsumed state parameter, which is exactly the parameter the
+   open-redirect protections exist to distrust.
+8. **Reddit monitoring does not exist.** The step-2 card says so; nothing in
+   this repository ingests, persists, or polls Reddit. See
+   `docs/architecture/current-state.md`.
+9. **No automatic location News queries after step 3.** `monitoring_queries`
+   cannot distinguish onboarding-generated queries from user-created ones, so
+   per-location monitoring stays a manual step on the News & Media screen
+   rather than risking duplicate or overwritten queries on retries.
+10. **A hand-created organization-wide brand query is adopted by step 2.**
+    `findOnboardingNewsQuery` identifies the onboarding-managed query
+    structurally (oldest org-wide brand query), which is also how it avoids
+    duplicates — the trade-off is that the wizard edits such a query rather
+    than creating a second one, which is the intended behaviour but worth
+    knowing.

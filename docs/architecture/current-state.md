@@ -93,7 +93,7 @@ nothing with it but the root layout's font.
 | `/reset-password` | Sets a new password using the recovery session. Outside the app shell. | Supabase Auth |
 | `/auth/callback` | Where an emailed auth link lands; establishes the session | Supabase Auth |
 | `/onboarding/organization` | Setup step 1 — enrich the organization created at signup. Outside the app shell. | repositories |
-| `/onboarding/connect-sources` | Setup step 2 — connect Google Business Profile, or skip | repositories |
+| `/onboarding/connect-sources` | Setup step 2 — three sources: Google (prerequisite), News & Media (optional, real monitoring queries), Reddit (not operational, honestly labelled) | repositories |
 | `/onboarding/locations` | Setup step 3 — map Google listings, or add a location by hand | repositories + Google API |
 | `/onboarding/brand-voice` | Setup step 4 — the existing five-axis voice | repositories |
 | `/onboarding/team` | Setup step 5 — issue copyable invitation links | repositories |
@@ -306,6 +306,22 @@ seeded tenants because the backfill runs before the seed loads.
 `can_write_in_organization`, because finishing setup decides what everybody in
 the organization sees on sign-in. The RLS policies on the table restate that
 rather than trusting the application.
+
+Step 2 (`/onboarding/connect-sources`) is a three-source screen: Google
+Business Profile (the prerequisite, real OAuth, returns to step 2 and the
+callback settles the source step for onboarding-originated grants), News &
+Media (optional configuration written through the **existing**
+monitoring-query service — `saveOnboardingNewsQuery` edits the oldest
+organization-wide brand query rather than creating duplicates), and Reddit.
+
+**Reddit monitoring is not implemented.** `reddit` exists as platform-enum
+vocabulary, seed/demo fixture data, and a presentation route
+(`/reddit/[id]`); there is no Reddit connector, monitor, persistence, or
+polling service, and `getConnector("reddit")` throws. The step-2 card
+therefore renders *Available after setup* with a disabled control and no
+counts — the interface reflects actual repository capability, and this
+paragraph is the record of the gap. Building the ingestion provider is future
+work (`docs/implementation-plan.md`, phase 5).
 
 Full detail, including the quick-win hierarchy and what the flow deliberately
 does not claim, is in `docs/onboarding.md`.
