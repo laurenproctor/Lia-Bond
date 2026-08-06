@@ -6,7 +6,7 @@
 --
 -- Deterministic: ids are derived from stable labels and timestamps are
 -- anchored to 2026-08-01T18:00:00.000Z, so re-running produces identical rows.
--- Safe to re-run: every insert is "on conflict (id) do nothing".
+-- Safe to re-run: every insert is "on conflict (<primary key>) do nothing".
 --
 -- Contains no real credentials, tokens, or personal data.
 
@@ -218,6 +218,16 @@ on conflict (id) do nothing;
 insert into public.brand_voice_profiles (id, organization_id, name, axis_warmth, axis_detail, axis_formality, axis_confidence, axis_hospitality, approved_phrases, prohibited_phrases, version, updated_by_user_id, created_at, updated_at) values
   ('b3239145-5e2e-542e-82c5-2474fa86cea2', '2e10c03b-59de-5083-b50b-c2878784ebaa', 'Union Square Hospitality voice', 45, 40, 55, 44, 35, '{"thank you for sharing","we appreciate the feedback","we''re here to help","we look forward to welcoming you back"}', '{"we never","not our fault","policy prohibits","as per our policy"}', 1, '174d1f97-afca-5692-bd2b-f960039b725a', '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z')
 on conflict (id) do nothing;
+
+-- Both seeded organizations finished setup long ago. The backfill in
+-- 20260808000100_organization_onboarding.sql runs before this file, so it
+-- never sees them — without these rows a fresh `supabase db reset` would
+-- leave both tenants with no onboarding record.
+-- organization_onboarding (2 rows)
+insert into public.organization_onboarding (organization_id, status, current_step, organization_completed_at, source_completed_at, source_skipped_at, locations_completed_at, locations_skipped_at, brand_voice_completed_at, team_completed_at, team_skipped_at, completed_at, ready_viewed_at, organization_size, created_at, updated_at) values
+  ('2e10c03b-59de-5083-b50b-c2878784ebaa', 'completed', 'ready', '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z', null, '2025-12-04T18:00:00.000Z', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
+  ('2cfb101c-667c-588b-a37e-d52a0f6209ba', 'completed', 'ready', '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z', null, '2025-12-04T18:00:00.000Z', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z')
+on conflict (organization_id) do nothing;
 
 -- audit_events (9 rows)
 insert into public.audit_events (id, organization_id, actor_user_id, actor_type, event_type, entity_type, entity_id, previous_state, new_state, metadata, occurred_at) values

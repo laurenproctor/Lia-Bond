@@ -14,6 +14,7 @@ export * from "@/domain/entities/location";
 export * from "@/domain/entities/platform";
 export * from "@/domain/entities/oauth-state";
 export * from "@/domain/entities/invitation";
+export * from "@/domain/entities/onboarding";
 export * from "@/domain/entities/mention";
 export * from "@/domain/entities/sync-run";
 export * from "@/domain/entities/analysis-run";

@@ -1,5 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { safeDestination } from "@/lib/auth/redirect";
+import {
+  postAuthDestination,
+  provisionPendingOrganization,
+} from "@/lib/onboarding/post-auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 /**
@@ -84,5 +88,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  return NextResponse.redirect(`${origin}${next}`);
+  // Confirming an email is the moment a self-serve signup finally has an
+  // authenticated caller, so this is where its organization gets created when
+  // the project requires confirmation. It no-ops for a password-recovery link
+  // and for anybody who already belongs to an organization — including every
+  // invitee, whose membership was granted by `accept_invitation` and who must
+  // never be handed an organization of their own.
+  await provisionPendingOrganization();
+
+  // A recovery link names its own destination and that has to win: `next` is
+  // `/reset-password`, and diverting a half-way-through password reset into a
+  // setup wizard would leave somebody unable to finish either. Only the default
+  // destination is open to onboarding's opinion.
+  const destination =
+    searchParams.get("next") === null ? await postAuthDestination(next) : next;
+
+  return NextResponse.redirect(`${origin}${destination}`);
 }

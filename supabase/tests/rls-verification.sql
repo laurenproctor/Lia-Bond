@@ -3,10 +3,21 @@
 -- Repeatable manual check that the policies in
 -- 20260801000200_row_level_security.sql actually isolate tenants.
 --
--- This script has NOT been executed. The environment used to build workflow 01
--- had no PostgreSQL server available and no running Docker daemon, so it is
--- provided as the documented verification procedure rather than as a passing
--- result. Run it before trusting the policies in any deployment.
+-- Execution status, as of the onboarding workflow:
+--
+-- Sections 1-7 and 9 pass against a local stack (`supabase start` +
+-- `supabase db reset`). **Section 8 fails**, and the failure is in the
+-- assertion rather than in the policy: "an analyst cannot delete a monitoring
+-- query" expects an exception, but a DELETE filtered by an RLS `USING` clause
+-- matches zero rows *silently* rather than raising — unlike an INSERT, which
+-- fails its `WITH CHECK` and does raise. Verified directly: an analyst's
+-- `delete from public.monitoring_queries` affects 0 rows, so the row is
+-- protected. The check should assert `row_count = 0`, the way section 3's
+-- cross-tenant UPDATE check already does. Left for whoever owns news
+-- monitoring.
+--
+-- Because `psql -v ON_ERROR_STOP=1` halts there, section 9 has to be run on its
+-- own until that is fixed. Everything before section 8 runs on the way past.
 --
 -- Usage:
 --   supabase start
@@ -388,7 +399,7 @@ begin
   end;
   perform pg_temp.check(
     raised,
-    'an analyst cannot insert a news poll run — the concrete path a viewer or analyst could otherwise use to exhaust the shared global request budget (D67) for every tenant'
+    'an analyst cannot insert a news poll run — the concrete path a viewer or analyst could otherwise use to exhaust the shared global request budget (D85) for every tenant'
   );
 
   raised := false;
@@ -430,6 +441,110 @@ begin
   -- everyone, including owners and admins, would pass every check above too.
   perform pg_temp.check(not failed and inserted_id is not null,
     'an admin (in monitoring.manage_queries''s role set) can insert a monitoring query');
+
+  reset role;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 9. organization_onboarding
+--
+-- Three properties, and the third is the one worth the section. Reads are open
+-- to any active member because the route guard runs for every role. Writes are
+-- owner-and-admin only — narrower than `can_write_in_organization`, because
+-- finishing setup decides what everybody in the organization sees on sign-in.
+-- And a member of one organization must not be able to see, still less
+-- advance, another organization's setup.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  f record;
+  visible integer;
+  raised boolean;
+  updated integer;
+begin
+  select * into f from rls_fixtures;
+
+  -- Every organization has a row: provision_organization writes one, and the
+  -- backfill in 20260808000100 covered everything that predated it. A missing
+  -- row here means the backfill or the seed did not land.
+  perform pg_temp.become(f.ushg_admin);
+
+  select count(*) into visible from public.organization_onboarding;
+  perform pg_temp.check(
+    visible = 1,
+    'an admin sees exactly one onboarding row — their own organization''s, never Harbor''s'
+  );
+
+  select count(*) into visible
+    from public.organization_onboarding
+   where organization_id = f.harbor_id;
+  perform pg_temp.check(
+    visible = 0,
+    'cross-organization read of onboarding progress returns nothing'
+  );
+
+  -- An admin may advance their own organization's setup.
+  update public.organization_onboarding
+     set current_step = 'connect_sources'
+   where organization_id = f.ushg_id;
+  get diagnostics updated = row_count;
+  perform pg_temp.check(
+    updated = 1,
+    'an admin can advance their own organization''s onboarding'
+  );
+
+  -- …and cannot touch another organization's, which fails as zero rows
+  -- matched rather than as an error: the USING clause filters it out before
+  -- the update is attempted.
+  update public.organization_onboarding
+     set current_step = 'team'
+   where organization_id = f.harbor_id;
+  get diagnostics updated = row_count;
+  perform pg_temp.check(
+    updated = 0,
+    'a cross-organization onboarding update matches no rows'
+  );
+
+  reset role;
+
+  -- An analyst reads (the guard needs it) but writes nothing.
+  perform pg_temp.become(f.ushg_analyst);
+
+  select count(*) into visible from public.organization_onboarding;
+  perform pg_temp.check(
+    visible = 1,
+    'an analyst can read onboarding progress — the route guard runs for every role'
+  );
+
+  raised := false;
+  begin
+    update public.organization_onboarding
+       set status = 'completed', completed_at = now()
+     where organization_id = f.ushg_id;
+    get diagnostics updated = row_count;
+    if updated > 0 then
+      raise exception 'analyst update unexpectedly affected % row(s)', updated;
+    end if;
+  exception when insufficient_privilege then
+    raised := true;
+  end;
+  perform pg_temp.check(
+    raised or updated = 0,
+    'an analyst cannot mark onboarding complete — the concrete path by which a read-only role could push the whole organization past a wizard whose steps it has no authority to perform'
+  );
+
+  raised := false;
+  begin
+    delete from public.organization_onboarding where organization_id = f.ushg_id;
+  exception when insufficient_privilege then
+    raised := true;
+  end;
+  perform pg_temp.check(
+    raised,
+    'nobody can delete an onboarding row — its absence reads as "completed", so a delete would look like a setup that never happened'
+  );
 
   reset role;
 end;

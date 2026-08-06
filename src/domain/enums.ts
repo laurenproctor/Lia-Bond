@@ -337,6 +337,53 @@ export const automationRuleStatusSchema = vocabulary(
 export type AutomationRuleStatus = z.infer<typeof automationRuleStatusSchema>;
 
 /* -------------------------------------------------------------------------- */
+/* Onboarding                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Whether an organization is still being set up.
+ *
+ * Two values, and there is deliberately no `abandoned`. Somebody who signs up
+ * and closes the tab has not abandoned anything — they come back and resume,
+ * which is the whole point of persisting progress. A third value would need a
+ * scheduled job to write it and would change nothing about what the wizard does.
+ */
+export const ONBOARDING_STATUSES = ["in_progress", "completed"] as const;
+export const onboardingStatusSchema = vocabulary(ONBOARDING_STATUSES).schema;
+export type OnboardingStatus = z.infer<typeof onboardingStatusSchema>;
+
+/**
+ * Where the wizard resumes.
+ *
+ * `ready` is in this list even though the Workspace Ready screen is not one of
+ * the five steps: it is where progress points once the wizard is finished, and
+ * naming it is what keeps "finished setup" distinguishable from "has seen the
+ * result". Mirrors the `onboarding_step` enum in
+ * `supabase/migrations/20260808000100_organization_onboarding.sql`.
+ */
+export const ONBOARDING_STEPS = [
+  "organization",
+  "connect_sources",
+  "locations",
+  "brand_voice",
+  "team",
+  "ready",
+] as const;
+export const onboardingStepSchema = vocabulary(ONBOARDING_STEPS).schema;
+export type OnboardingStep = z.infer<typeof onboardingStepSchema>;
+
+/** The five wizard steps, in order. Excludes `ready`, which is not a step. */
+export const ONBOARDING_WIZARD_STEPS = [
+  "organization",
+  "connect_sources",
+  "locations",
+  "brand_voice",
+  "team",
+] as const;
+
+export type OnboardingWizardStep = (typeof ONBOARDING_WIZARD_STEPS)[number];
+
+/* -------------------------------------------------------------------------- */
 /* Audit                                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -378,6 +425,11 @@ export const AUDIT_EVENT_TYPES = [
   "automation_rule.enabled",
   "automation_rule.disabled",
   "location.manager_changed",
+  // A location somebody typed in, as opposed to one discovered through an
+  // integration. Kept apart from `location.created_from_integration` because
+  // "where did this restaurant record come from" is the question, and one
+  // answer is a person and the other is Google.
+  "location.created",
   // Integration lifecycle. Every consequential connection change appears here;
   // none of these events may carry tokens, authorization codes, or state values.
   "integration.oauth_started",
@@ -426,6 +478,22 @@ export const AUDIT_EVENT_TYPES = [
   "monitoring_query.created",
   "monitoring_query.updated",
   "monitoring_query.deleted",
+  // Onboarding. Recorded against entity type `organization` with the
+  // organization's own id — onboarding is a property of an organization, not a
+  // thing in its own right. Metadata carries step names, skip flags, and counts
+  // only: never an OAuth token, an invitation token, a Google account name, or
+  // any review text.
+  "onboarding.started",
+  "onboarding.organization_completed",
+  "onboarding.source_connected",
+  "onboarding.source_skipped",
+  "onboarding.locations_completed",
+  "onboarding.locations_skipped",
+  "onboarding.brand_voice_completed",
+  "onboarding.team_completed",
+  "onboarding.team_skipped",
+  "onboarding.completed",
+  "onboarding.ready_viewed",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
@@ -453,7 +521,7 @@ export type MonitoringQueryType = z.infer<typeof monitoringQueryTypeSchema>;
  * Why the gate refused a candidate.
  *
  * Lia's own vocabulary. No provider ever supplies one of these, and the reason
- * is what makes the gate tunable rather than a black box (D64).
+ * is what makes the gate tunable rather than a black box (D82).
  */
 export const GATE_REJECTION_REASONS = [
   "excluded_term",

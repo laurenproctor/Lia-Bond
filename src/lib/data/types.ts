@@ -36,6 +36,8 @@ import type {
   OAuthState,
   Organization,
   OrganizationMembership,
+  OrganizationOnboarding,
+  OrganizationSize,
   Platform,
   PlatformConnection,
   PlatformProfile,
@@ -150,6 +152,21 @@ export interface ProvisionOrganizationInput {
   language?: string;
 }
 
+/**
+ * The fields onboarding's first step may change on an organization.
+ *
+ * The slug is absent and must stay absent: it is globally unique, it appears in
+ * links, and it is derived at provisioning. Offering it for edit would let a
+ * customer collide with — or impersonate — another tenant's URL.
+ */
+export interface UpdateOrganizationInput {
+  name: string;
+  websiteUrl: string | null;
+  industry: string;
+  defaultTimezone: string;
+  defaultLanguage: string;
+}
+
 export interface OrganizationRepository {
   /** Organizations where this user holds an active membership. */
   listForUser(userId: string): Promise<OrganizationMembership[]>;
@@ -172,6 +189,14 @@ export interface OrganizationRepository {
    * links, so it is not a field a signing-up stranger chooses.
    */
   provision(input: ProvisionOrganizationInput): Promise<OrganizationMembership>;
+  /**
+   * Update the organization's own profile fields.
+   *
+   * Scoped, unlike `provision`: by the time anybody edits an organization they
+   * hold a membership in it, so the ordinary capability rule applies. The input
+   * type carries no slug and no id, so neither is reachable from a form.
+   */
+  update(scope: OrganizationScope, input: UpdateOrganizationInput): Promise<Organization>;
   /**
    * Ids of organizations with at least one mention `analyzeMentions` would
    * pick up — the same "no analysis row" selection `MentionRepository.
@@ -680,7 +705,7 @@ export interface MonitoringQueryRepository {
    *
    * The one deliberately unscoped read in the repository layer. Cron holds no
    * membership and cannot construct a scope, so the poll service builds one per
-   * row from `organizationId` (D70). Never call this from a request path.
+   * row from `organizationId` (D88). Never call this from a request path.
    */
   listDue(now: string, limit: number): Promise<MonitoringQuery[]>;
 }
@@ -698,7 +723,7 @@ export interface NewsPollRunRepository {
     queryId: string,
     limit?: number,
   ): Promise<NewsPollRun[]>;
-  /** Global spend since an instant. Unscoped, because the budget is Lia's (D67). */
+  /** Global spend since an instant. Unscoped, because the budget is Lia's (D85). */
   requestsSpentSince(since: string): Promise<number>;
 }
 
@@ -773,6 +798,59 @@ export interface AnalysisRunState {
   lastSuccessful: AnalysisRun | null;
 }
 
+/**
+ * First-run setup progress.
+ *
+ * One row per organization, so — like `BrandVoiceRepository` — naming the scope
+ * names the row and there is no id parameter and no list method.
+ *
+ * Every transition is its own method rather than one `update(patch)`, and that
+ * is the point of the interface. A general patch would let a caller write
+ * `completedAt` without having settled a single step; these methods can only
+ * move progress forward one defined transition at a time, and each is
+ * idempotent — pressing a button twice, or a double-submitted form, records the
+ * first timestamp and returns the same row rather than rewriting history.
+ *
+ * `get` returns null for an organization that has no row. Callers treat that as
+ * **completed**, not as "start the wizard": every organization that existed
+ * before onboarding shipped was backfilled, and failing open to the product is
+ * the right direction for a row that has gone missing — the alternative traps
+ * an established customer in a setup wizard for a workspace they already use.
+ */
+export interface OnboardingRepository {
+  get(scope: OrganizationScope): Promise<OrganizationOnboarding | null>;
+  /**
+   * Create the row for an organization that has none.
+   *
+   * Provisioning already creates it inside `provision_organization`, in the
+   * same transaction as the organization itself, so this is not the ordinary
+   * path. It exists for the demo adapter and for an organization created before
+   * this table existed whose backfill did not reach it.
+   */
+  create(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+
+  completeOrganizationStep(
+    scope: OrganizationScope,
+    organizationSize: OrganizationSize | null,
+  ): Promise<OrganizationOnboarding>;
+  completeSourceStep(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+  skipSourceStep(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+  completeLocationsStep(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+  skipLocationsStep(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+  completeBrandVoiceStep(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+  completeTeamStep(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+  skipTeamStep(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+  /**
+   * Mark the whole thing finished.
+   *
+   * Refuses when a step is still unsettled, so "completed" cannot be written by
+   * a caller that skipped the wizard rather than the steps.
+   */
+  completeOnboarding(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+  /** Stamp the first view of the Workspace Ready screen. Idempotent. */
+  markReadyViewed(scope: OrganizationScope): Promise<OrganizationOnboarding>;
+}
+
 export interface AuditEventRepository {
   list(scope: OrganizationScope, filter?: AuditEventFilter): Promise<AuditEvent[]>;
   record(scope: OrganizationScope, input: RecordAuditEventInput): Promise<AuditEvent>;
@@ -782,6 +860,8 @@ export interface AuditEventRepository {
 export interface LiaDataSource {
   readonly kind: "demo" | "supabase";
   organizations: OrganizationRepository;
+  /** First-run setup progress. One row per organization, created with it. */
+  onboarding: OnboardingRepository;
   memberships: MembershipRepository;
   /** Pending offers of membership. Acceptance is not organization-scoped. */
   invitations: InvitationRepository;

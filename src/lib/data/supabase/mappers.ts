@@ -14,6 +14,7 @@ import {
   newsPollRunSchema,
   newsRejectedCandidateSchema,
   oauthStateSchema,
+  organizationOnboardingSchema,
   organizationSchema,
   platformConnectionSchema,
   platformProfileSchema,
@@ -36,6 +37,7 @@ import {
   type NewsRejectedCandidate,
   type OAuthState,
   type Organization,
+  type OrganizationOnboarding,
   type PlatformConnection,
   type PlatformProfile,
   type PlatformSyncRun,
@@ -105,6 +107,31 @@ export function toOrganization(row: Row): Organization {
       updatedAt: iso(row.updated_at),
     },
     "organization",
+  );
+}
+
+export function toOrganizationOnboarding(row: Row): OrganizationOnboarding {
+  return parseOrThrow(
+    organizationOnboardingSchema,
+    {
+      organizationId: row.organization_id,
+      status: row.status,
+      currentStep: row.current_step,
+      organizationCompletedAt: isoOrNull(row.organization_completed_at),
+      sourceCompletedAt: isoOrNull(row.source_completed_at),
+      sourceSkippedAt: isoOrNull(row.source_skipped_at),
+      locationsCompletedAt: isoOrNull(row.locations_completed_at),
+      locationsSkippedAt: isoOrNull(row.locations_skipped_at),
+      brandVoiceCompletedAt: isoOrNull(row.brand_voice_completed_at),
+      teamCompletedAt: isoOrNull(row.team_completed_at),
+      teamSkippedAt: isoOrNull(row.team_skipped_at),
+      completedAt: isoOrNull(row.completed_at),
+      readyViewedAt: isoOrNull(row.ready_viewed_at),
+      organizationSize: row.organization_size ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "onboarding progress",
   );
 }
 

@@ -124,6 +124,16 @@ export const SEED_PLAN: SeedTablePlan[] = [
     columns: SEED_TABLE_COLUMNS.brand_voice_profiles,
   },
   {
+    table: "organization_onboarding",
+    rows: SEED_DATASET.organizationOnboarding,
+    columns: SEED_TABLE_COLUMNS.organization_onboarding,
+    note:
+      "Both seeded organizations finished setup long ago. The backfill in\n" +
+      "20260808000100_organization_onboarding.sql runs before this file, so it\n" +
+      "never sees them — without these rows a fresh `supabase db reset` would\n" +
+      "leave both tenants with no onboarding record.",
+  },
+  {
     table: "audit_events",
     rows: SEED_DATASET.auditEvents,
     columns: SEED_TABLE_COLUMNS.audit_events,

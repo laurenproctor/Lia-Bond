@@ -18,6 +18,7 @@ import {
   isSuccessfulAnalysisRun,
   isSuccessfulSyncRun,
   isSyncRunStale,
+  firstIncompleteStep,
   NEW_CONNECTION_DEFAULTS,
   NEW_PROFILE_DEFAULTS,
   oauthStateSchema,
@@ -41,6 +42,8 @@ import {
   type Mention,
   type MentionAnalysis,
   type OAuthState,
+  type Organization,
+  type OrganizationOnboarding,
   type PlatformConnection,
   type PlatformProfile,
   type PlatformSyncRun,
@@ -98,6 +101,48 @@ function nowIso(): string {
  */
 function realNowIso(): string {
   return new Date().toISOString();
+}
+
+function findOnboarding(organizationId: string): OrganizationOnboarding | null {
+  return (
+    demoStore().organizationOnboarding.find(
+      (row: OrganizationOnboarding) => row.organizationId === organizationId,
+    ) ?? null
+  );
+}
+
+/**
+ * Apply one onboarding transition.
+ *
+ * The patch is a function of the current row rather than a literal, because
+ * every transition is idempotent: a step that already carries a timestamp keeps
+ * it, so a resubmitted form does not make the trail claim somebody completed a
+ * step later than they did. The Supabase adapter gets the same behaviour from
+ * its `nowIfUnset` sentinel.
+ */
+function patchOnboarding(
+  organizationId: string,
+  patch: (current: OrganizationOnboarding) => Partial<OrganizationOnboarding>,
+): OrganizationOnboarding {
+  const current = findOnboarding(organizationId);
+  if (!current) throw notFound("Setup progress");
+
+  const updated: OrganizationOnboarding = {
+    ...current,
+    ...patch(current),
+    updatedAt: nowIso(),
+  };
+
+  const rows = demoStore().organizationOnboarding;
+  const index = rows.findIndex(
+    (row: OrganizationOnboarding) => row.organizationId === organizationId,
+  );
+  if (index === -1) {
+    rows.push(updated);
+  } else {
+    rows[index] = updated;
+  }
+  return updated;
 }
 
 function textIncludes(haystack: string | null, needle: string): boolean {
@@ -272,7 +317,47 @@ export function createDemoDataSource(): LiaDataSource {
           updatedAt: timestamp,
         });
 
+        // Both rows *and* the onboarding row, matching what
+        // `provision_organization` does inside one function body.
+        store().organizationOnboarding.push({
+          organizationId: organization.id,
+          status: "in_progress",
+          currentStep: "organization",
+          organizationCompletedAt: null,
+          sourceCompletedAt: null,
+          sourceSkippedAt: null,
+          locationsCompletedAt: null,
+          locationsSkippedAt: null,
+          brandVoiceCompletedAt: null,
+          teamCompletedAt: null,
+          teamSkippedAt: null,
+          completedAt: null,
+          readyViewedAt: null,
+          organizationSize: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+
         return { organization, role: "owner", status: "active" };
+      },
+
+      async update(scope, input) {
+        const existing = store().organizations.find(
+          (row) => row.id === scope.organizationId,
+        );
+        if (!existing) throw notFound("Organization");
+
+        const updated: Organization = {
+          ...existing,
+          name: input.name,
+          websiteUrl: input.websiteUrl,
+          industry: input.industry,
+          defaultTimezone: input.defaultTimezone,
+          defaultLanguage: input.defaultLanguage,
+          updatedAt: nowIso(),
+        };
+
+        return replaceRow(store().organizations, updated);
       },
       // Deliberately unscoped — see the doc comment on
       // `listWithUnanalyzedMentions` in types.ts. Mirrors `listUnanalyzed`'s
@@ -286,6 +371,130 @@ export function createDemoDataSource(): LiaDataSource {
           if (!analyzed.has(mention.id)) organizationIds.add(mention.organizationId);
         }
         return [...organizationIds];
+      },
+    },
+
+    onboarding: {
+      async get(scope) {
+        return findOnboarding(scope.organizationId);
+      },
+
+      async create(scope) {
+        const existing = findOnboarding(scope.organizationId);
+        if (existing) return existing;
+
+        const timestamp = nowIso();
+        const created: OrganizationOnboarding = {
+          organizationId: scope.organizationId,
+          status: "in_progress",
+          currentStep: "organization",
+          organizationCompletedAt: null,
+          sourceCompletedAt: null,
+          sourceSkippedAt: null,
+          locationsCompletedAt: null,
+          locationsSkippedAt: null,
+          brandVoiceCompletedAt: null,
+          teamCompletedAt: null,
+          teamSkippedAt: null,
+          completedAt: null,
+          readyViewedAt: null,
+          organizationSize: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+
+        store().organizationOnboarding.push(created);
+        return created;
+      },
+
+      async completeOrganizationStep(scope, organizationSize) {
+        return patchOnboarding(scope.organizationId, (current) => ({
+          organizationCompletedAt: current.organizationCompletedAt ?? nowIso(),
+          organizationSize,
+          currentStep: "connect_sources",
+        }));
+      },
+
+      async completeSourceStep(scope) {
+        // Clears the skip: somebody who continued without connecting and then
+        // came back and connected has not skipped the step, and the table's
+        // check constraint refuses both timestamps at once.
+        return patchOnboarding(scope.organizationId, (current) => ({
+          sourceCompletedAt: current.sourceCompletedAt ?? nowIso(),
+          sourceSkippedAt: null,
+          currentStep: "locations",
+        }));
+      },
+
+      async skipSourceStep(scope) {
+        return patchOnboarding(scope.organizationId, (current) => ({
+          sourceSkippedAt: current.sourceSkippedAt ?? nowIso(),
+          sourceCompletedAt: null,
+          currentStep: "locations",
+        }));
+      },
+
+      async completeLocationsStep(scope) {
+        return patchOnboarding(scope.organizationId, (current) => ({
+          locationsCompletedAt: current.locationsCompletedAt ?? nowIso(),
+          locationsSkippedAt: null,
+          currentStep: "brand_voice",
+        }));
+      },
+
+      async skipLocationsStep(scope) {
+        return patchOnboarding(scope.organizationId, (current) => ({
+          locationsSkippedAt: current.locationsSkippedAt ?? nowIso(),
+          locationsCompletedAt: null,
+          currentStep: "brand_voice",
+        }));
+      },
+
+      async completeBrandVoiceStep(scope) {
+        return patchOnboarding(scope.organizationId, (current) => ({
+          brandVoiceCompletedAt: current.brandVoiceCompletedAt ?? nowIso(),
+          currentStep: "team",
+        }));
+      },
+
+      async completeTeamStep(scope) {
+        return patchOnboarding(scope.organizationId, (current) => ({
+          teamCompletedAt: current.teamCompletedAt ?? nowIso(),
+          teamSkippedAt: null,
+          currentStep: "ready",
+        }));
+      },
+
+      async skipTeamStep(scope) {
+        return patchOnboarding(scope.organizationId, (current) => ({
+          teamSkippedAt: current.teamSkippedAt ?? nowIso(),
+          teamCompletedAt: null,
+          currentStep: "ready",
+        }));
+      },
+
+      async completeOnboarding(scope) {
+        const current = findOnboarding(scope.organizationId);
+        if (!current) throw notFound("Setup progress");
+        // Already finished. Returned rather than rewritten, so a resubmitted
+        // form does not restamp `completedAt`.
+        if (current.status === "completed") return current;
+
+        if (firstIncompleteStep(current)) {
+          throw conflict("Finish the earlier setup steps before completing setup.");
+        }
+
+        return patchOnboarding(scope.organizationId, () => ({
+          status: "completed",
+          completedAt: nowIso(),
+          currentStep: "ready",
+        }));
+      },
+
+      async markReadyViewed(scope) {
+        return patchOnboarding(scope.organizationId, (current) => ({
+          readyViewedAt: current.readyViewedAt ?? nowIso(),
+        }));
       },
     },
 

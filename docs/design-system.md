@@ -69,6 +69,50 @@ Use semantic pale backgrounds and concise labels.
 
 Desktop screens may be information-dense, but hierarchy must remain clear. Prefer disclosure panels over adding more top-level pages.
 
+## Surfaces
+
+The product and the public site are two brands, and there are now three
+surfaces rather than two. Each scopes its own focus ring and selection colour
+through a `data-surface` attribute on its wrapper, declared in `globals.css`.
+
+| Surface | `data-surface` | Typeface | Accent | Where |
+| --- | --- | --- | --- | --- |
+| Product | *(none)* | `font-sans` (Inter) | `purple-600` | `(app)` routes |
+| Marketing site | `site` | `font-site` (Geist) | `site-orange` / `site-blue` | `(site)` routes |
+| Onboarding | `site` | `font-site` (Geist) | `site-orange` / `site-blue` | `/onboarding/*` |
+
+### Onboarding
+
+Onboarding uses the **marketing** tokens, not the product's. It is the first
+screen after signing up, and it should look like the site the person just came
+from rather than like a dashboard they have not earned. Concretely:
+
+- `site-ink` headings, `site-body` copy, `site-muted` secondary copy
+- `site-tint` page background, white cards
+- `site-orange` / `site-orange-hover` primary actions, with **ink** labels —
+  white on `#FF7A2E` measures 2.60:1 and fails even the large-text floor
+- `site-blue` links and outlined secondary buttons
+- `site-blue-tint` / `site-blue-edge` information panels
+- `site-blue-mark` for decorative strokes only, never text
+- `site-field` (`#8296B4`) for form-control borders. The ornamental
+  `site-border` (`#E6EAF0`) measures 1.21:1 against white and fails WCAG 1.4.11
+  for a control boundary.
+
+No purple, no navy, no teal, and no app sidebar. `tests/onboarding-accessibility.test.ts`
+holds that: it fails if any onboarding component references a `purple-*` or
+`navy-*` utility.
+
+Decorative speech bubbles are a separate component from the marketing site's
+(`onboarding-doodle.tsx`, not `speech-bubble.tsx`) because the site's renders a
+*quote* with an attribution — reusing it would put words in a fictional
+customer's mouth on a screen where the real customer is configuring their
+account. At most two per screen; every one is `aria-hidden`, `focusable="false"`,
+`role="presentation"`, and `pointer-events-none`.
+
+Touch targets on the wizard are 44px minimum without exception. Setup is
+frequently finished on a phone, one-handed, by somebody who has had the product
+for four minutes and will not persevere through a mis-tap.
+
 ## Interaction principles
 
 - Preserve selected row context in split-view layouts.

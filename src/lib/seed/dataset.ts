@@ -11,6 +11,7 @@ import type {
   MentionAnalysis,
   MonitoringQuery,
   Organization,
+  OrganizationOnboarding,
   PlatformConnection,
   PlatformProfile,
   ResponseDraft,
@@ -54,6 +55,15 @@ export interface SeedDataset {
   escalations: Escalation[];
   automationRules: AutomationRule[];
   brandVoiceProfiles: BrandVoiceProfile[];
+  /**
+   * First-run setup progress, one row per organization.
+   *
+   * Standing state rather than event history, so it belongs here rather than in
+   * the demo adapter's runtime store — and it has to be seeded, because the
+   * backfill migration runs *before* `supabase/seed.sql` and therefore never
+   * sees these organizations.
+   */
+  organizationOnboarding: OrganizationOnboarding[];
   auditEvents: AuditEvent[];
   /**
    * What Lia watches.
@@ -1905,6 +1915,44 @@ const automationRules: AutomationRule[] = [
 
 export const BRAND_VOICE_USHG = seedId("brand_voice:ushg");
 
+/* -------------------------------------------------------------------------- */
+/* Onboarding                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Both seeded organizations finished setup long ago.
+ *
+ * They have locations, connections, mentions, and months of history — an
+ * organization in that state has plainly been set up, and starting them at step
+ * one would drop every seeded login into a wizard instead of the product. The
+ * timestamps are the organization's own creation instant rather than the seed
+ * clock's "now", which is the same choice the backfill migration makes and for
+ * the same reason: claiming setup finished today would be a fabricated fact.
+ *
+ * `readyViewedAt` is set too, so the demo overview does not carry an activation
+ * banner for a workspace that has been live for eight months.
+ */
+const organizationOnboarding: OrganizationOnboarding[] = organizations.map(
+  (organization) => ({
+    organizationId: organization.id,
+    status: "completed" as const,
+    currentStep: "ready" as const,
+    organizationCompletedAt: organization.createdAt,
+    sourceCompletedAt: organization.createdAt,
+    sourceSkippedAt: null,
+    locationsCompletedAt: organization.createdAt,
+    locationsSkippedAt: null,
+    brandVoiceCompletedAt: organization.createdAt,
+    teamCompletedAt: organization.createdAt,
+    teamSkippedAt: null,
+    completedAt: organization.createdAt,
+    readyViewedAt: organization.createdAt,
+    organizationSize: null,
+    createdAt: organization.createdAt,
+    updatedAt: organization.createdAt,
+  }),
+);
+
 const brandVoiceProfiles: BrandVoiceProfile[] = [
   {
     id: BRAND_VOICE_USHG,
@@ -2084,6 +2132,7 @@ export const SEED_DATASET: SeedDataset = {
   escalations,
   automationRules,
   brandVoiceProfiles,
+  organizationOnboarding,
   auditEvents,
   monitoringQueries,
 };

@@ -143,6 +143,30 @@ sequenceDiagram
 | `/integrations` | — | Connector list, connect entry point |
 | `/integrations/google-business-profile` | — | Detail, health, reauthorize, disconnect |
 | `/integrations/google-business-profile/setup` | — | Location selection and mapping |
+| `/onboarding/connect-sources` | — | First-run setup, step 2. Starts the same POST flow. |
+| `/onboarding/locations` | — | First-run setup, step 3. Same discovery and mapping services. |
+
+**The onboarding flow adds two return destinations, not a second connector.**
+`ALLOWED_REDIRECT_PATHS` gained `/onboarding/connect-sources` and
+`/onboarding/locations`. Step 2 asks for the latter, so a successful grant lands
+on step 3 rather than returning to a step the person just completed; step 2 is
+listed as well because the callback re-checks the stored path on the way out and
+a reauthorization started from step 2 must be able to return there.
+
+Everything else is unchanged. Step 2 posts to the same connect route with the
+same CSRF posture, the callback is the same handler, and steps 2 and 3 call
+`getGoogleConnection`, `listGoogleBusinessAccounts`,
+`listGoogleBusinessLocations`, `buildCandidates`, and
+`saveGoogleLocationMappings` rather than reimplementing any of them. There is no
+onboarding-specific Google code path, which is why the suggestion rule below
+holds on both screens.
+
+If a connection already exists, step 2 shows it and offers **Continue** instead
+of a second consent screen. The action behind that button re-reads the
+connection server-side; a client that could mark the step complete without one
+would be past the only step with a real external prerequisite. No duplicate
+connection can be created either way — `platform_connections` is upserted on
+`(organization, platform)`.
 
 **Connect is POST, not GET.** A GET that mints OAuth state and redirects to a
 consent screen can be triggered by an `<img>` tag on any page on the internet.

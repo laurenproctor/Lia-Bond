@@ -15,7 +15,7 @@
  * Both loaders read `SEED_PLAN`, so they seed the same tables in the same
  * order from the same dataset. Adding a table to the plan reaches both.
  *
- * Idempotent by default, matching `seed.sql`'s "on conflict (id) do nothing":
+ * Idempotent by default, matching `seed.sql`'s "on conflict (<primary key>) do nothing":
  * rows that already exist are left exactly as they are, so this never
  * overwrites work done in the hosted project.
  *
@@ -36,7 +36,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
-import { columnName } from "./seed-sql-columns.ts";
+import { columnName, conflictTarget } from "./seed-sql-columns.ts";
 import { SEED_PLAN, type SeedRow } from "./seed-plan.ts";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -93,7 +93,9 @@ for (const { table, rows, columns } of SEED_PLAN) {
   const { error } = await client
     .from(table)
     .upsert(rows.map((row) => toColumnRow(row, columns)), {
-      onConflict: "id",
+      // Per table, not assumed: `organization_onboarding` is keyed on
+      // `organization_id` and has no surrogate id. See SEED_CONFLICT_TARGETS.
+      onConflict: conflictTarget(table),
       ignoreDuplicates: !overwrite,
     });
 

@@ -73,6 +73,10 @@ export const PRODUCT_PATHS = [
   "/brand-voice",
   "/settings",
   "/help",
+  // First-run setup. Signed-in-only like every other product surface: the
+  // wizard writes to an organization, so there is nothing an anonymous visitor
+  // could do here but see a redirect from the layout instead of a sign-in form.
+  "/onboarding",
   "/api",
 ];
 
