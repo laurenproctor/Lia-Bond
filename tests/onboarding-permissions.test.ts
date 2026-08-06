@@ -124,16 +124,50 @@ describe("OAuth return paths", () => {
     }
   });
 
-  it("sends a successful grant to step 3, not back to step 2", () => {
-    const step = source("src/components/onboarding/connect-sources-step.tsx");
-    expect(step).toContain('value="/onboarding/locations"');
+  it("returns a successful grant to step 2, the three-source screen", () => {
+    // The person comes back to the screen they left, where the optional News
+    // configuration sits beside the connection they just made — not straight
+    // to step 3 past it. The callback has already settled the source step
+    // (below), so this cannot loop.
+    const card = source("src/components/onboarding/google-source-card.tsx");
+    expect(card).toContain('value="/onboarding/connect-sources"');
+    expect(card).not.toContain('value="/onboarding/locations"');
+  });
+
+  /**
+   * Found by a real-browser walkthrough, not by any test that existed at the
+   * time. The callback stored the connection and returned to step 3 — whose
+   * guard found step 2 unsettled and bounced straight back to step 2. The
+   * connection was correct; the progress row simply never learned about it, so
+   * connecting Google looked like it did nothing.
+   */
+  it("settles the wizard's source step when the grant came from onboarding", () => {
+    const callback = code(
+      "src/app/api/integrations/google-business-profile/callback/route.ts",
+    );
+
+    expect(callback).toContain("isOnboardingRedirect(stateRecord.redirectPath)");
+    expect(callback).toContain("settleOnboardingSource(context)");
+    expect(callback).toContain("completeSourceStep");
+  });
+
+  it("does not touch onboarding for a grant that came from /integrations", () => {
+    const callback = code(
+      "src/app/api/integrations/google-business-profile/callback/route.ts",
+    );
+
+    // Gated on the return path, so a reconnection from the integrations screen
+    // cannot rewrite a finished organization's progress.
+    expect(callback).toContain('redirectPath.startsWith("/onboarding/")');
+    // …and belt-and-braces on the row's own status.
+    expect(callback).toContain('state.status === "completed"');
   });
 
   it("starts the flow with a POST to the existing connect route", () => {
-    const step = source("src/components/onboarding/connect-sources-step.tsx");
+    const card = source("src/components/onboarding/google-source-card.tsx");
     // A GET that mints OAuth state can be fired by an `<img>` on any page.
-    expect(step).toContain('method="post"');
-    expect(step).toContain("/api/integrations/google-business-profile/connect");
+    expect(card).toContain('method="post"');
+    expect(card).toContain("/api/integrations/google-business-profile/connect");
   });
 });
 
@@ -230,6 +264,12 @@ describe("route protection", () => {
 describe("no credentials cross to the browser", () => {
   const clientComponents = [
     "src/components/onboarding/connect-sources-step.tsx",
+    "src/components/onboarding/google-source-card.tsx",
+    "src/components/onboarding/news-source-card.tsx",
+    "src/components/onboarding/news-monitoring-configurator.tsx",
+    "src/components/onboarding/reddit-source-card.tsx",
+    "src/components/onboarding/onboarding-source-card.tsx",
+    "src/components/onboarding/source-status-badge.tsx",
     "src/components/onboarding/google-locations-step.tsx",
     "src/components/onboarding/manual-location-step.tsx",
     "src/components/onboarding/brand-voice-step-form.tsx",

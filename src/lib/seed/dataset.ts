@@ -537,6 +537,9 @@ function monitoringQuery(seed: MonitoringQuerySeed): MonitoringQuery {
     relevanceThreshold: seed.relevanceThreshold ?? 0.35,
     enabled: true,
     pollIntervalMinutes: seed.pollIntervalMinutes ?? 360,
+    // Seeded queries depict an established workspace whose admins configured
+    // monitoring by hand; none of them came from the setup wizard.
+    origin: "user",
     lastPolledAt: seed.lastPolledAt,
     createdAt: CREATED,
     updatedAt: daysAgo(2),

@@ -4,7 +4,9 @@ import nextTypescript from "eslint-config-next/typescript";
 /** @type {import('eslint').Linter.Config[]} */
 const eslintConfig = [
   {
-    ignores: [".next/**", "node_modules/**", "next-env.d.ts"],
+    // `.claude/` holds tool state and git worktree checkouts of other
+    // branches, whose files would otherwise be linted as this project's own.
+    ignores: [".next/**", "node_modules/**", "next-env.d.ts", ".claude/**"],
   },
   ...coreWebVitals,
   ...nextTypescript,

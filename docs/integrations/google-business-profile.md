@@ -147,11 +147,18 @@ sequenceDiagram
 | `/onboarding/locations` | — | First-run setup, step 3. Same discovery and mapping services. |
 
 **The onboarding flow adds two return destinations, not a second connector.**
-`ALLOWED_REDIRECT_PATHS` gained `/onboarding/connect-sources` and
-`/onboarding/locations`. Step 2 asks for the latter, so a successful grant lands
-on step 3 rather than returning to a step the person just completed; step 2 is
-listed as well because the callback re-checks the stored path on the way out and
-a reauthorization started from step 2 must be able to return there.
+`ALLOWED_REDIRECT_PATHS` contains `/onboarding/connect-sources` and
+`/onboarding/locations`. Step 2 asks for **`/onboarding/connect-sources`**: a
+successful grant returns to the three-source screen, so the person can
+configure the optional News & Media monitoring beside the connection they just
+made before continuing to step 3. The callback re-checks the stored path
+against the closed list on the way out.
+
+When the stored return path is an onboarding path, the callback also settles
+the wizard's source step (`settleOnboardingSource` → `completeSourceStep`),
+best-effort, so returning to step 2 renders a settled, revisitable step rather
+than looping. A grant started from `/integrations` never touches onboarding —
+the gate is the return path, plus a check on the onboarding row's own status.
 
 Everything else is unchanged. Step 2 posts to the same connect route with the
 same CSRF posture, the callback is the same handler, and steps 2 and 3 call
@@ -161,11 +168,13 @@ same CSRF posture, the callback is the same handler, and steps 2 and 3 call
 onboarding-specific Google code path, which is why the suggestion rule below
 holds on both screens.
 
-If a connection already exists, step 2 shows it and offers **Continue** instead
-of a second consent screen. The action behind that button re-reads the
-connection server-side; a client that could mark the step complete without one
-would be past the only step with a real external prerequisite. No duplicate
-connection can be created either way — `platform_connections` is upserted on
+If a connection already exists, step 2 shows it — the safe account name only —
+with a quiet **Manage connection** reauthorization form; the primary action is
+the page's own **Save and continue**, and nobody is pushed through OAuth again
+for revisiting the step. The completion action re-reads the connection
+server-side; a client that could mark the step complete without one would be
+past the only step with a real external prerequisite. No duplicate connection
+can be created either way — `platform_connections` is upserted on
 `(organization, platform)`.
 
 **Connect is POST, not GET.** A GET that mints OAuth state and redirects to a

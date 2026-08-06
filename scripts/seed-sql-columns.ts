@@ -68,7 +68,7 @@ export const SEED_TABLE_COLUMNS = {
     "id", "organizationId", "locationId", "name", "queryType", "keywords",
     "exclusions", "allowedDomains", "deniedDomains", "sourceCountry",
     "language", "relevanceThreshold", "enabled", "pollIntervalMinutes",
-    "lastPolledAt", "createdAt", "updatedAt",
+    "origin", "lastPolledAt", "createdAt", "updatedAt",
   ],
   mentions: [
     "id", "organizationId", "locationId", "platformConnectionId",

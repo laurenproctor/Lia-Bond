@@ -118,6 +118,7 @@ export function createMonitoringRepositories(client: SupabaseClient): {
             relevance_threshold: value.relevanceThreshold,
             enabled: value.enabled,
             poll_interval_minutes: value.pollIntervalMinutes,
+            origin: value.origin,
           })
           .select("*")
           .single();

@@ -7,8 +7,10 @@ import {
   INVITABLE_ROLES,
   INVITATION_TTL_DAYS,
   ONBOARDING_READY_PATH,
+  onboardingNewsMonitoringInputSchema,
   updateBrandVoiceInputSchema,
   updateOnboardingOrganizationInputSchema,
+  type MonitoringQuery,
   type OrganizationOnboarding,
 } from "@/domain";
 import { authorize } from "@/lib/actions/guard";
@@ -21,7 +23,7 @@ import {
 import { recordAuditEvent } from "@/lib/audit/record";
 import { saveBrandVoice } from "@/lib/brand-voice/save";
 import { appOrigin } from "@/lib/env";
-import { conflict } from "@/lib/data/errors";
+import { conflict, DataError } from "@/lib/data/errors";
 import {
   completeBrandVoiceStep,
   completeLocationsStep,
@@ -39,6 +41,15 @@ import {
   saveGoogleLocationMappings,
   saveMappingsInputSchema,
 } from "@/lib/integrations/google-mapping";
+import {
+  ensureOnboardingLocationQueries,
+  saveOnboardingNewsQuery,
+} from "@/lib/onboarding/news";
+import { can } from "@/lib/auth/permissions";
+import { NEWS_ERROR_MESSAGES } from "@/lib/monitoring/poll-service";
+import { NewsError } from "@/news/errors";
+import type { NewsMonitor } from "@/news/monitor";
+import { getNewsMonitor } from "@/news/registry";
 
 /**
  * Onboarding server actions.
@@ -139,9 +150,97 @@ export async function skipOnboardingSourceAction(): Promise<
   });
 }
 
+/**
+ * Save the optional News monitoring configuration offered on step 2.
+ *
+ * Backed entirely by the real monitoring-query architecture: the same input
+ * vocabulary (`onboardingNewsMonitoringInputSchema` is a pick of the create
+ * schema), the same `createMonitoringQuery` service with its implicit
+ * `news_media` connection, and the same audit events. Which persisted query
+ * this action edits is decided by `findOnboardingNewsQuery` — the oldest
+ * organization-wide brand query — so pressing save five times updates one
+ * row rather than creating five.
+ *
+ * Deliberately does **not** touch onboarding progress. News is optional;
+ * only `completeOnboardingSourceAction` / `skipOnboardingSourceAction`
+ * settle step 2, and both remain gated on Google alone.
+ */
+export async function saveOnboardingNewsMonitoringAction(
+  input: unknown,
+): Promise<ActionResult<MonitoringQuery>> {
+  return runAction("onboarding.news_monitoring", async () => {
+    const parsed = onboardingNewsMonitoringInputSchema.parse(input);
+    // The monitoring permission, not `onboarding.manage`: this writes a
+    // monitoring query, and the authority to do that is the same one the News
+    // & Media screen requires. Owners and admins — the only roles the wizard
+    // admits — hold it.
+    const context = await authorize("monitoring.manage_queries");
+
+    // Same translation `resolveMonitor` makes in `actions/monitoring.ts`:
+    // Lia's own sentence for the code, never the provider's message.
+    let monitor: NewsMonitor;
+    try {
+      monitor = getNewsMonitor();
+    } catch (error) {
+      if (error instanceof NewsError) {
+        throw new DataError("unavailable", NEWS_ERROR_MESSAGES[error.code]);
+      }
+      throw error;
+    }
+
+    const query = await saveOnboardingNewsQuery(
+      context,
+      parsed,
+      monitor,
+      new Date().toISOString(),
+    );
+
+    revalidateOnboarding();
+    revalidatePath("/integrations/news-media");
+
+    return query;
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /* Step 3 — locations                                                          */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Best-effort News coverage for the locations step 3 just configured.
+ *
+ * A side effect of the locations step, never a gate on it: by the time this
+ * runs the step has already completed, and no outcome here — including the
+ * news monitor being unconfigured on this deployment, or the caller's role
+ * lacking the monitoring permission — may surface as a step failure. The
+ * real rules (opt-in via the enabled onboarding brand query, one query per
+ * uncovered location, never touching existing rows) live in
+ * `ensureOnboardingLocationQueries`.
+ */
+async function ensureLocationMonitoring(
+  context: Awaited<ReturnType<typeof authorize>>,
+  locationIds: readonly string[],
+): Promise<void> {
+  if (locationIds.length === 0) return;
+  if (!can(context.role, "monitoring.manage_queries")) return;
+
+  try {
+    const monitor = getNewsMonitor();
+    const outcome = await ensureOnboardingLocationQueries(
+      context,
+      locationIds,
+      monitor,
+      new Date().toISOString(),
+    );
+    if (outcome.created > 0) revalidatePath("/integrations/news-media");
+  } catch (error) {
+    // Unconfigured news monitoring arrives here as a NewsError; anything
+    // else is logged the same way. Either way the locations step stands.
+    if (!(error instanceof NewsError)) {
+      console.error("[action:onboarding.locations] location monitoring skipped", error);
+    }
+  }
+}
 
 /**
  * Save Google location mappings and mark step 3 complete.
@@ -189,6 +288,15 @@ export async function saveOnboardingLocationsAction(
 
     await completeLocationsStep(context, { mapped, created });
 
+    // After the step is settled: News queries for the locations that just
+    // arrived, when the organization opted into News monitoring at step 2.
+    await ensureLocationMonitoring(context, [
+      ...result.createdLocations.map((location) => location.id),
+      ...result.mappedProfiles
+        .map((profile) => profile.locationId)
+        .filter((locationId): locationId is string => locationId !== null),
+    ]);
+
     revalidateOnboarding();
     revalidatePath("/locations");
     revalidatePath("/integrations/google-business-profile");
@@ -232,6 +340,8 @@ export async function createOnboardingLocationAction(
     });
 
     await completeLocationsStep(context, { mapped: 0, created: 1 });
+
+    await ensureLocationMonitoring(context, [location.id]);
 
     revalidateOnboarding();
     revalidatePath("/locations");
