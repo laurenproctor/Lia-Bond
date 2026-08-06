@@ -104,7 +104,7 @@ export const mentionSchema = z
     publisherDomain: z.string().max(253).nullable(),
     /**
      * Set by Lia's own gate, never by a provider — the free news tier offers
-     * no clustering flag of its own (D68).
+     * no clustering flag of its own (D86).
      */
     isSyndicated: z.boolean(),
     /**

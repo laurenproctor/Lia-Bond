@@ -6,11 +6,11 @@ import type { NewsMonitor } from "@/news/monitor";
 import { freshDataSource, harbor, ushg } from "./helpers/scope";
 
 /**
- * `createMonitoringQuery` — the server-action side of D62's implicit
+ * `createMonitoringQuery` — the server-action side of D80's implicit
  * `news_media` connection.
  *
  * Task 10 gave the poll service its own `ensureNewsConnection`, but a
- * scheduled poll's actor is always null (D70), so it can never create that
+ * scheduled poll's actor is always null (D88), so it can never create that
  * first connection itself. Without this call, a brand-new organization's
  * first monitoring query would sit unconnected and every scheduled poll
  * against it would fail with `not_connected` forever — the gap this closes.

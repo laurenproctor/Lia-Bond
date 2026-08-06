@@ -31,11 +31,11 @@ carried the full two-word company name was admitted.
 
 **This is not a cosmetic mislabelling.** `AMBIGUOUS_TERM_MAX_LENGTH`'s own
 comment accepts the short-brand-name trade-off *on the express grounds* that
-"the rejection is logged with its reason (D64) and is therefore discoverable
+"the rejection is logged with its reason (D82) and is therefore discoverable
 and tunable". It is not discoverable. An operator reads `below_threshold` at
 `0.7`, concludes the threshold logic is broken, lowers the threshold — and
 nothing changes, because the corroboration rule never consulted it. The table
-D64 created to make the gate falsifiable currently cannot distinguish
+D82 created to make the gate falsifiable currently cannot distinguish
 "irrelevant" from "on topic but uncorroborated", which is the one distinction
 it exists to record.
 
@@ -81,7 +81,7 @@ alter type gate_rejection_reason add value if not exists 'ambiguous_uncorroborat
 writing already holds `20260808000100` and `20260808000200`, unapplied. If
 those land first, this one is renumbered above them rather than slotted
 underneath — a version earlier than the last applied migration is the exact
-shape of the collision D80 was written about, and the cost of renumbering is
+shape of the collision D93 was written about, and the cost of renumbering is
 nil while nothing has been pushed. Confirm against `supabase migration list`
 immediately before applying, not against the filenames on disk.
 

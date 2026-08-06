@@ -16,7 +16,7 @@
 -- convenience only — "the real enforcement is row-level security in
 -- Postgres"), and can insert `news_poll_runs` rows directly. Because
 -- `requestsSpentSince` sums `requests_spent` globally across every tenant by
--- design (D67), a single viewer inserting one inflated row can exhaust the
+-- design (D85), a single viewer inserting one inflated row can exhaust the
 -- shared daily budget and halt scheduled polling for every organization on
 -- the platform, repeatably. Deleting a monitoring query as a viewer also
 -- cascades away its poll history and rejection log.
@@ -24,7 +24,7 @@
 -- This migration is additive-only: it drops and recreates the seven write
 -- policies below with the correct gate, leaves every `select` policy on
 -- `is_organization_member` untouched (reading stays open to every member —
--- D19, and the rejected-candidates diagnostic rationale in D64), and does
+-- D19, and the rejected-candidates diagnostic rationale in D82), and does
 -- not touch 20260806000200 itself — migrations are immutable once written.
 --
 -- Two different write gates, matching two different analogues:

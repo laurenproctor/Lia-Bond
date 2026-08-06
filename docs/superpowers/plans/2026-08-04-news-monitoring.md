@@ -8,7 +8,7 @@
 
 **Tech Stack:** Next.js 16 App Router, TypeScript strict, Zod 4, Supabase/PostgreSQL, Vitest 4, Vercel Cron.
 
-**Spec:** `docs/superpowers/specs/2026-08-04-news-monitoring-design.md`. Read it before starting. Decisions are cited as D60–D72 throughout.
+**Spec:** `docs/superpowers/specs/2026-08-04-news-monitoring-design.md`. Read it before starting. Decisions are cited as D78–D90 throughout.
 
 ## Global Constraints
 
@@ -18,7 +18,7 @@
 - No page component over roughly 300 lines.
 - Every organization-owned repository method takes an `OrganizationScope`. There is no `listAll()`.
 - **No provider message reaches a user, a log, a stored row, or an audit event.** Store Lia's own wording and a normalised error code. Never the provider's text, never a request URL, never an API key.
-- **The gate never writes `mentions.relevance_score`** (D65). That column belongs to the analysis layer.
+- **The gate never writes `mentions.relevance_score`** (D83). That column belongs to the analysis layer.
 - **An ingest writes only source-owned fields.** Use `IngestMentionInput`; never reach around it.
 - Migrations are never edited once written — add a new one.
 - `supabase/seed.sql` is **generated**. Edit `src/lib/seed/dataset.ts` and run `npm run db:seed:generate`.
@@ -40,7 +40,7 @@
 | `src/news/mock-monitor.ts` | Deterministic fixture monitor |
 | `src/news/registry.ts` | Mode selection, mirroring `src/integrations/registry.ts` |
 | `src/lib/monitoring/gate.ts` | The relevance gate. Pure function, no I/O |
-| `src/lib/monitoring/budget.ts` | Daily request budget (D67) |
+| `src/lib/monitoring/budget.ts` | Daily request budget (D85) |
 | `src/lib/monitoring/poll-service.ts` | Poll orchestration: lock, search, gate, ingest, audit |
 | `src/lib/monitoring/capabilities.ts` | Honest capability list for the integration screen |
 | `src/lib/data/demo/monitoring.ts` | Demo adapter for the three new repositories |
@@ -195,7 +195,7 @@ export type MonitoringQueryType = z.infer<typeof monitoringQueryTypeSchema>;
  * Why the gate refused a candidate.
  *
  * Lia's own vocabulary. No provider ever supplies one of these, and the reason
- * is what makes the gate tunable rather than a black box (D64).
+ * is what makes the gate tunable rather than a black box (D82).
  */
 export const gateRejectionReasonSchema = z.enum([
   "excluded_term",
@@ -235,11 +235,11 @@ import {
  * query itself is the anchor.
  */
 
-/** Below this, polling would burn the daily request budget (D67). */
+/** Below this, polling would burn the daily request budget (D85). */
 export const MIN_POLL_INTERVAL_MINUTES = 60;
 /** The GNews free tier returns at most this many articles per request. */
 export const MAX_ARTICLES_PER_POLL = 10;
-/** A repeated headline inside this window is treated as syndication (D68). */
+/** A repeated headline inside this window is treated as syndication (D86). */
 export const SYNDICATION_WINDOW_MS = 72 * 60 * 60 * 1000;
 /**
  * How long a rejection is kept.
@@ -277,7 +277,7 @@ export const monitoringQuerySchema = z
     relevanceThreshold: unitScoreSchema,
     enabled: z.boolean(),
     pollIntervalMinutes: z.number().int().min(MIN_POLL_INTERVAL_MINUTES).max(10_080),
-    /** Doubles as the incremental cursor: `publishedAfter` (D66). */
+    /** Doubles as the incremental cursor: `publishedAfter` (D84). */
     lastPolledAt: timestampSchema.nullable(),
   })
   .extend(organizationOwnedSchema.shape)
@@ -312,7 +312,7 @@ export type UpdateMonitoringQueryInput = z.infer<
  *
  * Its own table rather than a reuse of `platform_sync_runs`, whose
  * `platform_profile_id` is `not null` and which news has nothing to put in
- * (D63).
+ * (D81).
  */
 export const newsPollRunSchema = z
   .object({
@@ -345,7 +345,7 @@ export type NewsPollRun = z.infer<typeof newsPollRunSchema>;
  * An article the gate refused.
  *
  * "Why did you miss this story" is the first question asked of any monitoring
- * product, and without this row the gate is unfalsifiable (D64).
+ * product, and without this row the gate is unfalsifiable (D82).
  */
 export const newsRejectedCandidateSchema = z
   .object({
@@ -921,7 +921,7 @@ export interface MonitoringQueryRepository {
    *
    * The one deliberately unscoped read in the repository layer. Cron holds no
    * membership and cannot construct a scope, so the poll service builds one per
-   * row from `organizationId` (D70). Never call this from a request path.
+   * row from `organizationId` (D88). Never call this from a request path.
    */
   listDue(now: string, limit: number): Promise<MonitoringQuery[]>;
 }
@@ -939,7 +939,7 @@ export interface NewsPollRunRepository {
     queryId: string,
     limit?: number,
   ): Promise<NewsPollRun[]>;
-  /** Global spend since an instant. Unscoped, because the budget is Lia's (D67). */
+  /** Global spend since an instant. Unscoped, because the budget is Lia's (D85). */
   requestsSpentSince(since: string): Promise<number>;
 }
 
@@ -1127,7 +1127,7 @@ export interface NewsSearchQuery {
   sourceCountry: string | null;
   /** BCP-47 tag, or null for every language. */
   language: string | null;
-  /** The incremental cursor (D66). Null on a query's first ever poll. */
+  /** The incremental cursor (D84). Null on a query's first ever poll. */
   publishedAfter: string | null;
   /** Hard ceiling on articles requested. The free tier caps this at 10. */
   maxResults: number;
@@ -1164,7 +1164,7 @@ export interface ExternalArticle {
 
 export interface NewsSearchBatch {
   articles: ExternalArticle[];
-  /** Requests consumed. Charged against the global daily budget (D67). */
+  /** Requests consumed. Charged against the global daily budget (D85). */
   requestsSpent: number;
   /**
    * The provider capped the page and offers no paging on this tier.
@@ -1907,7 +1907,7 @@ import type { ExternalArticle } from "@/news/monitor";
  * That is what makes it cheap enough to run on every candidate, and testable
  * against a fixture corpus rather than against production noise.
  *
- * This gate deliberately does **not** write `mentions.relevance_score` (D65).
+ * This gate deliberately does **not** write `mentions.relevance_score` (D83).
  * That column belongs to the analysis layer, which supersedes any provisional
  * number within minutes. The score here is persisted only on rejections, where
  * it is the thing being tuned.
@@ -2335,7 +2335,7 @@ import type { LiaDataSource } from "@/lib/data/types";
 /**
  * The daily request ceiling, shared by every tenant.
  *
- * New in this workflow (D67). Google's quota was per connection, so a noisy
+ * New in this workflow (D85). Google's quota was per connection, so a noisy
  * customer could only hurt themselves; here one organization with forty
  * queries can exhaust the day for everyone, which is why this is enforced
  * above the tenant loop rather than inside it.
@@ -2377,16 +2377,16 @@ Create `src/lib/monitoring/poll-service.ts` exporting `pollMonitoringQuery` and 
 8. `newsRejectedCandidates.purgeOlderThan(scope, new Date(nowMs - REJECTION_RETENTION_MS).toISOString())`. Retention runs here rather than in its own job because this is the only code path that writes the table, so it cannot fall behind what it is trimming.
 9. `recordAuditEvent(...)` — follow the existing call sites for the exact signature. **The event must not contain an article title, a URL, or a publisher name**, only counts and the query id.
 
-**`pollDueQueries(options)`** — options are `{ dataSource, monitor, now, limit }`. Returns `{ polled, accepted, rejected, skippedForBudget }`. Calls `monitoringQueries.listDue`, and for each row constructs its own `OrganizationScope` from `organizationId` with the system actor below, per D70. Stops as soon as `remainingScheduledRequests` is exhausted and reports the unpolled count as `skippedForBudget`, so a sweep that covered eight of forty queries cannot read as full coverage.
+**`pollDueQueries(options)`** — options are `{ dataSource, monitor, now, limit }`. Returns `{ polled, accepted, rejected, skippedForBudget }`. Calls `monitoringQueries.listDue`, and for each row constructs its own `OrganizationScope` from `organizationId` with the system actor below, per D88. Stops as soon as `remainingScheduledRequests` is exhausted and reports the unpolled count as `skippedForBudget`, so a sweep that covered eight of forty queries cannot read as full coverage.
 
 **The `dataSource` passed under cron must be service-role.** This was a gap in the first draft of this plan and is the single most likely way this task fails silently: `getDataSource()` builds its Supabase client from the caller's session (`createSupabaseServerClient`), and cron has no session, so every policy resolving through `auth.uid()` would reject the write. Two additions close it:
 
-1. In `src/lib/data/index.ts`, add `getServiceDataSource()` alongside `getDataSource()`. It returns the demo adapter in demo mode, and otherwise `createSupabaseDataSource(createSupabaseServiceClient())` — the service client already exists at `src/lib/supabase/server.ts:68`. Document on it that it **bypasses RLS**, that only the cron path may call it, and that its callers therefore carry their own tenancy discipline (D70).
+1. In `src/lib/data/index.ts`, add `getServiceDataSource()` alongside `getDataSource()`. It returns the demo adapter in demo mode, and otherwise `createSupabaseDataSource(createSupabaseServiceClient())` — the service client already exists at `src/lib/supabase/server.ts:68`. Document on it that it **bypasses RLS**, that only the cron path may call it, and that its callers therefore carry their own tenancy discipline (D88).
 2. Export `SYSTEM_ACTOR_ID` from `src/lib/monitoring/poll-service.ts` and build the per-row scope as `{ organizationId: query.organizationId, userId: SYSTEM_ACTOR_ID, role: "owner" }`.
 
 `SYSTEM_ACTOR_ID` never reaches the database. `public.users` has no such row, so an audit event carrying it would violate a foreign key — the scheduled path must therefore record audit with `actorType: "system"` and `actorUserId: null`. The sentinel exists only to satisfy the `OrganizationScope` type, which is the correct trade: widening `userId` to `string | null` would weaken the tenancy type for every call site in the codebase to accommodate one caller.
 
-The `news_media` connection is created on demand if absent (D62) — one row per organization, status `connected`, no credential row.
+The `news_media` connection is created on demand if absent (D80) — one row per organization, status `connected`, no credential row.
 
 - [ ] **Step 5: Run the test and verify it passes**
 
@@ -2601,7 +2601,7 @@ import { pollDueQueries } from "@/lib/monitoring/poll-service";
  * POST only, and guarded by a shared secret rather than a session: cron has no
  * user. That makes this the first write path in the codebase where RLS is not
  * the backstop, which is why the poll service constructs a scope per query row
- * rather than relying on anything ambient (D70).
+ * rather than relying on anything ambient (D88).
  */
 
 export const dynamic = "force-dynamic";
@@ -2626,7 +2626,7 @@ export async function POST(request: Request): Promise<Response> {
   // Service-role, not `getDataSource()`. Cron carries no session, so a
   // session-bound client would be rejected by every policy resolving through
   // auth.uid(). RLS is therefore not the backstop on this path — the poll
-  // service constructs a scope per query row instead (D70).
+  // service constructs a scope per query row instead (D88).
   const dataSource = await getServiceDataSource();
   const outcome = await pollDueQueries({
     dataSource,
@@ -2865,7 +2865,7 @@ Open `src/app/(app)/media/[id]/page.tsx`. It currently renders seeded articles. 
 - Show headline, description, publisher name, and published date.
 - Add a prominent "read at source" link to `sourceUrl`, opening in a new tab with `rel="noopener noreferrer"`.
 - Show the analysis results where present.
-- **Do not add a response composer** (D72). There is no path by which Lia posts to a publication, and a composer would imply one.
+- **Do not add a response composer** (D90). There is no path by which Lia posts to a publication, and a composer would imply one.
 - Where the body would be, state plainly that Lia holds the headline and summary rather than the full article.
 
 Update the corresponding view-model in `src/lib/view-models/` to carry `publisherName`, `publisherDomain`, and `isSyndicated`.
@@ -2883,7 +2883,7 @@ In `docs/architecture/current-state.md`:
 
 - Add the new routes to the routes table.
 - Add `src/news/` and `src/lib/monitoring/` to the directories table.
-- Add a "Decisions made in workflow 06" section carrying **D60–D72 verbatim** from the spec.
+- Add a "Decisions made in workflow 06" section carrying **D78–D90 verbatim** from the spec.
 - Add the technical constraints: the gate never writes `relevance_score`; no provider message reaches a user, log, or stored row; cron carries its own tenancy discipline.
 - Add a "New in workflow 06" gaps section carrying the spec's known-gaps list, with **one correction**: the spec predicted rejections would have "no sweeper job until one exists to hang it on". A sweeper now exists — `pollMonitoringQuery` purges on every run — so record retention as working rather than as a gap.
 - Update the workflow-04 gap that reads "No scheduler" — a scheduler now exists, and the entry should say so rather than being deleted.

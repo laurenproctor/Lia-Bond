@@ -10,7 +10,7 @@ import type { NewsMonitor } from "@/news/monitor";
  *
  * Its own module rather than a private helper inside `poll-service.ts`: the
  * scheduled sweep and a server action both need it, and a person creating a
- * monitoring query is exactly the moment D62 names — "implicitly on first
+ * monitoring query is exactly the moment D80 names — "implicitly on first
  * query save" — so this must be reachable from `src/app/actions/monitoring.ts`
  * as well as from `pollMonitoringQuery`.
  */
@@ -19,9 +19,9 @@ import type { NewsMonitor } from "@/news/monitor";
  * Find, or create, the organization's `news_media` connection.
  *
  * `mentions.platform_connection_id` is `not null`, and news has no OAuth flow
- * or credential to hang a connection off (D61) — so it is created implicitly
+ * or credential to hang a connection off (D79) — so it is created implicitly
  * the first time a poll needs the row, one per organization, status
- * `connected`, no credential row (D62). Capabilities come from
+ * `connected`, no credential row (D80). Capabilities come from
  * `monitor.capabilities()`, never a hand-written guess — the same "whatever
  * the connector honestly claims today" rule `connectGoogleAccount` follows,
  * so the integrations screen never advertises full-text reading or webhooks a
@@ -29,7 +29,7 @@ import type { NewsMonitor } from "@/news/monitor";
  *
  * Attribution needs a real person: `connectedByUserId` is not nullable, and
  * the system actor sentinel used under cron must never reach a foreign key
- * (D70). A scheduled poll that finds no connection and no human behind it
+ * (D88). A scheduled poll that finds no connection and no human behind it
  * cannot create one — it returns `null`, and the caller finishes the run as
  * failed rather than inventing an owner. `createMonitoringQueryAction`, by
  * contrast, always has a verified human behind it (a server action cannot run

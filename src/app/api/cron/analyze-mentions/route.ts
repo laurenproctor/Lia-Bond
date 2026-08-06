@@ -28,7 +28,7 @@ import { analyzeMentions } from "@/lib/analysis/analyze";
  * is the narrower exception, matching how `listDue` was justified.
  *
  * Each organization gets its own `OrganizationScope`, built from that
- * organization's own id rather than anything ambient (D70), and its own call
+ * organization's own id rather than anything ambient (D88), and its own call
  * to `analyzeMentions` — so one organization's already-running analysis, or
  * one organization's unexpected failure, costs the sweep that organization
  * and nothing else, the same isolation `pollDueQueries` applies per query.
@@ -93,7 +93,7 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
     // cron carries no session, so a session-bound client would be rejected by
     // every policy resolving through auth.uid(). Every method reached below
     // therefore enforces its own tenancy discipline rather than relying on
-    // RLS (D70).
+    // RLS (D88).
     const dataSource = await getServiceDataSource();
     const organizationIds = await dataSource.organizations.listWithUnanalyzedMentions();
 

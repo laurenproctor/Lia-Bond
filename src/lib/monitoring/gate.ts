@@ -10,7 +10,7 @@ import type { ExternalArticle } from "@/news/monitor";
  * That is what makes it cheap enough to run on every candidate, and testable
  * against a fixture corpus rather than against production noise.
  *
- * This gate deliberately does **not** write `mentions.relevance_score` (D65).
+ * This gate deliberately does **not** write `mentions.relevance_score` (D83).
  * That column belongs to the analysis layer, which supersedes any provisional
  * number within minutes. The score here is persisted only on rejections, where
  * it is the thing being tuned.
@@ -58,7 +58,7 @@ const LOCAL_OUTLET_BONUS = 0.25;
  * alone is *rejected* unless corroborated (see `evaluateCandidate`), so
  * those legitimate brands need a second keyword or an `allowedDomains` entry
  * to be admitted on their own name. That is an acceptable v1 position only
- * because the rejection is logged with its reason (D64) and is therefore
+ * because the rejection is logged with its reason (D82) and is therefore
  * discoverable and tunable — it must not be read as "short brand names work
  * fine here."
  */
@@ -251,7 +251,7 @@ export function evaluateCandidate(
     // from the ambiguity rejection below, which reports a real, nonzero
     // score even though it also rejects. Conflating the two would leave
     // `news_rejected_candidates` unable to tell "irrelevant" from "plausible
-    // but unconfirmed", which is the reason the row exists at all (D64).
+    // but unconfirmed", which is the reason the row exists at all (D82).
     return { admitted: false, score: 0, reason: "below_threshold" };
   }
 

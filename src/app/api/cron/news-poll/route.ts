@@ -10,7 +10,7 @@ import { pollDueQueries } from "@/lib/monitoring/poll-service";
  * Guarded by a shared secret rather than a session: cron has no user. That
  * makes this the first write path in the codebase where RLS is not the
  * backstop, which is why the poll service constructs a scope per query row
- * rather than relying on anything ambient (D70).
+ * rather than relying on anything ambient (D88).
  *
  * Exported as both GET and POST. Vercel Cron invokes scheduled routes with
  * GET — see "Secure Cron Jobs with Next.js Route Handlers" in Vercel's own
@@ -41,7 +41,7 @@ async function handleNewsPoll(request: Request): Promise<Response> {
     // Service-role, not `getDataSource()`. Cron carries no session, so a
     // session-bound client would be rejected by every policy resolving
     // through auth.uid(). RLS is therefore not the backstop on this path —
-    // the poll service constructs a scope per query row instead (D70).
+    // the poll service constructs a scope per query row instead (D88).
     const dataSource = await getServiceDataSource();
     const outcome = await pollDueQueries({
       dataSource,

@@ -34,7 +34,7 @@ import type { NewsMonitor, NewsSearchBatch, NewsSearchQuery } from "@/news/monit
  * Properties the rest of the product depends on, each pinned by a test in
  * `tests/news-poll-service.test.ts`:
  *
- * 1. **The gate never writes `mentions.relevance_score`** (D65). Gate scores
+ * 1. **The gate never writes `mentions.relevance_score`** (D83). Gate scores
  *    are persisted only on rejections and as min/mean/max on the run.
  * 2. **No provider text reaches a stored row.** A `NewsError` is translated
  *    through a fixed, Lia-authored message map keyed by code.
@@ -272,7 +272,7 @@ export async function pollMonitoringQuery(
         exclusions: query.exclusions,
         sourceCountry: query.sourceCountry,
         language: query.language,
-        // The incremental cursor (D66). Null on a query's first ever poll.
+        // The incremental cursor (D84). Null on a query's first ever poll.
         publishedAfter: query.lastPolledAt,
         maxResults: MAX_ARTICLES_PER_POLL,
       };
@@ -530,7 +530,7 @@ export interface PollSweepOutcome {
  *
  * Stops as soon as `remainingScheduledRequests` is exhausted and reports the
  * unpolled remainder rather than silently truncating the sweep, so "8 of 40
- * queries polled" cannot be read as full coverage (D67).
+ * queries polled" cannot be read as full coverage (D85).
  */
 export async function pollDueQueries(
   options: PollDueQueriesOptions,

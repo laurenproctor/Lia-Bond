@@ -42,7 +42,7 @@ export async function getDataSource(): Promise<LiaDataSource> {
  *
  * Only the cron path may call this. Every caller therefore carries its own
  * tenancy discipline: nothing downstream of this function is checking
- * membership on its behalf (D70). The poll service is the one caller today,
+ * membership on its behalf (D88). The poll service is the one caller today,
  * and it enforces that discipline by constructing an `OrganizationScope` from
  * each row's own `organizationId` rather than trusting an ambient one.
  */

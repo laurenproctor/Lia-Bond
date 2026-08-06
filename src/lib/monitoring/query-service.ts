@@ -28,10 +28,10 @@ export interface ServiceContext {
  * Create a monitoring query, provisioning the organization's `news_media`
  * connection first if this is its first one.
  *
- * D62: the connection is created "implicitly on first query save". The poll
+ * D80: the connection is created "implicitly on first query save". The poll
  * service also provisions it (`ensureNewsConnection`, shared with this
  * function) but only when a poll actually runs, and a scheduled poll has no
- * human actor and refuses to create one (D70). Without this call, a brand-new
+ * human actor and refuses to create one (D88). Without this call, a brand-new
  * organization's very first monitoring query would sit unconnected until
  * somebody happened to poll it by hand — every scheduled poll until then
  * fails with `not_connected`. This function is called from a server action,

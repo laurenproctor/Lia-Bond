@@ -3,7 +3,7 @@
  *
  * Cron holds no membership, so it cannot construct a verified
  * `OrganizationScope` the way `getOrganizationContext()` does for every other
- * caller (D70). This sentinel exists only to satisfy `OrganizationScope`'s
+ * caller (D88). This sentinel exists only to satisfy `OrganizationScope`'s
  * `userId: string` — widening that field to `string | null` would weaken the
  * tenancy type for every call site in the codebase to accommodate the two
  * scheduled routes.

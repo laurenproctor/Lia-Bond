@@ -165,7 +165,7 @@ describe("POST /api/cron/analyze-mentions: per-organization isolation", () => {
     });
     expect(scopes).toHaveLength(2);
     for (const scope of scopes) {
-      // D70: never an ambient organization, never the request's own session
+      // D88: never an ambient organization, never the request's own session
       // (there is none) — each scope is built from the row's own id.
       expect(["org-a", "org-b"]).toContain(scope.organizationId);
       expect(scope.userId).toBe("00000000-0000-0000-0000-000000000000");

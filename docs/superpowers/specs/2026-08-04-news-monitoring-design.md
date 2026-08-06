@@ -51,19 +51,19 @@ written to it; this is the workflow where it earns its place.
 
 | # | Decision | Reason |
 | --- | --- | --- |
-| D60 | A separate `NewsMonitor` boundary, not a widened `PlatformConnector` | Eight of `PlatformConnector`'s ten methods have no meaning for a search API, and implementing them as throwers is the `if (platform === "google")` that D9 exists to prevent, relocated inside the interface. D35 set the precedent: `AiProvider` has one method because there is one thing to ask. So does this. |
-| D61 | The provider key is Lia's, held in the environment, shared by every tenant | Lia buys the news plan and serves it; a restaurant group does not arrive with a GNews subscription. Nothing touches `platform_credentials`, `oauth_states`, or the AES vault. The consequence is that quota is a Lia-level resource, which is why D67 enforces it globally. |
-| D62 | A `news_media` connection row is created implicitly on first query save | `mentions.platform_connection_id` is `not null`, so news mentions need a connection whether or not one means anything here. Creating it implicitly reuses the existing status and health machinery without inventing a connect flow for a credential the tenant does not hold. |
-| D63 | `news_poll_runs` is a new table, not a reuse of `platform_sync_runs` | `platform_sync_runs.platform_profile_id` is `not null` and news has no profile. Making it nullable would weaken a guarantee every Google row currently relies on, to accommodate a source whose lock target (a monitoring query), counters, and failure modes are all different anyway. |
-| D64 | Rejected candidates are stored, with reason and score | D26 justified `platform_sync_runs` because "a sync that failed silently looks exactly like a location with no new reviews". The same argument is sharper here: an article Lia rejected looks exactly like an article nobody wrote. "Why did you miss this story" is the first question asked of any monitoring product, and without this table the gate is unfalsifiable and therefore untunable. |
-| D65 | The gate never writes `mentions.relevance_score` | D39 reserves that column for the analysis layer, which supersedes any provisional value within minutes anyway. The gate score is persisted only on rejections — where it is the thing being tuned — and as min/mean/max on the run. The invariant stays exactly as strict as it is today. |
-| D66 | Incremental fetch by `publishedAfter`, the opposite of D23 | D23 refetches Google's full history because Google reorders on *edit*, so a cursor silently loses the review somebody changed their mind about. Articles are not edited into a different position, and a metered plan makes a full refetch cost real money for no correctness gain. The reasoning differs; the conclusion inverts. |
-| D67 | The request budget is enforced globally, in the scheduler | D61 makes quota shared across tenants, which is new: Google's quota was per-connection, so a noisy customer could only hurt themselves. Here one organization with forty queries can exhaust the day for everyone. Enforced above the tenant loop, with headroom reserved for manual polls. |
-| D68 | Syndication dedupe lives in the gate, not the provider | GNews offers no clustering. One wire story republished across forty local papers is the single largest noise source in news monitoring, so the gate normalises headlines and rejects a repeat seen within 72 hours. Deliberately provider-agnostic: it survives the Event Registry upgrade rather than being thrown away. |
-| D69 | Two crons, not one chained call | A slow model batch must not be able to blow the poll window. Splitting them also finally gives `analyzeMentions()` the scheduler that workflow 04 built it to accept and never wired. |
-| D70 | The poll service constructs its own `OrganizationScope` from the query row | This is the first write path in the codebase with no verified human behind it. `getOrganizationContext()` is unavailable to cron, so RLS is not the backstop it is everywhere else, and the tenancy discipline has to be explicit rather than ambient. |
-| D71 | GNews free tier now, Event Registry later | The user's decision, taken with the trade-offs stated. Recorded because the free tier is licensed for development only and cannot be the state when Lia has a paying customer. See "The provider decision" below. |
-| D72 | No response composer on the media detail screen | `CLAUDE.md` forbids implying publishing where the source does not support it. There is no path by which Lia posts to a newspaper, and a composer on that screen would be exactly the implication the rule prohibits. |
+| D78 | A separate `NewsMonitor` boundary, not a widened `PlatformConnector` | Eight of `PlatformConnector`'s ten methods have no meaning for a search API, and implementing them as throwers is the `if (platform === "google")` that D9 exists to prevent, relocated inside the interface. D35 set the precedent: `AiProvider` has one method because there is one thing to ask. So does this. |
+| D79 | The provider key is Lia's, held in the environment, shared by every tenant | Lia buys the news plan and serves it; a restaurant group does not arrive with a GNews subscription. Nothing touches `platform_credentials`, `oauth_states`, or the AES vault. The consequence is that quota is a Lia-level resource, which is why D85 enforces it globally. |
+| D80 | A `news_media` connection row is created implicitly on first query save | `mentions.platform_connection_id` is `not null`, so news mentions need a connection whether or not one means anything here. Creating it implicitly reuses the existing status and health machinery without inventing a connect flow for a credential the tenant does not hold. |
+| D81 | `news_poll_runs` is a new table, not a reuse of `platform_sync_runs` | `platform_sync_runs.platform_profile_id` is `not null` and news has no profile. Making it nullable would weaken a guarantee every Google row currently relies on, to accommodate a source whose lock target (a monitoring query), counters, and failure modes are all different anyway. |
+| D82 | Rejected candidates are stored, with reason and score | D26 justified `platform_sync_runs` because "a sync that failed silently looks exactly like a location with no new reviews". The same argument is sharper here: an article Lia rejected looks exactly like an article nobody wrote. "Why did you miss this story" is the first question asked of any monitoring product, and without this table the gate is unfalsifiable and therefore untunable. |
+| D83 | The gate never writes `mentions.relevance_score` | D39 reserves that column for the analysis layer, which supersedes any provisional value within minutes anyway. The gate score is persisted only on rejections — where it is the thing being tuned — and as min/mean/max on the run. The invariant stays exactly as strict as it is today. |
+| D84 | Incremental fetch by `publishedAfter`, the opposite of D23 | D23 refetches Google's full history because Google reorders on *edit*, so a cursor silently loses the review somebody changed their mind about. Articles are not edited into a different position, and a metered plan makes a full refetch cost real money for no correctness gain. The reasoning differs; the conclusion inverts. |
+| D85 | The request budget is enforced globally, in the scheduler | D79 makes quota shared across tenants, which is new: Google's quota was per-connection, so a noisy customer could only hurt themselves. Here one organization with forty queries can exhaust the day for everyone. Enforced above the tenant loop, with headroom reserved for manual polls. |
+| D86 | Syndication dedupe lives in the gate, not the provider | GNews offers no clustering. One wire story republished across forty local papers is the single largest noise source in news monitoring, so the gate normalises headlines and rejects a repeat seen within 72 hours. Deliberately provider-agnostic: it survives the Event Registry upgrade rather than being thrown away. |
+| D87 | Two crons, not one chained call | A slow model batch must not be able to blow the poll window. Splitting them also finally gives `analyzeMentions()` the scheduler that workflow 04 built it to accept and never wired. |
+| D88 | The poll service constructs its own `OrganizationScope` from the query row | This is the first write path in the codebase with no verified human behind it. `getOrganizationContext()` is unavailable to cron, so RLS is not the backstop it is everywhere else, and the tenancy discipline has to be explicit rather than ambient. |
+| D89 | GNews free tier now, Event Registry later | The user's decision, taken with the trade-offs stated. Recorded because the free tier is licensed for development only and cannot be the state when Lia has a paying customer. See "The provider decision" below. |
+| D90 | No response composer on the media detail screen | `CLAUDE.md` forbids implying publishing where the source does not support it. There is no path by which Lia posts to a newspaper, and a composer on that screen would be exactly the implication the rule prohibits. |
 
 ## The provider decision
 
@@ -78,15 +78,15 @@ it is contact-sales only. Of what remains available self-serve:
 
 Event Registry was selected on merit and then deferred on cost. **GNews free is
 what workflow 06 builds against**, and the deferral is cheap precisely because
-D60 put a boundary in the way.
+D78 put a boundary in the way.
 
 What the free tier does not have, and what each absence costs:
 
 | Missing | Consequence |
 | --- | --- |
 | Article body | Analysis classifies headline plus description, roughly 200 characters. Thin, but genuinely classifiable — unlike the wordless review D40 refuses to send to a model. |
-| Event clustering, `isDuplicate` | Syndication dedupe becomes Lia's job. See D68. |
-| Concepts (disambiguated entities) | The gate loses its strongest precision signal at the same moment its input gets thinner. The two compound, which is why D64 matters more here than it would have under Event Registry. |
+| Event clustering, `isDuplicate` | Syndication dedupe becomes Lia's job. See D86. |
+| Concepts (disambiguated entities) | The gate loses its strongest precision signal at the same moment its input gets thinner. The two compound, which is why D82 matters more here than it would have under Event Registry. |
 | Source rank | No `source_authority` column. |
 | Real-time | News is up to 12 hours behind, and the capability text must say so. |
 | Paging (10 articles/request) | A busy query truncates. Runs record `truncated` rather than under-reporting silently. |
@@ -204,7 +204,7 @@ I/O, no clock beyond an injected `now`.
 An article Lia has already ingested is **not** a rejection. It flows through to
 `mentions.ingest()`, where `mentions_unique_external` upserts it and refreshes
 the source-owned fields. Rejecting it would mean a corrected headline or a
-changed publisher never reaches the record. D66's incremental fetch makes this
+changed publisher never reaches the record. D84's incremental fetch makes this
 rare, not impossible — the overlap window at `publishedAfter` guarantees some
 repeats.
 
@@ -233,7 +233,7 @@ rather than polled in one burst.
 
 The budget is requests per day, not tokens per month: 100/day, 10 articles each.
 Twenty queries at a four-hour interval is 120/day and busts the limit; **at six
-hours it is 80/day and fits**. This is why D67 is enforcement rather than
+hours it is 80/day and fits**. This is why D85 is enforcement rather than
 assumption — the ceiling is reachable with a realistic number of queries.
 
 Day-to-date spend is `sum(requests_spent)` over `news_poll_runs`, so no counter
@@ -250,7 +250,7 @@ inside a page render.
 | --- | --- |
 | `/integrations` | News and media card |
 | `/integrations/news-media` | **New.** Capabilities, poll health, recent runs, monitoring queries, rejected candidates |
-| `/media/[id]` | Now receives real articles. Headline, description, publisher, analysis, prominent link out. No composer (D72), and no pretence of being a reading surface for a body Lia does not have |
+| `/media/[id]` | Now receives real articles. Headline, description, publisher, analysis, prominent link out. No composer (D90), and no pretence of being a reading surface for a body Lia does not have |
 | `/mentions` | No structural change — news arrives through the existing inbox and source badge |
 | `/api/cron/news-poll` | **New.** GET and POST, `CRON_SECRET`-guarded |
 | `/api/cron/analyze-mentions` | **New.** GET and POST, `CRON_SECRET`-guarded |
