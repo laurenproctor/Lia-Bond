@@ -941,10 +941,11 @@ Ambiguity is still checked before syndication, so wire copies of one story are
 recorded as `ambiguous_uncorroborated` rather than `probable_syndication` when
 the brand name is short. That ordering is unchanged and remains open.
 
-The fix is a fifth enum value plus the migration to add it, and it needs the
-`AMBIGUOUS_TERM_MAX_LENGTH` heuristic revisited alongside — not done here
-because both are gate-tuning decisions with real product consequences, and
-this document is the wrong place to make them silently.
+`AMBIGUOUS_TERM_MAX_LENGTH` itself is still unrevisited: the heuristic still
+rejects any lone ambiguous match under its length regardless of score, and
+labelling the rejection accurately does not make that trade-off correct. Left
+open because it is a gate-tuning decision with real product consequences, and
+this document is the wrong place to make it silently.
 
 Two useful things fell out of doing it:
 
