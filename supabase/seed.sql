@@ -52,6 +52,10 @@ insert into public.locations (id, organization_id, name, slug, address_line1, ad
   ('d8149a09-f4fe-57cf-9059-434ba56dd902', '2cfb101c-667c-588b-a37e-d52a0f6209ba', 'Harbor House', 'harbor-house', '1400 Embarcadero', null, 'San Francisco', 'CA', '94111', 'US', 'America/Los_Angeles', 'active', '66e8a131-b39e-5c45-a6e1-74896d5c80aa', '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z')
 on conflict (id) do nothing;
 
+-- No credential column appears here, and none ever should: OAuth material
+-- lives in platform_connection_secrets, which is service-role only and is
+-- deliberately not seeded. A fixture token is how a fixture token ends up
+-- somewhere real.
 -- platform_connections (6 rows)
 insert into public.platform_connections (id, organization_id, platform, external_account_id, external_account_name, status, capabilities, token_expires_at, last_synced_at, granted_scopes, provider_metadata, last_health_check_at, last_health_status, last_error_code, last_error_message, connected_by_user_id, connected_at, disconnected_at, created_at, updated_at) values
   ('4c6826a1-728c-539f-90db-d3f171e8e0da', '2e10c03b-59de-5083-b50b-c2878784ebaa', 'google_business_profile', 'accounts/1122334455', 'Union Square Hospitality Group', 'connected', '{"canReadMentions":true,"canReadFullText":true,"supportsWebhooks":true,"canPublishResponses":true,"canEditResponses":true,"canDeleteResponses":true,"requiresApproval":false,"requiresPartnerAccess":false}'::jsonb, '2026-09-18T18:00:00.000Z', '2026-08-01T17:56:00.000Z', '{}', '{}'::jsonb, null, null, null, null, null, null, null, '2025-12-04T18:00:00.000Z', '2026-07-30T18:00:00.000Z'),
@@ -77,6 +81,8 @@ insert into public.platform_profiles (id, organization_id, location_id, platform
   ('48415cab-61a4-581c-af89-9a8c461c517a', '2cfb101c-667c-588b-a37e-d52a0f6209ba', 'd8149a09-f4fe-57cf-9059-434ba56dd902', 'eea7b68c-4f7c-575b-af0a-0db2cdc28952', 'locations/5001', 'Harbor House', null, 'https://example.com/gbp/harbor-house', 'active', null, '{}'::jsonb, null, null, '2026-08-01T17:48:00.000Z', '2025-12-04T18:00:00.000Z', '2026-08-01T17:48:00.000Z')
 on conflict (id) do nothing;
 
+-- Must precede `mentions`: a seeded mention's monitoring_query_id
+-- references this table, and insertion order is what satisfies it.
 -- monitoring_queries (3 rows)
 insert into public.monitoring_queries (id, organization_id, location_id, name, query_type, keywords, exclusions, allowed_domains, denied_domains, source_country, language, relevance_threshold, enabled, poll_interval_minutes, last_polled_at, created_at, updated_at) values
   ('ccb708fb-8648-5049-a2ed-f691743ec5f2', '2e10c03b-59de-5083-b50b-c2878784ebaa', null, 'Maison Laurent brand watch', 'brand', '{"Maison Laurent","Union Square Hospitality Group","USHG"}', '{"obituary"}', '{}', '{}', 'us', 'en', 0.35, true, 240, '2026-08-01T17:51:00.000Z', '2025-12-04T18:00:00.000Z', '2026-07-30T18:00:00.000Z'),

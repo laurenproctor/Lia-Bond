@@ -13,12 +13,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 // Resolved by scripts/tsconfig-paths-hook.mjs, which the npm script preloads.
-import { SEED_DATASET } from "@/lib/seed/dataset";
 import { REFERENCE_NOW } from "@/lib/seed/clock";
-import { columnName, SEED_TABLE_COLUMNS } from "./seed-sql-columns.ts";
+import { columnName } from "./seed-sql-columns.ts";
+import { SEED_PLAN, type SeedRow } from "./seed-plan.ts";
 
 type Scalar = string | number | boolean | null | undefined;
-type Row = Record<string, Scalar | Scalar[] | object>;
+type Row = SeedRow;
 
 /** Single-quote a value for SQL, escaping embedded quotes. */
 function quote(value: string): string {
@@ -120,76 +120,13 @@ const sections: string[] = [
 // tests/seed-generator-columns.test.ts, which asserts each list matches the
 // real migrations exactly (modulo the documented SEED_COLUMN_EXCLUSIONS) —
 // see that file's header for why this list has burned us three times.
-sections.push(
-  insert("users", SEED_DATASET.users, SEED_TABLE_COLUMNS.users),
-  insert("organizations", SEED_DATASET.organizations, SEED_TABLE_COLUMNS.organizations),
-  insert("memberships", SEED_DATASET.memberships, SEED_TABLE_COLUMNS.memberships),
-  insert("locations", SEED_DATASET.locations, SEED_TABLE_COLUMNS.locations),
-  // No credential column appears here, and none ever should: OAuth material
-  // lives in platform_connection_secrets, which is service-role only and is
-  // deliberately not seeded. A fixture token is how a fixture token ends up
-  // somewhere real.
-  insert(
-    "platform_connections",
-    SEED_DATASET.platformConnections,
-    SEED_TABLE_COLUMNS.platform_connections,
-  ),
-  insert(
-    "platform_profiles",
-    SEED_DATASET.platformProfiles,
-    SEED_TABLE_COLUMNS.platform_profiles,
-  ),
-  // Must precede `mentions`: a seeded mention's monitoring_query_id (below)
-  // references this table, and generation order is insertion order.
-  insert(
-    "monitoring_queries",
-    SEED_DATASET.monitoringQueries,
-    SEED_TABLE_COLUMNS.monitoring_queries,
-  ),
-  insert("mentions", SEED_DATASET.mentions, SEED_TABLE_COLUMNS.mentions),
-  insert(
-    "mention_analyses",
-    SEED_DATASET.mentionAnalyses,
-    SEED_TABLE_COLUMNS.mention_analyses,
-  ),
-  insert(
-    "response_drafts",
-    SEED_DATASET.responseDrafts,
-    SEED_TABLE_COLUMNS.response_drafts,
-  ),
-  insert("approvals", SEED_DATASET.approvals, SEED_TABLE_COLUMNS.approvals),
-  insert("escalations", SEED_DATASET.escalations, SEED_TABLE_COLUMNS.escalations),
-  insert(
-    "automation_rules",
-    SEED_DATASET.automationRules,
-    SEED_TABLE_COLUMNS.automation_rules,
-  ),
-  // Flattened before writing: the domain type nests the five axes under
-  // `axes`, the migration holds them as five columns. The mapping is here
-  // rather than in the dataset so the seed stays shaped like the type the
-  // rest of the application reads.
-  insert(
-    "brand_voice_profiles",
-    SEED_DATASET.brandVoiceProfiles.map((profile) => ({
-      id: profile.id,
-      organizationId: profile.organizationId,
-      name: profile.name,
-      axisWarmth: profile.axes.warmth,
-      axisDetail: profile.axes.detail,
-      axisFormality: profile.axes.formality,
-      axisConfidence: profile.axes.confidence,
-      axisHospitality: profile.axes.hospitality,
-      approvedPhrases: profile.approvedPhrases,
-      prohibitedPhrases: profile.prohibitedPhrases,
-      version: profile.version,
-      updatedByUserId: profile.updatedByUserId,
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
-    })),
-    SEED_TABLE_COLUMNS.brand_voice_profiles,
-  ),
-  insert("audit_events", SEED_DATASET.auditEvents, SEED_TABLE_COLUMNS.audit_events),
-);
+//
+// The table order lives in seed-plan.ts, shared with seed-remote.ts, so the
+// SQL file and the PostgREST loader seed the same tables in the same order.
+for (const { table, rows, columns, note } of SEED_PLAN) {
+  if (note) sections.push(note.replace(/^/gm, "-- "));
+  sections.push(insert(table, rows, columns));
+}
 
 sections.push("commit;", "");
 
@@ -201,8 +138,7 @@ const outputPath = resolve(
 mkdirSync(dirname(outputPath), { recursive: true });
 writeFileSync(outputPath, sections.join("\n"), "utf8");
 
-const total = Object.values(SEED_DATASET).reduce(
-  (sum, rows) => sum + (rows as unknown[]).length,
-  0,
+const total = SEED_PLAN.reduce((sum, { rows }) => sum + rows.length, 0);
+console.log(
+  `Wrote ${outputPath} (${total} rows across ${SEED_PLAN.length} tables).`,
 );
-console.log(`Wrote ${outputPath} (${total} rows across 14 tables).`);

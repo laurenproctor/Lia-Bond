@@ -796,24 +796,70 @@ they sit an abstraction level below what an architecture scan needs.
 
 New after integrating the branches:
 
-- **The hosted project is fifteen migrations behind.** Only the first eight
-  have ever been applied (`supabase db push`); everything from
-  `20260805000100_membership_provisioning.sql` onward — membership, early
-  access, brand voice, news monitoring, and the audit-vocabulary merge — has
-  been parse-validated and exercised against the demo adapter only. That is
-  what made renumbering the collided migrations free, and it is the single
-  largest untested surface in the repository. The RLS verification in
-  `supabase/tests/rls-verification.sql` covers policies that no live database
-  has yet enforced.
-- **Three streams of write-path code have still only run against the demo
-  adapter**: brand voice saves, monitoring-query CRUD, and news ingest. The
-  same position sync and analysis have been in since workflow 03.
-- **No live scheduled run.** `vercel.ts` declares both crons and the routes
-  build, but nothing has invoked them on a deployment, so the
-  session-gate carve-out (D79) and the service-role data source are correct by
-  test and by reading rather than by observation. The first deploy is the
-  experiment.
 - The marketing site, help requests, and early access shipped without ever
   reaching this document; their routes and directories are recorded above as
   of this merge. Whatever caused them to be missed is a process gap, not a
   code one — the branch that added them updated no architecture doc at all.
+
+## Closed by the first live run
+
+All 23 migrations are applied to the hosted project, and the subsystems below
+have now executed against real infrastructure rather than a stub. What each
+one actually proved:
+
+| Was | Now |
+| --- | --- |
+| Only 8 of 23 migrations applied | All 23 applied. The collided-and-renumbered versions (D80) went on cleanly, confirming none had ever been pushed under their old numbers. |
+| **The Anthropic API had never been called from this repository** | Called. A scheduled sweep classified 12 mentions across both organizations with zero failures, writing real provenance — `claude-opus-5`, prompt version `analysis@2026-08-04`, per-row token counts. |
+| Analysis had no scheduler | `/api/cron/analyze-mentions` ran end to end under `CRON_SECRET`, through `getServiceDataSource()`, and recorded two `completed` rows in `analysis_runs`. |
+| D70's system-actor rule was a reading of the code | Verified in Postgres: both scheduled runs stored `actor_user_id = null`. `SYSTEM_ACTOR_ID` satisfies the `OrganizationScope` type and reaches no foreign key. |
+| RLS policies had never been enforced by a live database | Enforced. Signed in as a seeded admin, all eight organization-owned tables returned own-tenant rows only; a cross-tenant insert was rejected `42501` with a same-tenant control proving the table was writable; a cross-tenant update touched 0 rows; the service-role scan RPC was rejected `42501`; anonymous read returned nothing. |
+| Brand voice and monitoring-query writes were demo-adapter only | Both exercised against live Postgres under RLS — brand voice update plus its audit event, and monitoring-query insert, update, and delete. |
+| News ingest was demo-adapter only | The whole pipeline ran against live Postgres with the mock provider: 3 queries polled, 5 articles ingested, 13 rejected `below_threshold`, gate scores and `requests_spent` recorded. The mock-derived rows were then removed, so the database is reproducible from the seed again. |
+| The audit-vocabulary defect (D80) was a test failure | Confirmed against live Postgres: all eight restored event types insert, and an unknown type is still rejected `23514`. Without `20260807000700` the first membership change or brand voice edit would have failed in production. |
+
+Two useful things fell out of doing it:
+
+- **`npm run db:seed:remote`.** There was no supported way to seed the hosted
+  project without the database password, which is not in the repo and not
+  recoverable from the CLI's keychain entry — so the tables added since
+  workflow 04 sat empty. The loader goes through PostgREST under the
+  service-role key instead, and shares `SEED_PLAN` with the SQL generator so
+  the two cannot seed different things.
+- **`--overwrite`.** Insert-only is the right default and matches
+  `seed.sql`'s `on conflict (id) do nothing`, but it cannot fix a database
+  seeded *before* a migration added a column: the row exists, the insert is
+  skipped, and the new column keeps its default forever. That is exactly what
+  had happened here — the hosted `news_article` mentions carried no publisher
+  and no monitoring query long after both columns existed, and re-running the
+  seed would never have said so.
+
+## Still open
+
+- **The real Google OAuth flow has still never been run**, and it cannot be
+  run headlessly: it needs a person at a browser and a Google account with
+  access to a Business Profile. Worth recording what does *not* substitute for
+  it — requesting the authorize endpoint with the configured client returns a
+  302 whether the client is real, the redirect URI is unregistered, or the
+  client id is invented, because Google defers every one of those checks until
+  after sign-in. A 302 there is not evidence of anything.
+- **News monitoring has no provider key.** `LIA_NEWS_MODE=live` is set and
+  `GNEWS_API_KEY` is blank, so `resolveNewsMode()` reports `unconfigured` and
+  the poll route answers `not_configured` — verified, and nothing fabricated
+  reaches the database. It activates when a key is filled in, with no code
+  change. Note the provider: the key currently in `.env` as
+  `NEWSAPI_AI_API_KEY` is an Event Registry key, read by no code here, and it
+  will not authenticate against the GNews client. D71's upgrade is still an
+  upgrade, not the current state.
+- **`supabase/tests/rls-verification.sql` has still never been executed.** The
+  live checks above were run through PostgREST as an authenticated user, which
+  covers the tenancy property that harness protects but not the harness
+  itself — it needs `psql` and the database password, and `npm run
+  db:verify-rls` additionally needs `supabase db reset`, which needs Docker.
+- **Prompt quality remains unvalidated.** The first live run classified 11 of
+  12 mentions `low` and one `medium`, and raised no escalation. That is
+  plausible for this seed and is not evidence the risk thresholds are right;
+  there is still no labelled dataset. `prompt_version` is recorded on every
+  row so a later version can be compared against this one.
+- Cost per run is now measurable rather than theoretical: the sweep of 12
+  mentions spent roughly 1,500 input and 5,200 output tokens.
