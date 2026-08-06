@@ -585,6 +585,7 @@ same list; those are D91–D93. The rest were resolved by taking both sides.
 | D92 | The auth gate stays a product denylist, with `/api/cron` as an explicit carve-out | The marketing site requires the denylist: an allowlist bounces every unrecognised URL to `/sign-in`, so a mistyped marketing link or a dead search result met a login form instead of a 404. But `/api` is on the denylist, and news monitoring's cron routes live under it — merging the two as written would have redirected every scheduled invocation to `/sign-in` before its own `CRON_SECRET` check ran. The carve-out is matched by segment and checked first, so `/api/cronjobs` does not inherit the bypass. This is the failure mode the denylist's own comment predicted, and it is covered by tests in both directions because the symptom is silence: nothing errors, and the only sign is data that stops arriving. |
 | D93 | The audit vocabulary gets a merge migration rather than an edit to the branch that broke it | `audit_events_known_event_type` is a closed check constraint, and Postgres cannot extend one — so every workflow redefines the whole list. That is safe on one line of history and wrong on three: news monitoring redefined it from a copy predating membership and brand voice, and filename order puts that redefinition last, silently dropping eight event types the application still emits. A new migration keeps each branch's own migration honest about what it knew, and puts the union somewhere a reader can see it was a merge artefact rather than a mistake anyone made alone. |
 | D94 | `SEED_TABLE_COLUMNS` wins over the inline column lists | News monitoring pulled the seed generator's hand-written column lists into one module and added a test comparing them against the migrations in both directions — a response to hitting the same silent bug three times, where a column exists everywhere except the generator's list and simply never reaches `seed.sql`. Brand voice added a table to the old inline form. Folding it into the refactor puts the newest table under that test rather than outside it, which is the only version of this resolution that gets the benefit. |
+| D95 | Rejection reasons split three ways rather than one added | Only the ambiguity case was mislabelled, but the fix for it also retires an implicit convention: "score 0 means nothing matched" was load-bearing and documented only in a comment. Three reasons for three operator actions costs one extra enum value and makes each return site say what it means. |
 
 ## Known gaps after workflow 04
 
@@ -922,29 +923,23 @@ does not re-investigate them:
   GNews capped the page at ten. Recorded as partial so a capped poll never
   reads as a quiet news day.
 
-**And one thing that is a real defect.** `gate_rejection_reason` has four
-values and none of them means "ambiguous term, uncorroborated", so that
-rejection is recorded as `below_threshold` — which is false whenever the score
-cleared the threshold, and it did on most of them. The live probe made the
-cost concrete: of five articles about a genuine salmonella outbreak at the
-probed brand, four were rejected at score 0.7 against a 0.35 threshold,
-labelled as though they had scored too low. Only the one whose headline
-happened to carry the full two-word company name was admitted.
+**And one thing that was a real defect, now fixed.** `gate_rejection_reason`
+had four values and none meant "ambiguous term, uncorroborated", so that
+rejection was recorded as `below_threshold` — false whenever the score cleared
+the threshold, which it usually did. Of five articles about a genuine
+salmonella outbreak at the probed brand, four were rejected at 0.7 against a
+0.35 threshold and labelled as scoring too low.
 
-This matters more than a mislabelled row. `AMBIGUOUS_TERM_MAX_LENGTH`'s own
-comment accepts the short-brand-name trade-off *on the grounds* that "the
-rejection is logged with its reason (D82) and is therefore discoverable and
-tunable". It is not discoverable: an operator reading this table sees
-`below_threshold` at 0.7 and concludes the threshold logic is broken, and
-lowering the threshold — the obvious response — changes nothing, because the
-corroboration rule never consulted it. The rejection data the gate depends on
-to be tunable currently cannot distinguish "irrelevant" from "on-topic but
-uncorroborated", which is the distinction it exists to record.
+It now emits `ambiguous_uncorroborated`, and a true non-match emits
+`no_keyword_match`, leaving `below_threshold` to mean only itself. Each of the
+three maps to a different operator action: fix the keywords, tune the
+threshold, or revisit the ambiguity rule. `AMBIGUOUS_TERM_MAX_LENGTH`'s
+justification — that the trade-off is acceptable because the rejection is
+"discoverable and tunable" — is now accurate rather than aspirational.
 
-A related consequence: because ambiguity is checked before syndication, four
-near-identical wire copies of the same story were each recorded as
-`below_threshold` rather than `probable_syndication`, so the dedupe rule
-never ran on the clearest syndication case the live poll produced.
+Ambiguity is still checked before syndication, so wire copies of one story are
+recorded as `ambiguous_uncorroborated` rather than `probable_syndication` when
+the brand name is short. That ordering is unchanged and remains open.
 
 The fix is a fifth enum value plus the migration to add it, and it needs the
 `AMBIGUOUS_TERM_MAX_LENGTH` heuristic revisited alongside — not done here
