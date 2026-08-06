@@ -1,6 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { isSitePath } from "@/lib/site/routes";
 
 /**
  * Session refresh and the authentication gate.
@@ -23,33 +22,67 @@ import { isSitePath } from "@/lib/site/routes";
  * `auth.uid()` comes from the verified JWT, so a forged cookie gets a session
  * that can read nothing. Deleting this file would make the app unpleasant,
  * not insecure.
+ *
+ * Because it is a convenience and not the security boundary, the gate below
+ * is a **product denylist** rather than a site allowlist: it redirects only
+ * requests aimed at a known product route, and lets everything else — the
+ * marketing site, and any path nobody has heard of — fall through to Next.
+ * An allowlist got this backwards. `/` grew a public marketing site, and an
+ * allowlist bounces every URL it does not recognise to `/sign-in`, including
+ * a mistyped marketing link or a dead search-engine result that should
+ * instead render a real 404. Since the actual security boundary is Postgres
+ * row-level security, trading fail-closed convenience for correct public-site
+ * behaviour does not move where enforcement happens — it only changes what an
+ * anonymous visitor sees on their way to being told "no".
  */
 
 /**
- * Routes reachable without a session.
+ * Product routes: the surfaces that require a session to be useful at all.
+ * Everything else — marketing pages, auth screens, unknown paths — is left
+ * alone by the gate below.
  *
- * `/reset-password` is here even though it needs a *recovery* session, which
- * is a real session. If middleware bounced an unauthenticated visitor, someone
- * with a dead link would land back on sign-in with no explanation; the page
- * checks for itself and says the link expired.
+ * Kept as a literal list rather than derived from `NAV_SECTIONS` in
+ * `@/lib/navigation` because the nav only lists sidebar entries for a
+ * signed-in user; this list is the contract with the middleware and should
+ * change deliberately, in step with `manifest.json` and the routes under
+ * `src/app/(app)/`.
  *
- * `/invite` is public for the same class of reason and one more: an invitee
- * usually has no account at all, so there is no session to gate on. The token
- * in the path is what authorises the page, and it is checked there.
+ * `/api` is here too, and deliberately not split out into its own concept.
+ * Before this file inverted from an allowlist to a denylist, an anonymous
+ * request to any `/api/...` route was redirected to `/sign-in` simply because
+ * no API path was ever in the old allowlist — the OAuth callback and the
+ * review-sync endpoint both rely on that: only a signed-in user reaches them,
+ * because Google's redirect back to the callback carries the session cookie
+ * the browser already has. Leaving `/api` off this list would have quietly
+ * dropped that protection the day the gate flipped. If a genuinely public API
+ * route is ever needed (a webhook, say), it should get an explicit carve-out
+ * rather than a change to this default.
  */
-const PUBLIC_PATHS = [
-  "/sign-in",
-  "/sign-up",
-  "/forgot-password",
-  "/reset-password",
-  "/auth",
-  // Invitations are opened by people who do not have an account yet. Gating
-  // this would bounce every invitee to sign-in and lose the token on the way.
-  "/invite",
+export const PRODUCT_PATHS = [
+  "/overview",
+  "/mentions",
+  "/reviews",
+  "/reddit",
+  "/media",
+  "/responses",
+  "/escalations",
+  "/insights",
+  "/locations",
+  "/rules",
+  "/integrations",
+  "/brand-voice",
+  "/settings",
+  "/help",
+  "/api",
 ];
 
-function isPublic(pathname: string): boolean {
-  return PUBLIC_PATHS.some(
+/**
+ * Segment match, not `startsWith`: `/overview-of-pricing` (a hypothetical
+ * marketing page) shares a prefix with `/overview` but is not the product
+ * route, and must not be swept into the gate.
+ */
+export function isProductPath(pathname: string): boolean {
+  return PRODUCT_PATHS.some(
     (path) => pathname === path || pathname.startsWith(`${path}/`),
   );
 }
@@ -96,12 +129,12 @@ export async function middleware(request: NextRequest) {
 
   const { pathname, search } = request.nextUrl;
 
-  // `isSitePath` is separate from `isPublic` rather than folded into it because
-  // the two answer different questions: `isPublic` means "an auth screen that
-  // must stay reachable without a session", `isSitePath` means "public
-  // marketing". Merging them would blur a distinction the comments above
-  // explain carefully.
-  if (!user && !isPublic(pathname) && !isSitePath(pathname)) {
+  // Denylist, not allowlist: redirect only when the request targets a known
+  // product route. `/sign-in`, `/invite`, and the rest of the auth screens
+  // are unaffected because they were never in `PRODUCT_PATHS`; the marketing
+  // site and any path nobody has heard of fall through to Next, which is what
+  // lets an unknown URL render a real 404 instead of a login form.
+  if (!user && isProductPath(pathname)) {
     const signIn = request.nextUrl.clone();
     signIn.pathname = "/sign-in";
     signIn.search = "";
