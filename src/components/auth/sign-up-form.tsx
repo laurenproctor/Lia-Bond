@@ -43,12 +43,15 @@ export function SignUpForm() {
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
-      <AuthField
-        name="fullName"
-        label="Your name"
-        autoComplete="name"
-        autoFocus
-      />
+      <div className="grid grid-cols-2 gap-4">
+        <AuthField
+          name="firstName"
+          label="First name"
+          autoComplete="given-name"
+          autoFocus
+        />
+        <AuthField name="lastName" label="Last name" autoComplete="family-name" />
+      </div>
 
       <AuthField
         name="organizationName"

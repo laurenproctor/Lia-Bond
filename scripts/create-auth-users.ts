@@ -79,7 +79,11 @@ for (const user of SEED_DATASET.users) {
     // Skips the confirmation email, which a new project cannot reliably send
     // anyway — its built-in SMTP is rate-limited to a handful an hour.
     email_confirm: true,
-    user_metadata: { full_name: user.fullName },
+    user_metadata: {
+      first_name: user.firstName,
+      last_name: user.lastName,
+      full_name: user.fullName,
+    },
   };
 
   // The id is the whole point: it must match public.users.id or RLS resolves

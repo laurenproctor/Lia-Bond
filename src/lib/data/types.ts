@@ -217,6 +217,23 @@ export interface OrganizationRepository {
   listWithUnanalyzedMentions(): Promise<string[]>;
 }
 
+export interface UpdateOwnProfileInput {
+  firstName: string;
+  lastName: string;
+}
+
+export interface UserRepository {
+  /**
+   * Update the caller's own name.
+   *
+   * `userId` must come from the session, never from a form — under Supabase
+   * the RLS `users_update_self` policy enforces that anyway, but the demo
+   * adapter has no such backstop, so the contract lives here. `fullName` is
+   * derived from the parts (a generated column under Supabase), not accepted.
+   */
+  updateOwnProfile(userId: string, input: UpdateOwnProfileInput): Promise<User>;
+}
+
 export interface MembershipRepository {
   /** The caller's own membership. Returns null when there is none, or it is not active. */
   getActiveMembership(organizationId: string, userId: string): Promise<Membership | null>;
@@ -862,6 +879,8 @@ export interface LiaDataSource {
   organizations: OrganizationRepository;
   /** First-run setup progress. One row per organization, created with it. */
   onboarding: OnboardingRepository;
+  /** Profiles. Self-service only — member administration lives on memberships. */
+  users: UserRepository;
   memberships: MembershipRepository;
   /** Pending offers of membership. Acceptance is not organization-scoped. */
   invitations: InvitationRepository;

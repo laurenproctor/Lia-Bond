@@ -123,11 +123,20 @@ export const USER_MARCUS = seedId("user:marcus");
 export const USER_JORDAN = seedId("user:jordan");
 export const USER_SOFIA = seedId("user:sofia");
 
-function user(id: string, fullName: string, email: string): User {
+function user(
+  id: string,
+  firstName: string,
+  lastName: string,
+  email: string,
+): User {
   return {
     id,
     email,
-    fullName,
+    firstName,
+    lastName,
+    // Composed exactly as the database's generated column composes it, so the
+    // demo adapter and Postgres render identical display names.
+    fullName: `${firstName} ${lastName}`.trim(),
     avatarUrl: null,
     createdAt: CREATED,
     updatedAt: CREATED,
@@ -135,13 +144,13 @@ function user(id: string, fullName: string, email: string): User {
 }
 
 const users: User[] = [
-  user(USER_DANIEL, "Daniel Reyes", "daniel.reyes@example.com"),
-  user(USER_KATE, "Kate Morgan", "kate.morgan@example.com"),
-  user(USER_NAOMI, "Naomi Clarke", "naomi.clarke@example.com"),
-  user(USER_PRIYA, "Priya Raman", "priya.raman@example.com"),
-  user(USER_MARCUS, "Marcus Bell", "marcus.bell@example.com"),
-  user(USER_JORDAN, "Jordan Ellis", "jordan.ellis@example.com"),
-  user(USER_SOFIA, "Sofia Duarte", "sofia.duarte@example.com"),
+  user(USER_DANIEL, "Daniel", "Reyes", "daniel.reyes@example.com"),
+  user(USER_KATE, "Kate", "Morgan", "kate.morgan@example.com"),
+  user(USER_NAOMI, "Naomi", "Clarke", "naomi.clarke@example.com"),
+  user(USER_PRIYA, "Priya", "Raman", "priya.raman@example.com"),
+  user(USER_MARCUS, "Marcus", "Bell", "marcus.bell@example.com"),
+  user(USER_JORDAN, "Jordan", "Ellis", "jordan.ellis@example.com"),
+  user(USER_SOFIA, "Sofia", "Duarte", "sofia.duarte@example.com"),
 ];
 
 function membership(

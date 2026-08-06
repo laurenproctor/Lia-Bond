@@ -72,7 +72,15 @@ export function AcceptInvitationSignUpForm({
         hint="Set by the invitation."
       />
 
-      <AuthField name="fullName" label="Your name" autoComplete="name" autoFocus />
+      <div className="grid grid-cols-2 gap-4">
+        <AuthField
+          name="firstName"
+          label="First name"
+          autoComplete="given-name"
+          autoFocus
+        />
+        <AuthField name="lastName" label="Last name" autoComplete="family-name" />
+      </div>
 
       <AuthField
         name="password"

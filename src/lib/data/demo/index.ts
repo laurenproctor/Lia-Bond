@@ -498,6 +498,26 @@ export function createDemoDataSource(): LiaDataSource {
       },
     },
 
+    users: {
+      async updateOwnProfile(userId, input) {
+        const user = store().users.find((row) => row.id === userId);
+        if (!user) throw notFound("That account no longer exists.");
+
+        const updated: User = {
+          ...user,
+          firstName: input.firstName,
+          lastName: input.lastName,
+          // Composed the same way the database's generated column composes it,
+          // so the two adapters render identical display names.
+          fullName: `${input.firstName} ${input.lastName}`.trim(),
+          updatedAt: realNowIso(),
+        };
+
+        replaceRow(store().users, updated);
+        return updated;
+      },
+    },
+
     memberships: {
       async getActiveMembership(organizationId, userId) {
         return (

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { INDUSTRIES, SITE_FOOTER, SITE_NAV, SITE_ROUTES } from "@/lib/site/routes";
-import { PRODUCT_PATHS, isProductPath } from "@/middleware";
+import { PRODUCT_PATHS, isProductPath } from "@/proxy";
 
 /**
  * The route table is the single source the navigation, the footer and the
  * sitemap read.
  *
- * `src/middleware.ts` gates the opposite way: it redirects an anonymous
+ * `src/proxy.ts` gates the opposite way: it redirects an anonymous
  * request only when the path is a *known product route* (`isProductPath`,
  * tested below), and lets everything else — including any marketing page
  * missing from `SITE_ROUTES`, and any unknown path — fall through to Next.
@@ -17,7 +17,7 @@ import { PRODUCT_PATHS, isProductPath } from "@/middleware";
  */
 
 /**
- * `isProductPath` is the actual authentication gate: `src/middleware.ts`
+ * `isProductPath` is the actual authentication gate: `src/proxy.ts`
  * redirects an anonymous visitor to `/sign-in` exactly when this returns
  * true. These are the tests that would have caught the old bug, restated for
  * the new posture — and they fail against the pre-inversion allowlist for the

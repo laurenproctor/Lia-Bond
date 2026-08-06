@@ -12,7 +12,7 @@ import {
 } from "@/domain";
 import { can, permissionsFor } from "@/lib/auth/permissions";
 import { AUDIT_EVENT_LABELS } from "@/lib/labels";
-import { isProductPath, PRODUCT_PATHS } from "@/middleware";
+import { isProductPath, PRODUCT_PATHS } from "@/proxy";
 
 /**
  * Authorization and security invariants for onboarding.

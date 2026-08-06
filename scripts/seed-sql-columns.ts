@@ -37,7 +37,7 @@ export function columnName(key: string): string {
  * still checking it against the `Record<string, readonly string[]>` shape.
  */
 export const SEED_TABLE_COLUMNS = {
-  users: ["id", "email", "fullName", "avatarUrl", "createdAt", "updatedAt"],
+  users: ["id", "email", "firstName", "lastName", "avatarUrl", "createdAt", "updatedAt"],
   organizations: [
     "id", "name", "slug", "industry", "websiteUrl", "defaultTimezone",
     "defaultLanguage", "createdAt", "updatedAt",
@@ -182,6 +182,12 @@ export function conflictTarget(table: string): string {
  * against a real database the moment `mentions` had more than zero rows.
  */
 export const SEED_COLUMN_EXCLUSIONS: Record<string, readonly string[]> = {
+  users: [
+    // STORED GENERATED from first_name and last_name (see the user_name_parts
+    // migration). Postgres refuses an INSERT that names a generated column,
+    // so the seed must not write it — it exists the moment the parts do.
+    "fullName",
+  ],
   mentions: [
     // Source-owned sync-history fields (workflow 03). Every seeded mention
     // predates any real sync, so claiming a last-synced instant, an owner

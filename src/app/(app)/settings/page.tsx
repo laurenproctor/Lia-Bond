@@ -7,6 +7,7 @@ import { DetailField } from "@/components/ui/detail-panel";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
+import { ProfilePanel } from "@/components/settings/profile-panel";
 import { TeamPanel } from "@/components/settings/team-panel";
 import { can } from "@/lib/auth/permissions";
 import { MEMBERSHIP_ROLE_LABELS } from "@/lib/labels";
@@ -31,6 +32,13 @@ export default async function SettingsPage() {
   ]);
 
   const { organization } = context;
+
+  // The caller's own profile row, for the editable name card. Taken from the
+  // member list already loaded above rather than a second query — the acting
+  // user is always a member here, or the page could not have resolved a scope.
+  const self = members.find(
+    (member) => member.userId === context.scope.userId,
+  )?.user;
 
   return (
     <PageBody>
@@ -94,6 +102,14 @@ export default async function SettingsPage() {
         </div>
 
         <div className="flex flex-col gap-4 xl:col-span-5">
+          {self ? (
+            <ProfilePanel
+              firstName={self.firstName}
+              lastName={self.lastName}
+              email={self.email}
+            />
+          ) : null}
+
           <Card>
             <CardHeader
               title="Your access"

@@ -13,14 +13,14 @@
 begin;
 
 -- users (7 rows)
-insert into public.users (id, email, full_name, avatar_url, created_at, updated_at) values
-  ('54f0db16-ab6c-54c4-8734-48a1a7143a0a', 'daniel.reyes@example.com', 'Daniel Reyes', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
-  ('4508217a-0a44-5bbb-9ac8-b3108b57b482', 'kate.morgan@example.com', 'Kate Morgan', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
-  ('174d1f97-afca-5692-bd2b-f960039b725a', 'naomi.clarke@example.com', 'Naomi Clarke', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
-  ('565f342c-393c-5bd3-afee-1e5b845f1982', 'priya.raman@example.com', 'Priya Raman', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
-  ('288127a8-9c9c-5c95-8d4e-2709b28dda2a', 'marcus.bell@example.com', 'Marcus Bell', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
-  ('b82f2e53-8104-5661-abfd-9177ba6ea9da', 'jordan.ellis@example.com', 'Jordan Ellis', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
-  ('66e8a131-b39e-5c45-a6e1-74896d5c80aa', 'sofia.duarte@example.com', 'Sofia Duarte', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z')
+insert into public.users (id, email, first_name, last_name, avatar_url, created_at, updated_at) values
+  ('54f0db16-ab6c-54c4-8734-48a1a7143a0a', 'daniel.reyes@example.com', 'Daniel', 'Reyes', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
+  ('4508217a-0a44-5bbb-9ac8-b3108b57b482', 'kate.morgan@example.com', 'Kate', 'Morgan', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
+  ('174d1f97-afca-5692-bd2b-f960039b725a', 'naomi.clarke@example.com', 'Naomi', 'Clarke', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
+  ('565f342c-393c-5bd3-afee-1e5b845f1982', 'priya.raman@example.com', 'Priya', 'Raman', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
+  ('288127a8-9c9c-5c95-8d4e-2709b28dda2a', 'marcus.bell@example.com', 'Marcus', 'Bell', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
+  ('b82f2e53-8104-5661-abfd-9177ba6ea9da', 'jordan.ellis@example.com', 'Jordan', 'Ellis', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z'),
+  ('66e8a131-b39e-5c45-a6e1-74896d5c80aa', 'sofia.duarte@example.com', 'Sofia', 'Duarte', null, '2025-12-04T18:00:00.000Z', '2025-12-04T18:00:00.000Z')
 on conflict (id) do nothing;
 
 -- organizations (2 rows)

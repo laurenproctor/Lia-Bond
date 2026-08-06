@@ -110,7 +110,8 @@ const ONBOARDING_FIRST_STEP = "/onboarding/organization";
 
 const signUpSchema = z
   .object({
-    fullName: z.string().trim().min(1, "Enter your name.").max(160),
+    firstName: z.string().trim().min(1, "Enter your first name.").max(80),
+    lastName: z.string().trim().min(1, "Enter your last name.").max(80),
     organizationName: z
       .string()
       .trim()
@@ -161,7 +162,8 @@ export async function signUpAction(
   formData: FormData,
 ): Promise<SignUpResult> {
   const parsed = signUpSchema.safeParse({
-    fullName: formData.get("fullName"),
+    firstName: formData.get("firstName"),
+    lastName: formData.get("lastName"),
     organizationName: formData.get("organizationName"),
     email: formData.get("email"),
     password: formData.get("password"),
@@ -172,7 +174,10 @@ export async function signUpAction(
     return { error: parsed.error.issues[0]?.message ?? "Check the form and try again." };
   }
 
-  const { fullName, organizationName, email, password } = parsed.data;
+  const { firstName, lastName, organizationName, email, password } = parsed.data;
+  // The profile trigger and `public.users` know only a single display name, so
+  // the two fields collapse here rather than widening that contract.
+  const fullName = `${firstName} ${lastName}`;
   const supabase = await createSupabaseServerClient();
 
   const { data, error } = await supabase.auth.signUp({
@@ -181,8 +186,11 @@ export async function signUpAction(
     options: {
       // Read by the profile trigger. This is the only path by which a name
       // reaches `public.users`, so omitting it would leave every new account
-      // named after the local part of its address.
+      // named after the local part of its address. `full_name` is carried
+      // alongside the parts because the session reads it for display.
       data: {
+        first_name: firstName,
+        last_name: lastName,
         full_name: fullName,
         // Carries the organization name across an email confirmation, which
         // returns no session and therefore no `auth.uid()` for provisioning to
@@ -236,7 +244,8 @@ const acceptWithSignUpSchema = z
     token: z
       .string()
       .refine(isInvitationTokenShaped, "That invitation link is not valid."),
-    fullName: z.string().trim().min(1, "Enter your name.").max(160),
+    firstName: z.string().trim().min(1, "Enter your first name.").max(80),
+    lastName: z.string().trim().min(1, "Enter your last name.").max(80),
     password: z
       .string()
       .min(MIN_PASSWORD_LENGTH, `Use at least ${MIN_PASSWORD_LENGTH} characters.`),
@@ -266,7 +275,8 @@ export async function acceptInvitationWithSignUpAction(
 ): Promise<SignUpResult> {
   const parsed = acceptWithSignUpSchema.safeParse({
     token: formData.get("token"),
-    fullName: formData.get("fullName"),
+    firstName: formData.get("firstName"),
+    lastName: formData.get("lastName"),
     password: formData.get("password"),
     confirm: formData.get("confirm"),
   });
@@ -287,7 +297,13 @@ export async function acceptInvitationWithSignUpAction(
   const { data, error } = await supabase.auth.signUp({
     email: preview.email,
     password: parsed.data.password,
-    options: { data: { full_name: parsed.data.fullName } },
+    options: {
+      data: {
+        first_name: parsed.data.firstName,
+        last_name: parsed.data.lastName,
+        full_name: `${parsed.data.firstName} ${parsed.data.lastName}`,
+      },
+    },
   });
 
   if (error) {

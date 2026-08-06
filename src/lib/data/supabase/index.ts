@@ -645,6 +645,26 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
     },
 
+    users: {
+      async updateOwnProfile(userId, input) {
+        // `full_name` is a generated column, so only the parts are written and
+        // the returned row already carries the recomposed display name. RLS
+        // (`users_update_self`) refuses any row but the caller's own.
+        const { data, error } = await client
+          .from("users")
+          .update({
+            first_name: input.firstName,
+            last_name: input.lastName,
+          })
+          .eq("id", userId)
+          .select("*")
+          .single();
+
+        if (error) fail(error, "update your profile");
+        return toUser(data as Row);
+      },
+    },
+
     memberships: {
       async getActiveMembership(organizationId, userId) {
         const { data, error } = await client

@@ -141,6 +141,8 @@ export function toUser(row: Row): User {
     {
       id: row.id,
       email: row.email,
+      firstName: row.first_name,
+      lastName: row.last_name,
       fullName: row.full_name,
       avatarUrl: row.avatar_url ?? null,
       createdAt: iso(row.created_at),

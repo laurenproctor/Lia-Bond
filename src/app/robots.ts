@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 import { appOrigin } from "@/lib/env";
-import { PRODUCT_PATHS } from "@/middleware";
+import { PRODUCT_PATHS } from "@/proxy";
 
 /**
  * The product surface is disallowed here, but that is not a security control —
@@ -11,11 +11,11 @@ import { PRODUCT_PATHS } from "@/middleware";
  * and crawlers stop spending their budget on redirects instead of on the
  * marketing pages we want indexed.
  *
- * `PRODUCT_PATHS` is imported from `src/middleware.ts` rather than restated
+ * `PRODUCT_PATHS` is imported from `src/proxy.ts` rather than restated
  * here. Spec decision M10 is specifically about not keeping a route list in
  * two places: a second, hand-maintained copy is exactly how this file
  * previously drifted from the gate it was supposed to mirror — it had
- * `/reviews/` with a trailing slash the middleware's list never had, and it
+ * `/reviews/` with a trailing slash the proxy's list never had, and it
  * was missing `/api` entirely. Importing the same array both routes and
  * disallows from cannot drift, by construction. `/api` is already covered by
  * this import, so `NON_PUBLIC_PATHS` below no longer repeats it.

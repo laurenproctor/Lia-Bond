@@ -9,7 +9,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * 1. **Refresh.** Supabase access tokens are short-lived. A server component
  *    cannot set a cookie, so nothing inside the app can persist a rotated
  *    token — `createSupabaseServerClient` swallows the write for exactly that
- *    reason. Middleware runs before rendering and *can* write, so this is the
+ *    reason. The proxy runs before rendering and *can* write, so this is the
  *    only place a refreshed session survives the request.
  *
  * 2. **The gate.** Redirect an unauthenticated request to `/sign-in` rather
@@ -43,7 +43,7 @@ import { NextResponse, type NextRequest } from "next/server";
  *
  * Kept as a literal list rather than derived from `NAV_SECTIONS` in
  * `@/lib/navigation` because the nav only lists sidebar entries for a
- * signed-in user; this list is the contract with the middleware and should
+ * signed-in user; this list is the contract with the proxy and should
  * change deliberately, in step with `manifest.json` and the routes under
  * `src/app/(app)/`.
  *
@@ -113,7 +113,7 @@ export function isProductPath(pathname: string): boolean {
   return PRODUCT_PATHS.some((path) => matchesSegment(pathname, path));
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
