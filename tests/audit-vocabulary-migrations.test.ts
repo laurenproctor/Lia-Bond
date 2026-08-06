@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse } from "libpg-query";
 import { describe, expect, it } from "vitest";
-import { AUDIT_ENTITY_TYPES, AUDIT_EVENT_TYPES } from "@/domain/enums";
+import { AUDIT_ENTITY_TYPES, AUDIT_EVENT_TYPES, GATE_REJECTION_REASONS } from "@/domain/enums";
 
 /**
  * Pins the TypeScript closed lists against the Postgres constraints that are
@@ -192,6 +192,41 @@ function enumTypeName(typeName: unknown): string | null {
   return typeof sval === "string" ? sval : null;
 }
 
+/**
+ * Asserts that a Postgres enum type's final permitted set — its initial
+ * `create type ... as enum (...)` values plus every `alter type ... add
+ * value` seen across the migrations, in file order — matches a TypeScript
+ * closed list exactly (as sets; the migrations are append-only and ordered
+ * for Postgres's sake, not readability, so order is not compared).
+ *
+ * Shared by every enum (as opposed to check-constraint) vocabulary this file
+ * pins — `audit_events_known_event_type` stays separate above because it is
+ * a CHECK constraint, not a `create type ... as enum`, and follows a
+ * replace-not-append shape that doesn't fit this helper.
+ */
+async function expectEnumMatches(typeName: string, expected: readonly string[]): Promise<void> {
+  const files = await parseMigrations();
+
+  let base: string[] | null = null;
+  const additions: string[] = [];
+
+  for (const file of files) {
+    const creations = extractEnumCreation(file.stmts, typeName);
+    if (creations.length > 0) {
+      if (base !== null) {
+        throw new Error(`${typeName} was created more than once across the migrations.`);
+      }
+      base = creations[0] ?? null;
+    }
+    additions.push(...extractEnumAdditions(file.stmts, typeName));
+  }
+
+  expect(base).not.toBeNull();
+
+  const final = new Set([...(base ?? []), ...additions]);
+  expect(final).toEqual(new Set(expected));
+}
+
 describe("audit vocabulary vs. the Postgres migrations", () => {
   it("keeps audit_events_known_event_type in sync with AUDIT_EVENT_TYPES", async () => {
     const files = await parseMigrations();
@@ -221,25 +256,15 @@ describe("audit vocabulary vs. the Postgres migrations", () => {
   });
 
   it("keeps audit_entity_type in sync with AUDIT_ENTITY_TYPES", async () => {
-    const files = await parseMigrations();
+    await expectEnumMatches("audit_entity_type", AUDIT_ENTITY_TYPES);
+  });
 
-    let base: string[] | null = null;
-    const additions: string[] = [];
-
-    for (const file of files) {
-      const creations = extractEnumCreation(file.stmts, "audit_entity_type");
-      if (creations.length > 0) {
-        if (base !== null) {
-          throw new Error("audit_entity_type was created more than once across the migrations.");
-        }
-        base = creations[0] ?? null;
-      }
-      additions.push(...extractEnumAdditions(file.stmts, "audit_entity_type"));
-    }
-
-    expect(base).not.toBeNull();
-
-    const final = new Set([...(base ?? []), ...additions]);
-    expect(final).toEqual(new Set(AUDIT_ENTITY_TYPES));
+  // gate_rejection_reason is not an audit vocabulary, but it is the same class
+  // of closed list with the same failure mode: a value added in TypeScript and
+  // forgotten in the migrations type-checks perfectly and then violates an
+  // enum constraint at runtime. It was outside this file's coverage for no
+  // reason other than that nobody added it.
+  it("keeps gate_rejection_reason in sync with GATE_REJECTION_REASONS", async () => {
+    await expectEnumMatches("gate_rejection_reason", GATE_REJECTION_REASONS);
   });
 });

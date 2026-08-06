@@ -320,7 +320,9 @@ export const GATE_REJECTION_REASON_LABELS: Record<GateRejectionReason, string> =
   excluded_term: "Matched an excluded term",
   probable_syndication: "Probable syndication",
   domain_denied: "Publisher domain not allowed",
+  no_keyword_match: "No keyword match",
   below_threshold: "Below relevance threshold",
+  ambiguous_uncorroborated: "Ambiguous name, not corroborated",
 };
 
 export const CAPABILITY_LABELS: Record<string, string> = {

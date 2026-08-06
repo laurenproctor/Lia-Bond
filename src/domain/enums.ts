@@ -527,7 +527,16 @@ export const GATE_REJECTION_REASONS = [
   "excluded_term",
   "probable_syndication",
   "domain_denied",
+  // Nothing in the query matched. The score is always 0, and the keywords —
+  // not the threshold — are what an operator would change.
+  "no_keyword_match",
+  // Scored, and scored too low. The only reason of the three for which the
+  // threshold is the lever.
   "below_threshold",
+  // A lone short brand name with nothing corroborating it. Rejected
+  // regardless of score, so a high score here is expected rather than
+  // contradictory — see AMBIGUOUS_TERM_MAX_LENGTH in gate.ts.
+  "ambiguous_uncorroborated",
 ] as const;
 export const gateRejectionReasonSchema = vocabulary(GATE_REJECTION_REASONS).schema;
 export type GateRejectionReason = z.infer<typeof gateRejectionReasonSchema>;
