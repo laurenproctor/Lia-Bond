@@ -516,6 +516,14 @@ export function createDemoDataSource(): LiaDataSource {
         replaceRow(store().users, updated);
         return updated;
       },
+
+      async updateOwnAvatar(userId, avatarUrl) {
+        const user = store().users.find((row) => row.id === userId);
+        if (!user) throw notFound("User");
+
+        const updated: User = { ...user, avatarUrl, updatedAt: nowIso() };
+        return replaceRow(store().users, updated);
+      },
     },
 
     memberships: {

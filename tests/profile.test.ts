@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { freshDataSource, ushg } from "./helpers/scope";
 import { DataError } from "@/lib/data/errors";
 import type { LiaDataSource } from "@/lib/data/types";
+import { userSchema } from "@/domain";
 import { USER_KATE } from "@/lib/seed/dataset";
 
 /**
@@ -61,6 +62,34 @@ describe("updateOwnProfile", () => {
         firstName: "Nobody",
         lastName: "Here",
       }),
+    ).rejects.toThrow(DataError);
+  });
+});
+
+describe("updateOwnAvatar", () => {
+  it("stores and clears the caller's photo", async () => {
+    const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+
+    const withPhoto = await data.users.updateOwnAvatar(USER_KATE, dataUrl);
+    expect(withPhoto.avatarUrl).toBe(dataUrl);
+
+    const cleared = await data.users.updateOwnAvatar(USER_KATE, null);
+    expect(cleared.avatarUrl).toBeNull();
+  });
+
+  it("produces a row the user schema accepts", async () => {
+    // Demo mode stores uploads as data URLs — the schema must accept them or
+    // every demo-mode read of this row would fail validation.
+    const updated = await data.users.updateOwnAvatar(
+      USER_KATE,
+      "data:image/webp;base64,UklGRg==",
+    );
+    expect(userSchema.safeParse(updated).success).toBe(true);
+  });
+
+  it("refuses an id with no profile behind it", async () => {
+    await expect(
+      data.users.updateOwnAvatar("00000000-0000-0000-0000-000000000000", null),
     ).rejects.toThrow(DataError);
   });
 });

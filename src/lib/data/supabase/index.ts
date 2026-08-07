@@ -663,6 +663,18 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (error) fail(error, "update your profile");
         return toUser(data as Row);
       },
+
+      async updateOwnAvatar(userId, avatarUrl) {
+        const { data, error } = await client
+          .from("users")
+          .update({ avatar_url: avatarUrl })
+          .eq("id", userId)
+          .select("*")
+          .single();
+
+        if (error) fail(error, "update your photo");
+        return toUser(data as Row);
+      },
     },
 
     memberships: {

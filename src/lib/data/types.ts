@@ -232,6 +232,13 @@ export interface UserRepository {
    * derived from the parts (a generated column under Supabase), not accepted.
    */
   updateOwnProfile(userId: string, input: UpdateOwnProfileInput): Promise<User>;
+  /**
+   * Set or clear the caller's own photo. Same contract as `updateOwnProfile`:
+   * `userId` comes from the session, never from a form, and RLS
+   * (`users_update_self`) is the backstop under Supabase. The value is a
+   * public storage URL, or a data URL in demo mode, or null to remove.
+   */
+  updateOwnAvatar(userId: string, avatarUrl: string | null): Promise<User>;
 }
 
 export interface MembershipRepository {
