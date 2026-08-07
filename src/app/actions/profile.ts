@@ -94,6 +94,7 @@ export async function updateOwnAvatarAction(
     const context = await mutationContext();
 
     let url: string;
+    let uploadedPath: string | null = null;
     if (resolveDataSourceKind() === "supabase") {
       const supabase = await createSupabaseServerClient();
       const path = `${context.userId}/${randomUUID()}.${review.extension}`;
@@ -110,7 +111,7 @@ export async function updateOwnAvatarAction(
       }
 
       url = supabase.storage.from("avatars").getPublicUrl(path).data.publicUrl;
-      await removeOtherAvatarObjects(context.userId, path);
+      uploadedPath = path;
     } else {
       const bytes = Buffer.from(await file.arrayBuffer());
       url = `data:${file.type};base64,${bytes.toString("base64")}`;
@@ -120,6 +121,10 @@ export async function updateOwnAvatarAction(
       context.userId,
       url,
     );
+
+    if (uploadedPath) {
+      await removeOtherAvatarObjects(context.userId, uploadedPath);
+    }
     await syncAvatarMetadata(updated.avatarUrl);
 
     revalidatePath("/settings");
