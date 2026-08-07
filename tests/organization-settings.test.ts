@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { freshDataSource, harbor, ushg, ORG_HARBOR, ORG_USHG } from "./helpers/scope";
 import { DataError } from "@/lib/data/errors";
 import type { LiaDataSource } from "@/lib/data/types";
+import { organizationDetailsSchema } from "@/app/actions/organization-settings";
 
 /**
  * Editing the organization's own details, slug included.
@@ -73,5 +74,43 @@ describe("organizations.update with a slug", () => {
       fieldErrors: { slug: "That slug is already taken." },
     });
     await expect(attempt).rejects.toBeInstanceOf(DataError);
+  });
+});
+
+describe("organizationDetailsSchema", () => {
+  const valid = {
+    name: "Union Square Hospitality Group",
+    slug: "ushg",
+    industry: "Hospitality",
+    websiteUrl: "https://www.ushg.com",
+    defaultTimezone: "America/New_York",
+    defaultLanguage: "en-US",
+  };
+
+  it("accepts a complete form", () => {
+    expect(organizationDetailsSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it("turns an empty website into null", () => {
+    const parsed = organizationDetailsSchema.parse({ ...valid, websiteUrl: "" });
+    expect(parsed.websiteUrl).toBeNull();
+  });
+
+  it("refuses a slug with the wrong shape", () => {
+    for (const slug of ["Has Spaces", "UPPER", "trailing-", "-leading", "a"]) {
+      expect(
+        organizationDetailsSchema.safeParse({ ...valid, slug }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("refuses a blank name and a bad URL", () => {
+    expect(
+      organizationDetailsSchema.safeParse({ ...valid, name: "  " }).success,
+    ).toBe(false);
+    expect(
+      organizationDetailsSchema.safeParse({ ...valid, websiteUrl: "not a url" })
+        .success,
+    ).toBe(false);
   });
 });
