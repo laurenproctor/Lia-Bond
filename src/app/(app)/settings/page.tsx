@@ -107,6 +107,7 @@ export default async function SettingsPage() {
               firstName={self.firstName}
               lastName={self.lastName}
               email={self.email}
+              avatarUrl={self.avatarUrl}
             />
           ) : null}
 
