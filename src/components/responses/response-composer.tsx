@@ -69,6 +69,7 @@ export function ResponseComposer({
 
   function save() {
     setError(null);
+    setOutcome(null);
     startTransition(async () => {
       const result = await saveResponseDraftAction({
         responseDraftId: draft.id,
@@ -84,11 +85,14 @@ export function ResponseComposer({
 
   function decide(decision: "approved" | "rejected") {
     setError(null);
+    setOutcome(null);
     startTransition(async () => {
       const result = await decideResponseDraftAction({
         responseDraftId: draft.id,
         decision,
-        ...(decision === "approved" && dirty ? { finalText: content } : {}),
+        ...(decision === "approved" && dirty && content.trim().length > 0
+          ? { finalText: content }
+          : {}),
       });
 
       setConfirming(null);
@@ -127,6 +131,7 @@ export function ResponseComposer({
           value={content}
           onChange={(event) => setContent(event.target.value)}
           rows={9}
+          maxLength={5000}
           readOnly={!editable || pending}
           className="lia-scroll w-full resize-y rounded-[10px] border border-gray-300 bg-white px-3.5 py-3 text-[13.5px] leading-relaxed text-gray-950"
         />
@@ -145,24 +150,28 @@ export function ResponseComposer({
         <span>{PUBLISHING_COPY[publishing]}</span>
       </p>
 
-      {canDecide ? (
+      {canDecide || editable ? (
         <div className="flex flex-wrap gap-2 border-t border-gray-200 pt-3">
-          <Button
-            variant="primary"
-            icon={pending ? Loader2 : ThumbsUp}
-            disabled={pending}
-            onClick={() => setConfirming("approve")}
-          >
-            Approve
-          </Button>
-          <Button
-            variant="secondary"
-            icon={ThumbsDown}
-            disabled={pending}
-            onClick={() => setConfirming("reject")}
-          >
-            Send back
-          </Button>
+          {canDecide ? (
+            <>
+              <Button
+                variant="primary"
+                icon={pending ? Loader2 : ThumbsUp}
+                disabled={pending || content.trim().length === 0}
+                onClick={() => setConfirming("approve")}
+              >
+                Approve
+              </Button>
+              <Button
+                variant="secondary"
+                icon={ThumbsDown}
+                disabled={pending}
+                onClick={() => setConfirming("reject")}
+              >
+                Send back
+              </Button>
+            </>
+          ) : null}
           <Button
             variant="secondary"
             icon={pending ? Loader2 : PencilLine}

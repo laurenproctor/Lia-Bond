@@ -70,6 +70,7 @@ export function ResponseDetailPane({
 
         <DetailSection title="Response">
           <ResponseComposer
+            key={draft.id}
             draft={draft}
             publishing={publishing}
             canDecide={canDecide}

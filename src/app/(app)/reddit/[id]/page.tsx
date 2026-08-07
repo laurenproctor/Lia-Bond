@@ -79,6 +79,7 @@ export default async function RedditWorkspacePage({ params }: PageProps) {
             <div className="mt-4">
               {primaryDraft ? (
                 <ResponseComposer
+                  key={primaryDraft.id}
                   draft={primaryDraft}
                   publishing={publishing}
                   canDecide={canDecide}
