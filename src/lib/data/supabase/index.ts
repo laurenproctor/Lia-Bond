@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   BRAND_VOICE_AXIS_KEYS,
   canDecideOnDraft,
+  canEditDraft,
   createEscalationInputSchema,
   createLocationInputSchema,
   createMentionAnalysisInputSchema,
@@ -2146,7 +2147,33 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return toResponseDraft(data as Row);
       },
 
-      async decide(scope, draftId, decision, decidedByUserId, decisionNote) {
+      async saveFinalText(scope, draftId, finalText) {
+        const current = await this.get(scope, draftId);
+        if (!current) throw notFound("Response draft");
+
+        if (!canEditDraft(current.status)) {
+          throw conflict(
+            `A response that is already ${current.status.replace(/_/g, " ")} can no longer be edited.`,
+          );
+        }
+
+        const { data, error } = await client
+          .from("response_drafts")
+          .update({ final_text: finalText })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", draftId)
+          // Optimistic guard: if a decision landed in the meantime, the status
+          // moved out of the editable set and this update affects no rows.
+          .eq("status", current.status)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "save the draft");
+        if (!data) throw conflict("This response was decided while you were editing.");
+        return toResponseDraft(data as Row);
+      },
+
+      async decide(scope, draftId, decision, decidedByUserId, decisionNote, finalText) {
         const current = await this.get(scope, draftId);
         if (!current) throw notFound("Response draft");
 
@@ -2160,6 +2187,7 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         const { data, error } = await client
           .from("response_drafts")
           .update({
+            ...(finalText !== undefined ? { final_text: finalText } : {}),
             status: decision === "approved" ? "approved" : "draft",
             approved_by_user_id: decision === "approved" ? decidedByUserId : null,
             approved_at: decision === "approved" ? decidedAt : null,
