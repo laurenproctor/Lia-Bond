@@ -91,8 +91,8 @@ describe("pollMonitoringQuery", () => {
       query.id,
     );
     expect(rejections.map((r) => r.reason).sort()).toEqual([
-      "below_threshold",
       "excluded_term",
+      "no_keyword_match",
     ]);
   });
 
@@ -478,7 +478,7 @@ describe("pollMonitoringQuery", () => {
     // `null` in poll-service.ts left the suite green. "Gramercy Tavern
     // reopens" matches the query's only keyword in the title (score 0.5);
     // "City council debates parking" matches nothing (score 0, the
-    // below_threshold case). (0.5 + 0) / 2 = 0.25 pins the exact arithmetic,
+    // no_keyword_match case). (0.5 + 0) / 2 = 0.25 pins the exact arithmetic,
     // not just that a value exists.
     expect(run?.gateScoreMean).toBe(0.25);
   });
