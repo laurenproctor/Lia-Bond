@@ -52,7 +52,7 @@ import {
   type User,
 } from "@/domain";
 import { canDecideOnDraft } from "@/domain";
-import { conflict, invalidInput, notFound } from "@/lib/data/errors";
+import { DataError, conflict, invalidInput, notFound } from "@/lib/data/errors";
 import {
   computeLocationMetrics,
   computeOrganizationMetrics,
@@ -347,6 +347,17 @@ export function createDemoDataSource(): LiaDataSource {
         );
         if (!existing) throw notFound("Organization");
 
+        if (input.slug !== undefined && input.slug !== existing.slug) {
+          const taken = store().organizations.some(
+            (row) => row.slug === input.slug && row.id !== existing.id,
+          );
+          if (taken) {
+            throw new DataError("conflict", "That slug is already taken.", {
+              slug: "That slug is already taken.",
+            });
+          }
+        }
+
         const updated: Organization = {
           ...existing,
           name: input.name,
@@ -354,6 +365,7 @@ export function createDemoDataSource(): LiaDataSource {
           industry: input.industry,
           defaultTimezone: input.defaultTimezone,
           defaultLanguage: input.defaultLanguage,
+          slug: input.slug ?? existing.slug,
           updatedAt: nowIso(),
         };
 

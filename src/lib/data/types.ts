@@ -155,9 +155,9 @@ export interface ProvisionOrganizationInput {
 /**
  * The fields onboarding's first step may change on an organization.
  *
- * The slug is absent and must stay absent: it is globally unique, it appears in
- * links, and it is derived at provisioning. Offering it for edit would let a
- * customer collide with — or impersonate — another tenant's URL.
+ * The id is absent and must stay absent: it is a write-once primary key.
+ * The slug is form-editable but collision-checked — it appears in no URL and no
+ * route, only on the settings page and as metadata in support correspondence.
  */
 export interface UpdateOrganizationInput {
   name: string;
@@ -165,6 +165,13 @@ export interface UpdateOrganizationInput {
   industry: string;
   defaultTimezone: string;
   defaultLanguage: string;
+  /**
+   * Omitted everywhere except the settings form. Globally unique; a collision
+   * surfaces as a `conflict` DataError carrying a `slug` field error. Present
+   * here since the slug became editable (see the 2026-08-06 settings spec) —
+   * it appears in no URL and no route, so renaming it breaks nothing.
+   */
+  slug?: string;
 }
 
 export interface OrganizationRepository {

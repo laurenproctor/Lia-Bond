@@ -20,7 +20,11 @@ export const organizationSchema = z
   .object({
     id: uuidSchema,
     name: z.string().min(1).max(160),
-    /** Globally unique. Stable once issued — it appears in shared links. */
+    /**
+     * Globally unique. Editable by owners and admins in settings — it appears
+     * in no URL or route, only on the settings page and as metadata in
+     * support correspondence.
+     */
     slug: slugSchema,
     industry: z.string().min(1).max(120),
     websiteUrl: z.url().nullable(),

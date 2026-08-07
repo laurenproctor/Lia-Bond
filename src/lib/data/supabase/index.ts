@@ -457,6 +457,7 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
             industry: input.industry,
             default_timezone: input.defaultTimezone,
             default_language: input.defaultLanguage,
+            ...(input.slug !== undefined ? { slug: input.slug } : {}),
           })
           // Scoped by primary key rather than by `organization_id`: this *is*
           // the tenant root. `organizations_update_admins` re-checks the role,
@@ -465,6 +466,14 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           .select("*")
           .maybeSingle();
 
+        // The one unique constraint on this table is the slug, so 23505 can be
+        // named precisely instead of falling through to fail()'s generic
+        // "already exists" — the form needs a field to attach the sentence to.
+        if (error?.code === "23505") {
+          throw new DataError("conflict", "That slug is already taken.", {
+            slug: "That slug is already taken.",
+          });
+        }
         if (error) fail(error, "save that organization");
         // Null means the update matched no row — the caller is not an owner or
         // admin of this organization, and RLS filtered it out.
