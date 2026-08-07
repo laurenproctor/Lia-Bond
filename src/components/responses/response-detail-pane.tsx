@@ -19,6 +19,8 @@ export interface ResponseDetailPaneProps {
   mention: Mention | undefined;
   publishing: PublishingMode;
   canDecide: boolean;
+  /** Role-level edit permission, threaded to the composer. */
+  canEdit: boolean;
   assigneeName: string | null;
   approvalEntries: TimelineEntry[];
   className?: string;
@@ -36,6 +38,7 @@ export function ResponseDetailPane({
   mention,
   publishing,
   canDecide,
+  canEdit,
   assigneeName,
   approvalEntries,
   className,
@@ -67,9 +70,11 @@ export function ResponseDetailPane({
 
         <DetailSection title="Response">
           <ResponseComposer
+            key={draft.id}
             draft={draft}
             publishing={publishing}
             canDecide={canDecide}
+            canEdit={canEdit}
           />
         </DetailSection>
 

@@ -420,6 +420,10 @@ export const AUDIT_EVENT_TYPES = [
   "response.assigned",
   "response.approved",
   "response.rejected",
+  // A person changed a draft's final text. `previousState`/`newState` carry
+  // text lengths only — response text embeds customer situations, and the
+  // trail records that an edit happened, not the prose.
+  "response.edited",
   "escalation.assigned",
   "escalation.status_changed",
   "automation_rule.enabled",

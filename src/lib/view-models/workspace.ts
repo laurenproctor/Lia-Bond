@@ -23,6 +23,7 @@ export interface WorkspaceData {
   /** What the source connector actually allows for responses. */
   publishing: PublishingMode;
   canDecide: boolean;
+  canEdit: boolean;
 }
 
 export async function loadWorkspace(
@@ -68,5 +69,6 @@ export async function loadWorkspace(
       ? resolvePublishingMode(detail.connection.capabilities)
       : "unavailable",
     canDecide: can(context.role, "response.decide"),
+    canEdit: can(context.role, "response.edit"),
   };
 }

@@ -558,13 +558,32 @@ export interface ResponseDraftRepository {
     draftId: string,
     assignedUserId: string | null,
   ): Promise<ResponseDraft>;
-  /** Applies the decision to both the draft and its open approval record. */
+  /**
+   * Persist a human's edit to the draft's final text.
+   *
+   * Refuses outside the editable statuses (the same set that can be decided
+   * on, D108) — an approved response's text is frozen with its approval.
+   * Deliberately not a general `update`: every transition is its own method
+   * so illegal writes are unrepresentable.
+   */
+  saveFinalText(
+    scope: OrganizationScope,
+    draftId: string,
+    finalText: string,
+  ): Promise<ResponseDraft>;
+  /**
+   * Applies the decision to both the draft and its open approval record.
+   *
+   * When `finalText` is provided, it is applied in the same write as the
+   * decision — the approver approves exactly what they saw (D107).
+   */
   decide(
     scope: OrganizationScope,
     draftId: string,
     decision: "approved" | "rejected",
     decidedByUserId: string,
     decisionNote?: string,
+    finalText?: string,
   ): Promise<{ draft: ResponseDraft; approval: Approval | null }>;
   listApprovals(scope: OrganizationScope, draftId: string): Promise<Approval[]>;
 }

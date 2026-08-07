@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
   assignResponseDraftInputSchema,
   decideResponseDraftInputSchema,
+  saveResponseDraftInputSchema,
   type ResponseDraft,
 } from "@/domain";
 import { authorize } from "@/lib/actions/guard";
@@ -47,6 +48,46 @@ export async function assignResponseDraftAction(
   });
 }
 
+/** Persist a human's edit to a draft's final text. */
+export async function saveResponseDraftAction(
+  input: unknown,
+): Promise<ActionResult<ResponseDraft>> {
+  return runAction("response.save", async () => {
+    const { responseDraftId, finalText } =
+      saveResponseDraftInputSchema.parse(input);
+
+    const context = await authorize("response.edit");
+
+    const existing = await context.dataSource.responseDrafts.get(
+      context.scope,
+      responseDraftId,
+    );
+    if (!existing) throw notFound("Response draft");
+
+    const updated = await context.dataSource.responseDrafts.saveFinalText(
+      context.scope,
+      responseDraftId,
+      finalText,
+    );
+
+    // Lengths only, never the text (D111): the trail records that an edit
+    // happened, not the prose.
+    await recordAuditEvent(context, {
+      eventType: "response.edited",
+      entityType: "response_draft",
+      entityId: responseDraftId,
+      previousState: { finalTextLength: existing.finalText?.length ?? null },
+      newState: { finalTextLength: updated.finalText?.length ?? null },
+    });
+
+    revalidatePath("/responses");
+    revalidatePath("/mentions");
+    revalidatePath("/reviews/google/[id]", "page");
+    revalidatePath("/reddit/[id]", "page");
+    return updated;
+  });
+}
+
 /**
  * Approve or reject a response draft.
  *
@@ -58,7 +99,7 @@ export async function decideResponseDraftAction(
   input: unknown,
 ): Promise<ActionResult<ResponseDraft>> {
   return runAction("response.decide", async () => {
-    const { responseDraftId, decision, decisionNote } =
+    const { responseDraftId, decision, decisionNote, finalText } =
       decideResponseDraftInputSchema.parse(input);
 
     const context = await authorize("response.decide");
@@ -76,6 +117,7 @@ export async function decideResponseDraftAction(
       decision,
       context.userId,
       decisionNote,
+      finalText,
     );
 
     const changes = diff(existing, draft, ["status", "approvedByUserId", "approvedAt"]);
@@ -88,8 +130,23 @@ export async function decideResponseDraftAction(
       metadata: decisionNote ? { decisionNote } : {},
     });
 
+    // Lengths only, never the text (D111). Recorded only when the composer's
+    // text actually changed as part of this decision (D107) — deciding
+    // without touching the text stays a single event.
+    if (finalText !== undefined && finalText !== existing.finalText) {
+      await recordAuditEvent(context, {
+        eventType: "response.edited",
+        entityType: "response_draft",
+        entityId: responseDraftId,
+        previousState: { finalTextLength: existing.finalText?.length ?? null },
+        newState: { finalTextLength: finalText.length },
+      });
+    }
+
     revalidatePath("/responses");
     revalidatePath("/mentions");
+    revalidatePath("/reviews/google/[id]", "page");
+    revalidatePath("/reddit/[id]", "page");
     return draft;
   });
 }

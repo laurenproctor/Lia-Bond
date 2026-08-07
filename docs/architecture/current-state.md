@@ -72,7 +72,7 @@ nothing with it but the root layout's font.
 | `/reviews` → `/reviews/google/[id]` | Google review workspace | repositories |
 | `/reddit` → `/reddit/[id]` | Reddit conversation workspace | repositories |
 | `/media` → `/media/[id]` | News and media workspace | repositories |
-| `/responses` | Response library, plus a server-rendered detail pane selected via `?selected=` that embeds the existing response composer — approve and reject work; save draft and publish remain disabled | repositories |
+| `/responses` | Response library, plus a server-rendered detail pane selected via `?selected=` that embeds the existing response composer — approve, reject, and save draft all work; approving a dirty composer carries its text into the same write as the decision; publish remains disabled | repositories |
 | `/escalations` | Escalation centre, plus a server-rendered, read-only detail pane selected via `?selected=` showing the case's audit trail from `audit_events` | repositories |
 | `/insights` | Cross-channel analytics | repositories + typed fixture |
 | `/locations` | Portfolio and per-location settings | repositories |
@@ -441,6 +441,14 @@ reachable without a session, so provider errors are logged and swallowed too.
   accident. `SOURCE_OWNED_MENTION_FIELDS` is the single declaration of the line.
 - Review text and reviewer names never appear in an audit event, a sync-run
   error message, a log line, or an API response.
+- Composer edits persist through `saveFinalText`, but only while a draft is
+  still `draft` or `awaiting_approval` — the same statuses `response.decide`
+  already required, so text and decision leave the editable state together.
+  `response.edit` (owner, admin, communications lead, approver) gates who may
+  call it, and approving a dirty composer carries its text into the same
+  write as the decision rather than a separate save. No event carries the
+  text itself: `response.edited` records `finalTextLength` before and after,
+  never the prose.
 - Relative times in demo mode are measured against a fixed reference instant
   (`REFERENCE_NOW`) so server and client renders agree and fixtures stay stable.
 - The relevance gate (`src/lib/monitoring/gate.ts`) never writes
@@ -1009,3 +1017,10 @@ Two useful things fell out of doing it:
   row so a later version can be compared against this one.
 - Cost per run is now measurable rather than theoretical: the sweep of 12
   mentions spent roughly 1,500 input and 5,200 output tokens.
+- **`20260808000500_response_edited_audit_event.sql` has not been applied to
+  the hosted Supabase project yet.** It is the migration that adds
+  `response.edited` to `audit_events_known_event_type`; until the next `npm
+  run db:migrate` (or equivalent hosted deploy) applies it, saving a composer
+  edit or approving one against the hosted database hits the same `23514`
+  rejection D93 describes for an unlisted event type, even though the demo
+  adapter and every local test already pass.

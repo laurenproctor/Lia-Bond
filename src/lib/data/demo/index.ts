@@ -51,7 +51,7 @@ import {
   type UpdateBrandVoiceInput,
   type User,
 } from "@/domain";
-import { canDecideOnDraft } from "@/domain";
+import { canDecideOnDraft, canEditDraft } from "@/domain";
 import { DataError, conflict, invalidInput, notFound } from "@/lib/data/errors";
 import {
   computeLocationMetrics,
@@ -1834,7 +1834,24 @@ export function createDemoDataSource(): LiaDataSource {
         });
       },
 
-      async decide(scope, draftId, decision, decidedByUserId, decisionNote) {
+      async saveFinalText(scope, draftId, finalText) {
+        const draft = draftsIn(scope).find((row) => row.id === draftId);
+        if (!draft) throw notFound("Response draft");
+
+        if (!canEditDraft(draft.status)) {
+          throw conflict(
+            `A response that is already ${draft.status.replace(/_/g, " ")} can no longer be edited.`,
+          );
+        }
+
+        return replaceRow(store().responseDrafts, {
+          ...draft,
+          finalText,
+          updatedAt: nowIso(),
+        });
+      },
+
+      async decide(scope, draftId, decision, decidedByUserId, decisionNote, finalText) {
         const draft = draftsIn(scope).find((row) => row.id === draftId);
         if (!draft) throw notFound("Response draft");
 
@@ -1847,6 +1864,7 @@ export function createDemoDataSource(): LiaDataSource {
         const timestamp = nowIso();
         const updatedDraft: ResponseDraft = {
           ...draft,
+          finalText: finalText ?? draft.finalText,
           status: decision === "approved" ? "approved" : "draft",
           approvedByUserId: decision === "approved" ? decidedByUserId : null,
           approvedAt: decision === "approved" ? timestamp : null,

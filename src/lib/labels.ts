@@ -216,6 +216,7 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "response.assigned": "Response assigned",
   "response.approved": "Response approved",
   "response.rejected": "Response rejected",
+  "response.edited": "Response edited",
   "escalation.assigned": "Escalation assigned",
   "escalation.status_changed": "Escalation status changed",
   "automation_rule.enabled": "Automation rule enabled",

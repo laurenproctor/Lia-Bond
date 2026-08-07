@@ -15,6 +15,7 @@ export const PERMISSIONS = [
   "mention.analyze",
   "response.assign",
   "response.decide",
+  "response.edit",
   "escalation.assign",
   "escalation.update_status",
   "automation_rule.toggle",
@@ -63,6 +64,11 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   ],
   // Deliberately narrow: writing a draft and approving it are different jobs.
   "response.decide": ["owner", "admin", "approver"],
+  // Writing response text and signing it off stay separate jobs, but the
+  // roles that own the text — and the approver amending as part of a
+  // decision (D107) — must not need a ticket to fix a typo. Location
+  // managers are absent because drafts carry no location to scope them to.
+  "response.edit": ["owner", "admin", "communications_lead", "approver"],
   "escalation.assign": ["owner", "admin", "communications_lead"],
   "escalation.update_status": [
     "owner",

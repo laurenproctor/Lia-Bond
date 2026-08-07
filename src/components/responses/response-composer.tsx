@@ -10,13 +10,16 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import { decideResponseDraftAction } from "@/app/actions/responses";
+import {
+  decideResponseDraftAction,
+  saveResponseDraftAction,
+} from "@/app/actions/responses";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ResponseStatusBadge } from "@/components/ui/status-badge";
 import { cn } from "@/lib/cn";
 import { GENERATED_BY_LABELS, RESPONSE_TYPE_LABELS } from "@/lib/labels";
-import type { PublishingMode, ResponseDraft } from "@/domain";
+import { canEditDraft, type PublishingMode, type ResponseDraft } from "@/domain";
 
 export interface ResponseComposerProps {
   draft: ResponseDraft;
@@ -24,6 +27,8 @@ export interface ResponseComposerProps {
   publishing: PublishingMode;
   /** False for roles that may read a draft but not decide on it. */
   canDecide: boolean;
+  /** Role-level edit permission; the composer also checks the status itself. */
+  canEdit: boolean;
   className?: string;
 }
 
@@ -48,6 +53,7 @@ export function ResponseComposer({
   draft,
   publishing,
   canDecide,
+  canEdit,
   className,
 }: ResponseComposerProps) {
   const textareaId = useId();
@@ -57,12 +63,36 @@ export function ResponseComposer({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  const stored = draft.finalText ?? draft.draftText;
+  const dirty = content !== stored;
+  const editable = canEdit && canEditDraft(draft.status);
+
+  function save() {
+    setError(null);
+    setOutcome(null);
+    startTransition(async () => {
+      const result = await saveResponseDraftAction({
+        responseDraftId: draft.id,
+        finalText: content,
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setOutcome("Draft saved.");
+    });
+  }
+
   function decide(decision: "approved" | "rejected") {
     setError(null);
+    setOutcome(null);
     startTransition(async () => {
       const result = await decideResponseDraftAction({
         responseDraftId: draft.id,
         decision,
+        ...(decision === "approved" && dirty && content.trim().length > 0
+          ? { finalText: content }
+          : {}),
       });
 
       setConfirming(null);
@@ -101,11 +131,18 @@ export function ResponseComposer({
           value={content}
           onChange={(event) => setContent(event.target.value)}
           rows={9}
+          maxLength={5000}
+          readOnly={!editable || pending}
           className="lia-scroll w-full resize-y rounded-[10px] border border-gray-300 bg-white px-3.5 py-3 text-[13.5px] leading-relaxed text-gray-950"
         />
         <p className="mt-1 text-right text-[12px] text-gray-400 tabular-nums">
           {content.length} characters
         </p>
+        {canEdit && !canEditDraft(draft.status) ? (
+          <p className="mt-1 text-[12px] text-gray-500">
+            Approved responses can no longer be edited.
+          </p>
+        ) : null}
       </div>
 
       <p className="flex items-start gap-2 rounded-lg bg-gray-50 px-3 py-2 text-[12.5px] text-gray-700">
@@ -113,25 +150,34 @@ export function ResponseComposer({
         <span>{PUBLISHING_COPY[publishing]}</span>
       </p>
 
-      {canDecide ? (
+      {canDecide || editable ? (
         <div className="flex flex-wrap gap-2 border-t border-gray-200 pt-3">
-          <Button
-            variant="primary"
-            icon={pending ? Loader2 : ThumbsUp}
-            disabled={pending}
-            onClick={() => setConfirming("approve")}
-          >
-            Approve
-          </Button>
+          {canDecide ? (
+            <>
+              <Button
+                variant="primary"
+                icon={pending ? Loader2 : ThumbsUp}
+                disabled={pending || content.trim().length === 0}
+                onClick={() => setConfirming("approve")}
+              >
+                Approve
+              </Button>
+              <Button
+                variant="secondary"
+                icon={ThumbsDown}
+                disabled={pending}
+                onClick={() => setConfirming("reject")}
+              >
+                Send back
+              </Button>
+            </>
+          ) : null}
           <Button
             variant="secondary"
-            icon={ThumbsDown}
-            disabled={pending}
-            onClick={() => setConfirming("reject")}
+            icon={pending ? Loader2 : PencilLine}
+            disabled={pending || !editable || !dirty || content.trim().length === 0}
+            onClick={save}
           >
-            Send back
-          </Button>
-          <Button variant="secondary" icon={PencilLine} disabled>
             Save draft
           </Button>
           <Button
