@@ -227,6 +227,7 @@ export default async function ResponsesPage({ searchParams }: ResponsesPageProps
           mention={selectedRow.mention}
           publishing={publishing}
           canDecide={can(role, "response.decide")}
+          canEdit={can(role, "response.edit")}
           assigneeName={selectedRow.assigneeName}
           approvalEntries={approvalTimelineEntries(approvals, namesById)}
         />

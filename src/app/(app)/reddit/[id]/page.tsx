@@ -27,7 +27,7 @@ export default async function RedditWorkspacePage({ params }: PageProps) {
   const data = await loadWorkspace(id, ["reddit_post", "reddit_comment"]);
   if (!data) notFound();
 
-  const { queue, selected, detail, publishing, canDecide } = data;
+  const { queue, selected, detail, publishing, canDecide, canEdit } = data;
   const primaryDraft = detail.drafts[0] ?? null;
 
   return (
@@ -82,6 +82,7 @@ export default async function RedditWorkspacePage({ params }: PageProps) {
                   draft={primaryDraft}
                   publishing={publishing}
                   canDecide={canDecide}
+                  canEdit={canEdit}
                 />
               ) : (
                 <EmptyState
