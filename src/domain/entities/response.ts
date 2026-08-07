@@ -72,6 +72,7 @@ export const decideResponseDraftInputSchema = z.object({
   responseDraftId: uuidSchema,
   decision: z.enum(["approved", "rejected"]),
   decisionNote: z.string().max(1000).optional(),
+  finalText: z.string().min(1).max(5000).optional(),
 });
 
 export type DecideResponseDraftInput = z.infer<
@@ -92,6 +93,26 @@ export const APPROVABLE_DRAFT_STATUSES = [
 export function canDecideOnDraft(status: ResponseDraft["status"]): boolean {
   return (APPROVABLE_DRAFT_STATUSES as readonly string[]).includes(status);
 }
+
+/**
+ * Statuses whose text may still change.
+ *
+ * Deliberately the same set as deciding (D108): an approval keeps meaning
+ * what was signed off, so the moment a draft leaves the decidable states its
+ * text is frozen too. One vocabulary, no second lifecycle.
+ */
+export const EDITABLE_DRAFT_STATUSES = APPROVABLE_DRAFT_STATUSES;
+
+export function canEditDraft(status: ResponseDraft["status"]): boolean {
+  return (EDITABLE_DRAFT_STATUSES as readonly string[]).includes(status);
+}
+
+export const saveResponseDraftInputSchema = z.object({
+  responseDraftId: uuidSchema,
+  finalText: z.string().min(1).max(5000),
+});
+
+export type SaveResponseDraftInput = z.infer<typeof saveResponseDraftInputSchema>;
 
 /* -------------------------------------------------------------------------- */
 /* Approval                                                                    */
