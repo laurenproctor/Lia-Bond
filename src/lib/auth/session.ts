@@ -21,6 +21,7 @@ export interface SessionUser {
   id: string;
   email: string;
   fullName: string;
+  avatarUrl: string | null;
 }
 
 /** Lets local development exercise each role without a login screen. */
@@ -35,7 +36,12 @@ async function resolveDemoSession(): Promise<SessionUser | null> {
     SEED_DATASET.users.find((row) => row.id === USER_KATE);
 
   if (!user) return null;
-  return { id: user.id, email: user.email, fullName: user.fullName };
+  return {
+    id: user.id,
+    email: user.email,
+    fullName: user.fullName,
+    avatarUrl: user.avatarUrl,
+  };
 }
 
 async function resolveSupabaseSession(): Promise<SessionUser | null> {
@@ -43,14 +49,19 @@ async function resolveSupabaseSession(): Promise<SessionUser | null> {
   const { data, error } = await supabase.auth.getUser();
   if (error || !data.user) return null;
 
-  const metadata = data.user.user_metadata as { full_name?: unknown } | null;
+  const metadata = data.user.user_metadata as
+    | { full_name?: unknown; avatar_url?: unknown }
+    | null;
   const fullName =
     typeof metadata?.full_name === "string" ? metadata.full_name : data.user.email;
+  const avatarUrl =
+    typeof metadata?.avatar_url === "string" ? metadata.avatar_url : null;
 
   return {
     id: data.user.id,
     email: data.user.email ?? "",
     fullName: fullName ?? "",
+    avatarUrl,
   };
 }
 

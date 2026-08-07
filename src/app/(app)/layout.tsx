@@ -51,6 +51,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           name: session.fullName || session.email,
           email: session.email,
           initials: initialsFor(session.fullName || session.email),
+          avatarUrl: session.avatarUrl,
           role: context.role,
         },
         badgeCounts: {

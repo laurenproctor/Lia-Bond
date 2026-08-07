@@ -1,3 +1,4 @@
+import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
@@ -10,6 +11,7 @@ import type {
   MembershipWithUser,
 } from "@/domain";
 import { MEMBERSHIP_ROLE_LABELS, MEMBERSHIP_STATUS_LABELS } from "@/lib/labels";
+import { initialsFor } from "@/lib/view-models/mention";
 
 /**
  * The team section of settings.
@@ -43,11 +45,21 @@ export function TeamPanel({
       id: "name",
       header: "Member",
       cell: (member) => (
-        <span>
-          <span className="block font-medium text-gray-950">
-            {member.user.fullName}
+        <span className="flex items-center gap-2.5">
+          <Avatar
+            initials={initialsFor(member.user.fullName)}
+            imageUrl={member.user.avatarUrl}
+            name={member.user.fullName}
+            size="sm"
+          />
+          <span className="min-w-0">
+            <span className="block truncate font-medium text-gray-950">
+              {member.user.fullName}
+            </span>
+            <span className="block truncate text-[12px] text-gray-500">
+              {member.user.email}
+            </span>
           </span>
-          <span className="block text-[12px] text-gray-500">{member.user.email}</span>
         </span>
       ),
     },
