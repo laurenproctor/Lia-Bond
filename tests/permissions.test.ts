@@ -51,6 +51,13 @@ describe("role permissions", () => {
       expect(can(role, "organization.manage_members")).toBe(expected);
     }
   });
+
+  it("keeps organization details with owners and admins", () => {
+    for (const role of MEMBERSHIP_ROLES) {
+      const expected = role === "owner" || role === "admin";
+      expect(can(role, "organization.update")).toBe(expected);
+    }
+  });
 });
 
 describe("location scoping", () => {
