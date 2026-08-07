@@ -82,6 +82,8 @@ export async function saveResponseDraftAction(
 
     revalidatePath("/responses");
     revalidatePath("/mentions");
+    revalidatePath("/reviews/google/[id]", "page");
+    revalidatePath("/reddit/[id]", "page");
     return updated;
   });
 }
@@ -143,6 +145,8 @@ export async function decideResponseDraftAction(
 
     revalidatePath("/responses");
     revalidatePath("/mentions");
+    revalidatePath("/reviews/google/[id]", "page");
+    revalidatePath("/reddit/[id]", "page");
     return draft;
   });
 }
