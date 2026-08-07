@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
-import { Save } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
-import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DetailField } from "@/components/ui/detail-panel";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { SegmentedTabs } from "@/components/ui/segmented-tabs";
+import { OrganizationPanel } from "@/components/settings/organization-panel";
 import { ProfilePanel } from "@/components/settings/profile-panel";
 import { TeamPanel } from "@/components/settings/team-panel";
 import { can } from "@/lib/auth/permissions";
@@ -20,6 +19,7 @@ export default async function SettingsPage() {
   const context = await getOrganizationContext();
   const dataSource = await getDataSource();
   const canManage = can(context.role, "organization.manage_members");
+  const canEditOrganization = can(context.role, "organization.update");
 
   // Invitations are readable by any member but only listed for people who can
   // act on them, so a viewer is not shown a roster of addresses they have no
@@ -45,11 +45,6 @@ export default async function SettingsPage() {
       <PageHeader
         title="Settings"
         description="Organization details, defaults, monitoring, and account administration."
-        actions={
-          <Button variant="primary" icon={Save}>
-            Save changes
-          </Button>
-        }
       >
         <SegmentedTabs
           label="Settings section"
@@ -65,26 +60,30 @@ export default async function SettingsPage() {
 
       <div className="grid gap-4 xl:grid-cols-12">
         <div className="flex flex-col gap-4 xl:col-span-7">
-          <Card>
-            <CardHeader
-              title="Organization details"
-              description="Used as the default for every location."
-            />
-            <dl className="mt-4 grid gap-4 sm:grid-cols-2">
-              <DetailField label="Name">{organization.name}</DetailField>
-              <DetailField label="Slug">{organization.slug}</DetailField>
-              <DetailField label="Industry">{organization.industry}</DetailField>
-              <DetailField label="Website">
-                {organization.websiteUrl ?? "—"}
-              </DetailField>
-              <DetailField label="Default timezone">
-                {organization.defaultTimezone}
-              </DetailField>
-              <DetailField label="Default language">
-                {organization.defaultLanguage}
-              </DetailField>
-            </dl>
-          </Card>
+          {canEditOrganization ? (
+            <OrganizationPanel organization={organization} />
+          ) : (
+            <Card>
+              <CardHeader
+                title="Organization details"
+                description="Used as the default for every location."
+              />
+              <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+                <DetailField label="Name">{organization.name}</DetailField>
+                <DetailField label="Slug">{organization.slug}</DetailField>
+                <DetailField label="Industry">{organization.industry}</DetailField>
+                <DetailField label="Website">
+                  {organization.websiteUrl ?? "—"}
+                </DetailField>
+                <DetailField label="Default timezone">
+                  {organization.defaultTimezone}
+                </DetailField>
+                <DetailField label="Default language">
+                  {organization.defaultLanguage}
+                </DetailField>
+              </dl>
+            </Card>
+          )}
 
           <TeamPanel
             members={members}
@@ -107,6 +106,7 @@ export default async function SettingsPage() {
               firstName={self.firstName}
               lastName={self.lastName}
               email={self.email}
+              avatarUrl={self.avatarUrl}
             />
           ) : null}
 

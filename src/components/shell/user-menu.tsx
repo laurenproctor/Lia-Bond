@@ -13,6 +13,7 @@ export interface UserMenuUser {
   name: string;
   email: string;
   initials: string;
+  avatarUrl: string | null;
   role: MembershipRole;
 }
 
@@ -56,7 +57,13 @@ export function UserMenu({
           compact ? "justify-center p-1.5" : "px-2.5 py-2",
         )}
       >
-        <Avatar initials={user.initials} name={user.name} size="sm" tone="dark" />
+        <Avatar
+          initials={user.initials}
+          imageUrl={user.avatarUrl}
+          name={user.name}
+          size="sm"
+          tone="dark"
+        />
         {compact ? (
           <span className="sr-only">{user.name}. Open account menu</span>
         ) : (

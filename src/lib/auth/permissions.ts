@@ -21,6 +21,7 @@ export const PERMISSIONS = [
   "brand_voice.update",
   "location.update_manager",
   "organization.manage_members",
+  "organization.update",
   "onboarding.manage",
   "integration.connect",
   "integration.reauthorize",
@@ -84,6 +85,12 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   "brand_voice.update": ["owner", "admin", "communications_lead"],
   "location.update_manager": ["owner", "admin"],
   "organization.manage_members": ["owner", "admin"],
+  // Who runs the roster and who defines the organization's identity are
+  // different questions — this is deliberately not a reuse of
+  // `manage_members`, so each answer stays legible on its own row. Backstopped
+  // by `organizations_update_admins` in RLS, which named the same two roles
+  // before this permission existed.
+  "organization.update": ["owner", "admin"],
   // First-run setup. Narrower than the write gate the rest of the product
   // uses, because finishing onboarding decides what *everybody* in the
   // organization sees on sign-in — and because its five steps are each already
