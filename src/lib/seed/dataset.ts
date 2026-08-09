@@ -1799,15 +1799,32 @@ const escalations: Escalation[] = [
 /* Automation rules                                                            */
 /* -------------------------------------------------------------------------- */
 
+// Revision/simulation/archival are mechanical stopgaps here — every seeded
+// rule starts at revision 1, never simulated, never archived. Task 13 owns
+// the real remediation (rules with edit history, simulated revisions, etc.).
 function rule(
   label: string,
-  fields: Omit<AutomationRule, "id" | "organizationId" | "createdAt" | "updatedAt">,
+  fields: Omit<
+    AutomationRule,
+    | "id"
+    | "organizationId"
+    | "createdAt"
+    | "updatedAt"
+    | "revision"
+    | "lastSimulatedAt"
+    | "simulatedRevision"
+    | "archivedAt"
+  >,
   organizationId = ORG_USHG,
 ): AutomationRule {
   return {
     id: seedId(`rule:${label}`),
     organizationId,
     ...fields,
+    revision: 1,
+    lastSimulatedAt: null,
+    simulatedRevision: null,
+    archivedAt: null,
     createdAt: daysAgo(60),
     updatedAt: daysAgo(3),
   };
@@ -1827,7 +1844,7 @@ const automationRules: AutomationRule[] = [
       { field: "sentiment", operator: "is", value: "positive" },
     ],
     actions: [
-      { type: "generate_draft", voiceProfile: "maison-laurent" },
+      { type: "generate_draft", voiceProfile: null },
       { type: "auto_publish" },
     ],
     lastRunAt: hoursAgo(20),
@@ -1853,7 +1870,7 @@ const automationRules: AutomationRule[] = [
     priority: 20,
     conditions: [{ field: "platform", operator: "is", value: "reddit" }],
     actions: [
-      { type: "generate_draft", voiceProfile: "maison-laurent" },
+      { type: "generate_draft", voiceProfile: null },
       { type: "require_approval", approverUserId: USER_MARCUS },
     ],
     lastRunAt: hoursAgo(4),

@@ -74,7 +74,7 @@ export type RuleCondition = z.infer<typeof ruleConditionSchema>;
  * lives in `isAutoPublishSafe` below and is enforced wherever rules execute.
  */
 export const ruleActionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("generate_draft"), voiceProfile: z.string().max(80) }),
+  z.object({ type: z.literal("generate_draft"), voiceProfile: z.string().max(80).nullable() }),
   z.object({ type: z.literal("auto_publish") }),
   z.object({ type: z.literal("require_approval"), approverUserId: uuidSchema.nullable() }),
   z.object({ type: z.literal("assign"), assigneeUserId: uuidSchema.nullable() }),
@@ -94,8 +94,27 @@ export const automationRuleSchema = z
     /** Lower runs first. Ties break on `createdAt`. */
     priority: z.number().int().min(0).max(1000),
     conditions: z.array(ruleConditionSchema),
-    actions: z.array(ruleActionSchema).min(1),
+    // A rule with no actions yet is a legitimate draft-in-progress, not a
+    // malformed record — the evaluator simply has nothing to do with it.
+    actions: z.array(ruleActionSchema),
     lastRunAt: timestampSchema.nullable(),
+    /**
+     * Optimistic-concurrency counter. Starts at 1, increments on every save;
+     * `updateAutomationRuleInputSchema` carries an `expectedRevision` so a
+     * save against a stale copy fails loudly instead of clobbering a
+     * concurrent edit.
+     */
+    revision: z.number().int().min(1),
+    /**
+     * When this revision was last run through the simulator, and which
+     * revision that was. `simulatedRevision` lagging behind `revision` means
+     * the rule has been edited since its last simulation and authoring UI
+     * should say so rather than imply the simulation still reflects reality.
+     */
+    lastSimulatedAt: timestampSchema.nullable(),
+    simulatedRevision: z.number().int().min(1).nullable(),
+    /** Soft-deleted rules are hidden by default; see `includeArchived` below. */
+    archivedAt: timestampSchema.nullable(),
   })
   .extend(organizationOwnedSchema.shape)
   .extend(timestampsSchema.shape);
@@ -105,6 +124,8 @@ export type AutomationRule = z.infer<typeof automationRuleSchema>;
 export const automationRuleFilterSchema = z.object({
   statuses: z.array(automationRuleStatusSchema).optional(),
   search: z.string().max(200).optional(),
+  /** Defaults to excluding archived rules wherever this filter is consumed. */
+  includeArchived: z.boolean().optional(),
 });
 
 export type AutomationRuleFilter = z.infer<typeof automationRuleFilterSchema>;
@@ -117,6 +138,50 @@ export const setAutomationRuleEnabledInputSchema = z.object({
 export type SetAutomationRuleEnabledInput = z.infer<
   typeof setAutomationRuleEnabledInputSchema
 >;
+
+/**
+ * The authorable shape of a rule — everything a person sets when creating or
+ * editing one, as distinct from `AutomationRule`'s server-owned fields
+ * (id, status, revision, timestamps, ...). `create`, `update`, and
+ * `duplicate` all read a rule's editable surface through this one schema so
+ * the three inputs can't drift from each other.
+ */
+export const automationRuleConfigSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  description: z.string().max(1000).nullable().default(null),
+  priority: z.number().int().min(0).max(1000).default(100),
+  conditions: z.array(ruleConditionSchema).max(20).default([]),
+  actions: z.array(ruleActionSchema).max(10).default([]),
+});
+
+export type AutomationRuleConfig = z.infer<typeof automationRuleConfigSchema>;
+
+export const createAutomationRuleInputSchema = automationRuleConfigSchema;
+
+/**
+ * `expectedRevision` is the optimistic-concurrency check: the caller must
+ * name the revision it read before editing, so a save against a rule someone
+ * else has since changed fails instead of silently overwriting their edit.
+ */
+export const updateAutomationRuleInputSchema = z.object({
+  automationRuleId: uuidSchema,
+  expectedRevision: z.number().int().min(1),
+  config: automationRuleConfigSchema,
+});
+
+export type UpdateAutomationRuleInput = z.infer<typeof updateAutomationRuleInputSchema>;
+
+export const duplicateAutomationRuleInputSchema = z.object({ automationRuleId: uuidSchema });
+
+export type DuplicateAutomationRuleInput = z.infer<typeof duplicateAutomationRuleInputSchema>;
+
+export const archiveAutomationRuleInputSchema = z.object({ automationRuleId: uuidSchema });
+
+export type ArchiveAutomationRuleInput = z.infer<typeof archiveAutomationRuleInputSchema>;
+
+export const simulateAutomationRuleInputSchema = z.object({ automationRuleId: uuidSchema });
+
+export type SimulateAutomationRuleInput = z.infer<typeof simulateAutomationRuleInputSchema>;
 
 /**
  * A rule may only publish without a human when nothing in its conditions
