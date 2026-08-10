@@ -14,7 +14,14 @@
  * field values (or explicitly null where the schema allows), not defaults.
  */
 
-import type { RiskLevel, RuleCondition } from "@/domain";
+import type {
+  MentionSourceType,
+  MentionStatus,
+  Platform,
+  RiskLevel,
+  RuleCondition,
+  Sentiment,
+} from "@/domain";
 
 /** Risk levels ordered ascending: low (0) < medium (1) < high (2) < critical (3). */
 export const RISK_RANK: Record<RiskLevel, number> = {
@@ -32,13 +39,13 @@ export const RISK_RANK: Record<RiskLevel, number> = {
  */
 export interface RuleSubject {
   mentionId: string;
-  platform: string | null;
-  sourceType: string;
+  platform: Platform | null;
+  sourceType: MentionSourceType;
   locationId: string | null;
   rating: number | null;
-  status: string;
-  sentiment: string;
-  riskLevel: string;
+  status: MentionStatus;
+  sentiment: Sentiment;
+  riskLevel: RiskLevel;
   relevanceScore: number | null;
 }
 
@@ -92,18 +99,19 @@ export function matchesCondition(subject: RuleSubject, condition: RuleCondition)
 
     case "risk_level": {
       // risk_level is never null.
-      const subjectRank = RISK_RANK[subject.riskLevel as RiskLevel];
-      const conditionRank = RISK_RANK[condition.value];
-
       if (condition.operator === "is") {
         return subject.riskLevel === condition.value;
       } else if (condition.operator === "is_not") {
         return subject.riskLevel !== condition.value;
       } else if (condition.operator === "at_least") {
         // >= in RISK_RANK (inclusive).
+        const subjectRank = RISK_RANK[subject.riskLevel];
+        const conditionRank = RISK_RANK[condition.value];
         return subjectRank >= conditionRank;
       } else if (condition.operator === "at_most") {
         // <= in RISK_RANK (inclusive).
+        const subjectRank = RISK_RANK[subject.riskLevel];
+        const conditionRank = RISK_RANK[condition.value];
         return subjectRank <= conditionRank;
       }
       const _exhausted: never = condition.operator;
