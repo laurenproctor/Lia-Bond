@@ -19,6 +19,7 @@ import {
 } from "@/domain";
 import { ORG_HARBOR, ORG_USHG, SEED_DATASET } from "@/lib/seed/dataset";
 import { seedId } from "@/lib/seed/ids";
+import { activationProblems } from "@/lib/rules/readiness";
 
 /**
  * The seed dataset is the fixture every other suite builds on, and it becomes
@@ -282,6 +283,43 @@ describe("automation guardrails", () => {
   it("never lets a seeded rule auto-publish risky content", () => {
     for (const rule of SEED_DATASET.automationRules) {
       expect(isAutoPublishSafe(rule)).toBe(true);
+    }
+  });
+});
+
+describe("automation rule truthfulness", () => {
+  // Task 12: the seed used to claim runs, SLAs, and capabilities that don't
+  // exist. Nothing has ever actually run, every active rule must be able to
+  // pass its own activation check, and no seeded action may still carry a
+  // hardcoded user id from before mention assignment / approval routing
+  // existed.
+
+  it("never claims a rule has run", () => {
+    for (const rule of SEED_DATASET.automationRules) {
+      expect(rule.lastRunAt).toBeNull();
+    }
+  });
+
+  it("has zero activation problems for every active rule", () => {
+    const active = SEED_DATASET.automationRules.filter(
+      (rule) => rule.status === "active",
+    );
+    expect(active.length).toBeGreaterThan(0);
+    for (const rule of active) {
+      expect(activationProblems(rule)).toEqual([]);
+    }
+  });
+
+  it("never leaves a seed user id inside an action's assignee/approver field", () => {
+    for (const rule of SEED_DATASET.automationRules) {
+      for (const action of rule.actions) {
+        if ("assigneeUserId" in action) {
+          expect(action.assigneeUserId).toBeNull();
+        }
+        if ("approverUserId" in action) {
+          expect(action.approverUserId).toBeNull();
+        }
+      }
     }
   });
 });

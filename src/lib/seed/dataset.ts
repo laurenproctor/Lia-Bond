@@ -1799,9 +1799,14 @@ const escalations: Escalation[] = [
 /* Automation rules                                                            */
 /* -------------------------------------------------------------------------- */
 
-// Revision/simulation/archival are mechanical stopgaps here — every seeded
-// rule starts at revision 1, never simulated, never archived. Task 13 owns
-// the real remediation (rules with edit history, simulated revisions, etc.).
+// Revision/archival are mechanical stopgaps here — every seeded rule starts
+// at revision 1 and is never archived. Task 13 owns the real remediation
+// (rules with edit history, etc.). Simulation fields can be overridden per
+// rule: the three active rules below carry only executable actions
+// (`escalate`) and a fresh simulation so `activationProblems` is empty for
+// them — they are truthfully "armed" — while every draft is left never
+// simulated, which is also true. `lastRunAt` is always null: nothing in
+// this seed has ever actually run.
 function rule(
   label: string,
   fields: Omit<
@@ -1814,16 +1819,20 @@ function rule(
     | "lastSimulatedAt"
     | "simulatedRevision"
     | "archivedAt"
-  >,
+  > &
+    Partial<
+      Pick<AutomationRule, "revision" | "lastSimulatedAt" | "simulatedRevision">
+    >,
   organizationId = ORG_USHG,
 ): AutomationRule {
+  const { revision, lastSimulatedAt, simulatedRevision, ...rest } = fields;
   return {
     id: seedId(`rule:${label}`),
     organizationId,
-    ...fields,
-    revision: 1,
-    lastSimulatedAt: null,
-    simulatedRevision: null,
+    ...rest,
+    revision: revision ?? 1,
+    lastSimulatedAt: lastSimulatedAt ?? null,
+    simulatedRevision: simulatedRevision ?? null,
     archivedAt: null,
     createdAt: daysAgo(60),
     updatedAt: daysAgo(3),
@@ -1834,8 +1843,8 @@ const automationRules: AutomationRule[] = [
   rule("auto-positive", {
     name: "Auto-publish positive Google replies",
     description:
-      "Four- and five-star Google reviews with no risk flags get a brand-voice reply published without a human step.",
-    status: "active",
+      "Would draft and publish replies to happy Google reviews. Stays a draft until Lia can generate drafts and publish replies.",
+    status: "draft",
     priority: 10,
     conditions: [
       { field: "source_type", operator: "is", value: "google_review" },
@@ -1847,64 +1856,67 @@ const automationRules: AutomationRule[] = [
       { type: "generate_draft", voiceProfile: null },
       { type: "auto_publish" },
     ],
-    lastRunAt: hoursAgo(20),
+    lastRunAt: null,
   }),
   rule("escalate-high-risk", {
     name: "Escalate high-risk mentions",
     description:
-      "Anything classified high or critical goes straight to the escalations centre with a two-hour response target.",
+      "Anything classified high or critical risk is escalated for a person to handle.",
     status: "active",
     priority: 1,
     conditions: [{ field: "risk_level", operator: "at_least", value: "high" }],
-    actions: [
-      { type: "escalate", assigneeUserId: USER_NAOMI },
-      { type: "notify", channel: "both" },
-      { type: "require_approval", approverUserId: USER_DANIEL },
-    ],
-    lastRunAt: hoursAgo(9),
+    actions: [{ type: "escalate", assigneeUserId: null }],
+    lastRunAt: null,
+    revision: 1,
+    simulatedRevision: 1,
+    lastSimulatedAt: daysAgo(2),
   }),
   rule("reddit-approval", {
     name: "Approval-first Reddit engagement",
-    description: "Reddit drafts are always held for a named approver. Nothing posts to Reddit automatically.",
-    status: "active",
+    description:
+      "Would hold every Reddit reply for a named approver. Stays a draft until drafting and approval routing are automated.",
+    status: "draft",
     priority: 20,
     conditions: [{ field: "platform", operator: "is", value: "reddit" }],
     actions: [
       { type: "generate_draft", voiceProfile: null },
-      { type: "require_approval", approverUserId: USER_MARCUS },
+      { type: "require_approval", approverUserId: null },
     ],
-    lastRunAt: hoursAgo(4),
+    lastRunAt: null,
   }),
   rule("food-safety-hold", {
     name: "Hold all food safety mentions",
-    description: "Food safety language blocks draft generation entirely and pages the on-call owner.",
+    description:
+      "Critical-risk mentions escalate immediately, ahead of everything else.",
     status: "active",
     priority: 0,
     conditions: [{ field: "risk_level", operator: "is", value: "critical" }],
-    actions: [
-      { type: "escalate", assigneeUserId: USER_DANIEL },
-      { type: "tag", label: "Hold public response" },
-    ],
-    lastRunAt: hoursAgo(9),
+    actions: [{ type: "escalate", assigneeUserId: null }],
+    lastRunAt: null,
+    revision: 1,
+    simulatedRevision: 1,
+    lastSimulatedAt: daysAgo(2),
   }),
   rule("assign-negative", {
     name: "Assign negative reviews to the location manager",
-    description: "Negative reviews route to whoever manages that location, with a four-hour first-response target.",
-    status: "active",
+    description:
+      "Would route negative Google reviews to the right person. Stays a draft until mention assignment exists.",
+    status: "draft",
     priority: 30,
     conditions: [
       { field: "sentiment", operator: "is", value: "negative" },
       { field: "source_type", operator: "is", value: "google_review" },
     ],
     actions: [
-      { type: "assign", assigneeUserId: USER_PRIYA },
+      { type: "assign", assigneeUserId: null },
       { type: "notify", channel: "email" },
     ],
-    lastRunAt: hoursAgo(6),
+    lastRunAt: null,
   }),
   rule("media-watch", {
     name: "Flag high-authority media coverage",
-    description: "Coverage above a relevance threshold notifies communications within fifteen minutes.",
+    description:
+      "Would flag high-relevance news coverage. Inactive until Lia can send notifications.",
     status: "inactive",
     priority: 40,
     conditions: [
@@ -1927,12 +1939,15 @@ const automationRules: AutomationRule[] = [
     "harbor-escalate",
     {
       name: "Escalate allergen mentions",
-      description: "Any critical mention pages the owner immediately.",
+      description: "Any critical mention is escalated to the team immediately.",
       status: "active",
       priority: 0,
       conditions: [{ field: "risk_level", operator: "is", value: "critical" }],
-      actions: [{ type: "escalate", assigneeUserId: USER_SOFIA }],
-      lastRunAt: daysAgo(1),
+      actions: [{ type: "escalate", assigneeUserId: null }],
+      lastRunAt: null,
+      revision: 1,
+      simulatedRevision: 1,
+      lastSimulatedAt: daysAgo(2),
     },
     ORG_HARBOR,
   ),
