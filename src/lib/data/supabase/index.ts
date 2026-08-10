@@ -2125,6 +2125,16 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       async listSimulationCandidates(scope, { publishedAfter, limit }) {
+        // Selects `content` in full, not truncated: there is no excerpt
+        // column, and PostgREST's select grammar has no `left()` or other SQL
+        // truncation function to ask for one server-side. A generated
+        // `excerpt` column (or view) would fix this but is a schema change
+        // outside this adapter's scope — deferred follow-up. `content` is cut
+        // down to a ≤140-char excerpt in `toSimulationCandidate` below before
+        // it crosses the repository boundary, which is the guarantee
+        // `SimulationCandidate`'s doc comment actually makes; transferring
+        // the full column for up to `limit` (capped at 500) rows is an
+        // acceptable cost for a bounded preview read.
         const { data, error } = await client
           .from("mentions")
           .select(

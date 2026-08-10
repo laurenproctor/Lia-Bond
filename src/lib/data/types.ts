@@ -130,6 +130,14 @@ export interface MentionStatusCounts {
  * sample of matches, not the full record, so this carries only what a
  * condition can test plus a short `excerpt` for display — never the full
  * `content` body, an author, or a source URL.
+ *
+ * That guarantee is about what crosses the repository boundary, not what the
+ * database transfers to get there: every adapter truncates to a ≤140-char
+ * excerpt before returning, but under Supabase, PostgREST has no `left()` in
+ * its select grammar, so the query still pulls the whole `content` column for
+ * up to `limit` rows and the truncation happens in the adapter. Acceptable
+ * for a bounded preview read (`limit` is capped at 500) — see the comment on
+ * the select in the Supabase adapter's `listSimulationCandidates`.
  */
 export interface SimulationCandidate {
   id: string;
