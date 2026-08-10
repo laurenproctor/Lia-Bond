@@ -149,3 +149,15 @@ describe("brand voice", () => {
     expect(can("viewer", "brand_voice.update")).toBe(false);
   });
 });
+
+describe("automation_rule.manage", () => {
+  it("automation_rule.manage matches the RLS write roles exactly", () => {
+    expect(can("owner", "automation_rule.manage")).toBe(true);
+    expect(can("admin", "automation_rule.manage")).toBe(true);
+    expect(can("communications_lead", "automation_rule.manage")).toBe(true);
+    for (const role of ["location_manager", "approver", "analyst", "viewer"] as const)
+      expect(can(role, "automation_rule.manage")).toBe(false);
+  });
+  it("communications_lead can toggle rules", () =>
+    expect(can("communications_lead", "automation_rule.toggle")).toBe(true));
+});
