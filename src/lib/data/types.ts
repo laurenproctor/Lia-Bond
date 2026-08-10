@@ -4,6 +4,7 @@ import type {
   AuditEvent,
   AuditEventFilter,
   AutomationRule,
+  AutomationRuleConfig,
   AutomationRuleFilter,
   BrandVoiceProfile,
   ConnectionHealthUpdate,
@@ -29,6 +30,7 @@ import type {
   MentionAnalysis,
   MentionFilter,
   MentionIngestOutcome,
+  MentionSourceType,
   MentionStatus,
   MonitoringQuery,
   NewsPollRun,
@@ -45,9 +47,12 @@ import type {
   RecordAuditEventInput,
   ResponseDraft,
   ResponseDraftFilter,
+  RiskLevel,
+  Sentiment,
   StartAnalysisRunInput,
   StartSyncRunInput,
   SyncResource,
+  Timestamp,
   UpdateBrandVoiceInput,
   UpdateMonitoringQueryInput,
   UpsertPlatformConnectionInput,
@@ -116,6 +121,28 @@ export interface MentionDetail {
 export interface MentionStatusCounts {
   total: number;
   byStatus: Record<MentionStatus, number>;
+}
+
+/**
+ * The slim read the rule simulator runs against.
+ *
+ * Deliberately not a `Mention`: the simulator evaluates conditions and shows a
+ * sample of matches, not the full record, so this carries only what a
+ * condition can test plus a short `excerpt` for display — never the full
+ * `content` body, an author, or a source URL.
+ */
+export interface SimulationCandidate {
+  id: string;
+  platformConnectionId: string;
+  locationId: string | null;
+  sourceType: MentionSourceType;
+  rating: number | null;
+  status: MentionStatus;
+  sentiment: Sentiment;
+  riskLevel: RiskLevel;
+  relevanceScore: number | null;
+  publishedAt: Timestamp;
+  excerpt: string;
 }
 
 /** Pre-aggregated numbers for the overview and insights screens. */
@@ -548,6 +575,18 @@ export interface MentionRepository {
     status: MentionStatus,
   ): Promise<Mention>;
   latestAnalysis(scope: OrganizationScope, mentionId: string): Promise<MentionAnalysis | null>;
+  /**
+   * A sample the rule simulator can evaluate conditions against.
+   *
+   * `publishedAfter` bounds the sample to a recent window rather than the
+   * whole history — simulating against every mention an organization has ever
+   * received would be slow and would not reflect what the rule would see
+   * going forward. `limit` bounds the response size the same way `list`'s does.
+   */
+  listSimulationCandidates(
+    scope: OrganizationScope,
+    input: { publishedAfter: Timestamp; limit: number },
+  ): Promise<SimulationCandidate[]>;
 }
 
 export interface ResponseDraftRepository {
@@ -620,6 +659,26 @@ export interface EscalationRepository {
 export interface AutomationRuleRepository {
   list(scope: OrganizationScope, filter?: AutomationRuleFilter): Promise<AutomationRule[]>;
   get(scope: OrganizationScope, ruleId: string): Promise<AutomationRule | null>;
+  create(scope: OrganizationScope, input: AutomationRuleConfig): Promise<AutomationRule>;
+  /**
+   * Structural edit. Refused (conflict) when the rule is active or archived, or
+   * when expectedRevision no longer matches. Bumps revision.
+   */
+  update(
+    scope: OrganizationScope,
+    ruleId: string,
+    input: AutomationRuleConfig,
+    expectedRevision: number,
+  ): Promise<AutomationRule>;
+  /** Draft/inactive only. Sets archivedAt; never deletes. */
+  archive(scope: OrganizationScope, ruleId: string): Promise<AutomationRule>;
+  /** Marks the given revision simulated. Refused when the revision is not current. */
+  recordSimulation(
+    scope: OrganizationScope,
+    ruleId: string,
+    revision: number,
+  ): Promise<AutomationRule>;
+  /** Enabling requires activationProblems(rule) to be empty — enforced here as backstop. */
   setEnabled(
     scope: OrganizationScope,
     ruleId: string,

@@ -1,6 +1,7 @@
 import {
   applySourceFields,
   auditEventSchema,
+  automationRuleConfigSchema,
   BRAND_VOICE_AXIS_KEYS,
   createEscalationInputSchema,
   createLocationInputSchema,
@@ -70,6 +71,7 @@ import {
   type OrganizationScope,
   type ProfileSyncState,
 } from "@/lib/data/types";
+import { activationProblems } from "@/lib/rules/readiness";
 import { REFERENCE_NOW } from "@/lib/seed/clock";
 import { seedId } from "@/lib/seed/ids";
 
@@ -101,6 +103,18 @@ function nowIso(): string {
  */
 function realNowIso(): string {
   return new Date().toISOString();
+}
+
+/**
+ * A short, single-line preview of a mention's content.
+ *
+ * Used only by `listSimulationCandidates`: the simulator's sample carries no
+ * full mention body, just enough to recognise the match by eye.
+ */
+function truncateExcerpt(content: string, limit = 140): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit).replace(/\s+\S*$/, "")}…`;
 }
 
 function findOnboarding(organizationId: string): OrganizationOnboarding | null {
@@ -1776,6 +1790,26 @@ export function createDemoDataSource(): LiaDataSource {
             .sort((a, b) => Date.parse(b.analyzedAt) - Date.parse(a.analyzedAt))[0] ?? null
         );
       },
+
+      async listSimulationCandidates(scope, { publishedAfter, limit }) {
+        return mentionsIn(scope)
+          .filter((mention) => mention.publishedAt >= publishedAfter)
+          .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
+          .slice(0, limit)
+          .map((mention) => ({
+            id: mention.id,
+            platformConnectionId: mention.platformConnectionId,
+            locationId: mention.locationId,
+            sourceType: mention.sourceType,
+            rating: mention.rating,
+            status: mention.status,
+            sentiment: mention.sentiment,
+            riskLevel: mention.riskLevel,
+            relevanceScore: mention.relevanceScore,
+            publishedAt: mention.publishedAt,
+            excerpt: truncateExcerpt(mention.content),
+          }));
+      },
     },
 
     responseDrafts: {
@@ -2026,6 +2060,9 @@ export function createDemoDataSource(): LiaDataSource {
 
         return orgRows(store().automationRules, scope)
           .filter((rule) => {
+            // Archived rules are soft-deleted: hidden from the ordinary list
+            // unless the caller explicitly asks to see them (the archive tab).
+            if (!filter.includeArchived && rule.archivedAt !== null) return false;
             if (filter.statuses && !filter.statuses.includes(rule.status)) return false;
             if (search) {
               const hit =
@@ -2038,17 +2075,137 @@ export function createDemoDataSource(): LiaDataSource {
       },
 
       async get(scope, ruleId) {
+        // Unlike `list`, this returns archived rules too — the detail page
+        // renders them read-only rather than 404ing on an old link.
         return orgRows(store().automationRules, scope).find((row) => row.id === ruleId) ?? null;
+      },
+
+      async create(scope, input) {
+        // Reparse at the boundary, house style: a caller reaching the
+        // repository directly bypasses none of the config schema's checks.
+        const value = automationRuleConfigSchema.parse(input);
+
+        const name = value.name.trim().toLowerCase();
+        const duplicate = orgRows(store().automationRules, scope).some(
+          (row) => row.name.trim().toLowerCase() === name,
+        );
+        if (duplicate) {
+          throw conflict("A rule with this name already exists.");
+        }
+
+        const created: AutomationRule = {
+          id: crypto.randomUUID(),
+          organizationId: scope.organizationId,
+          name: value.name,
+          description: value.description,
+          status: "draft",
+          priority: value.priority,
+          conditions: value.conditions,
+          actions: value.actions,
+          lastRunAt: null,
+          revision: 1,
+          simulatedRevision: null,
+          lastSimulatedAt: null,
+          archivedAt: null,
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        };
+
+        store().automationRules.push(created);
+        return created;
+      },
+
+      async update(scope, ruleId, input, expectedRevision) {
+        const rule = orgRows(store().automationRules, scope).find((row) => row.id === ruleId);
+        if (!rule) throw notFound("Automation rule");
+
+        // Structural edits are refused outright on an active rule (disable it
+        // first) or an archived one (it is soft-deleted, not editable).
+        if (rule.status === "active") {
+          throw conflict("Disable this rule to edit it.");
+        }
+        if (rule.archivedAt !== null) {
+          throw conflict("This rule is archived. Restore it before editing it.");
+        }
+
+        // Optimistic concurrency: the caller names the revision it read, so a
+        // save against a copy someone else has since changed fails loudly
+        // instead of silently clobbering their edit.
+        if (expectedRevision !== rule.revision) {
+          throw conflict(
+            "Someone else changed this rule since you loaded it. Reload to see the latest version.",
+          );
+        }
+
+        const value = automationRuleConfigSchema.parse(input);
+
+        // simulatedRevision is deliberately left alone: staleness is derived
+        // by comparing it against the new `revision`, not reset here.
+        const updated: AutomationRule = {
+          ...rule,
+          name: value.name,
+          description: value.description,
+          priority: value.priority,
+          conditions: value.conditions,
+          actions: value.actions,
+          revision: rule.revision + 1,
+          updatedAt: nowIso(),
+        };
+        return replaceRow(store().automationRules, updated);
+      },
+
+      async archive(scope, ruleId) {
+        const rule = orgRows(store().automationRules, scope).find((row) => row.id === ruleId);
+        if (!rule) throw notFound("Automation rule");
+
+        // Idempotent: archiving an already-archived rule returns it as-is
+        // rather than erroring on a double-submitted form.
+        if (rule.archivedAt !== null) return rule;
+
+        if (rule.status === "active") {
+          throw conflict("Disable this rule before archiving it.");
+        }
+
+        return replaceRow(store().automationRules, {
+          ...rule,
+          archivedAt: nowIso(),
+          updatedAt: nowIso(),
+        });
+      },
+
+      async recordSimulation(scope, ruleId, revision) {
+        const rule = orgRows(store().automationRules, scope).find((row) => row.id === ruleId);
+        if (!rule) throw notFound("Automation rule");
+
+        if (rule.revision !== revision) {
+          throw conflict("This rule changed since it was simulated. Simulate it again.");
+        }
+
+        return replaceRow(store().automationRules, {
+          ...rule,
+          simulatedRevision: revision,
+          lastSimulatedAt: nowIso(),
+          updatedAt: nowIso(),
+        });
       },
 
       async setEnabled(scope, ruleId, enabled) {
         const rule = orgRows(store().automationRules, scope).find((row) => row.id === ruleId);
         if (!rule) throw notFound("Automation rule");
 
-        // A draft rule has never been reviewed; enabling it straight from the
-        // list would put untested automation into production.
-        if (enabled && rule.status === "draft") {
-          throw conflict("Finish and simulate this draft rule before enabling it.");
+        // Enabling requires the rule to be genuinely ready — every condition
+        // `activationProblems` checks, including a fresh simulation and
+        // actions that are actually executable — enforced here as a backstop
+        // even though the rule builder and the list toggle both call the same
+        // check before ever getting this far.
+        if (enabled) {
+          const problems = activationProblems(rule);
+          if (problems.length > 0) {
+            throw conflict(
+              "This rule can't be enabled yet: " +
+                problems.map((problem) => problem.message).join(" "),
+            );
+          }
         }
 
         const updated: AutomationRule = {

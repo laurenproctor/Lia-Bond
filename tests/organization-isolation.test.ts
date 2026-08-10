@@ -120,6 +120,33 @@ describe("mutations refuse foreign ids", () => {
     ).rejects.toThrow(/not found/i);
   });
 
+  it("will not update, archive, or record a simulation on another organization's rule", async () => {
+    const [theirRule] = await data.automationRules.list(harbor.owner());
+
+    await expect(
+      data.automationRules.update(
+        ushg.admin(),
+        theirRule!.id,
+        {
+          name: "Hijacked",
+          description: null,
+          priority: 100,
+          conditions: [],
+          actions: [],
+        },
+        theirRule!.revision,
+      ),
+    ).rejects.toThrow(/not found/i);
+
+    await expect(
+      data.automationRules.archive(ushg.admin(), theirRule!.id),
+    ).rejects.toThrow(/not found/i);
+
+    await expect(
+      data.automationRules.recordSimulation(ushg.admin(), theirRule!.id, theirRule!.revision),
+    ).rejects.toThrow(/not found/i);
+  });
+
   it("refuses an assignee who is not a member of the organization", async () => {
     const [escalation] = await data.escalations.list(ushg.admin());
 
