@@ -74,12 +74,27 @@ export type RuleCondition = z.infer<typeof ruleConditionSchema>;
  * lives in `isAutoPublishSafe` below and is enforced wherever rules execute.
  */
 export const ruleActionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("generate_draft"), voiceProfile: z.string().max(80).nullable() }),
+  z.object({
+    type: z.literal("generate_draft"),
+    voiceProfile: z.string().max(80).nullable(),
+  }),
   z.object({ type: z.literal("auto_publish") }),
-  z.object({ type: z.literal("require_approval"), approverUserId: uuidSchema.nullable() }),
-  z.object({ type: z.literal("assign"), assigneeUserId: uuidSchema.nullable() }),
-  z.object({ type: z.literal("escalate"), assigneeUserId: uuidSchema.nullable() }),
-  z.object({ type: z.literal("notify"), channel: z.enum(["email", "in_app", "both"]) }),
+  z.object({
+    type: z.literal("require_approval"),
+    approverUserId: uuidSchema.nullable(),
+  }),
+  z.object({
+    type: z.literal("assign"),
+    assigneeUserId: uuidSchema.nullable(),
+  }),
+  z.object({
+    type: z.literal("escalate"),
+    assigneeUserId: uuidSchema.nullable(),
+  }),
+  z.object({
+    type: z.literal("notify"),
+    channel: z.enum(["email", "in_app", "both"]),
+  }),
   z.object({ type: z.literal("tag"), label: z.string().min(1).max(80) }),
   z.object({ type: z.literal("set_status"), status: mentionStatusSchema }),
 ]);
@@ -169,40 +184,114 @@ export const updateAutomationRuleInputSchema = z.object({
   config: automationRuleConfigSchema,
 });
 
-export type UpdateAutomationRuleInput = z.infer<typeof updateAutomationRuleInputSchema>;
+export type UpdateAutomationRuleInput = z.infer<
+  typeof updateAutomationRuleInputSchema
+>;
 
-export const duplicateAutomationRuleInputSchema = z.object({ automationRuleId: uuidSchema });
+export const duplicateAutomationRuleInputSchema = z.object({
+  automationRuleId: uuidSchema,
+});
 
-export type DuplicateAutomationRuleInput = z.infer<typeof duplicateAutomationRuleInputSchema>;
+export type DuplicateAutomationRuleInput = z.infer<
+  typeof duplicateAutomationRuleInputSchema
+>;
 
-export const archiveAutomationRuleInputSchema = z.object({ automationRuleId: uuidSchema });
+export const archiveAutomationRuleInputSchema = z.object({
+  automationRuleId: uuidSchema,
+});
 
-export type ArchiveAutomationRuleInput = z.infer<typeof archiveAutomationRuleInputSchema>;
+export type ArchiveAutomationRuleInput = z.infer<
+  typeof archiveAutomationRuleInputSchema
+>;
 
-export const simulateAutomationRuleInputSchema = z.object({ automationRuleId: uuidSchema });
+export const simulateAutomationRuleInputSchema = z.object({
+  automationRuleId: uuidSchema,
+});
 
-export type SimulateAutomationRuleInput = z.infer<typeof simulateAutomationRuleInputSchema>;
+export type SimulateAutomationRuleInput = z.infer<
+  typeof simulateAutomationRuleInputSchema
+>;
 
 /**
- * A rule may only publish without a human when nothing in its conditions
- * admits risky content.
+ * Review source types routine enough — high review volume, low ambiguity —
+ * to be candidates for an unattended reply. Reddit, news, and social comment
+ * threads are deliberately excluded even though they're reviewable sources:
+ * they need judgement a rule condition can't encode.
+ */
+export const ROUTINE_REVIEW_SOURCES = [
+  "google_review",
+  "yelp_review",
+  "trustpilot_review",
+  "tripadvisor_review",
+] as const;
+
+/**
+ * A rule may only publish without a human when every leg of the guardrail
+ * holds, not just "risk is capped somewhere."
  *
- * `docs/product-spec.md`: positive, low-risk, routine review responses may
- * become auto-publishable; high-risk content must always be escalated. This is
- * the single place that judgement is encoded.
+ * `docs/product-spec.md`: "Positive, low-risk, routine review responses may
+ * become auto-publishable... High-risk content must always be escalated."
+ * This function is the single place that judgement is encoded for rule
+ * *authoring* — a rule with `auto_publish` passes only if all of:
+ *
+ * 1. Some condition is `sentiment is positive`.
+ * 2. Some risk condition is restricted to low only — `risk_level is low` or
+ *    `at_most low`. `at_most medium` does not qualify: it still admits
+ *    medium-risk content through, which is the bug this replaces.
+ * 3. Some condition is `source_type is <routine review source>`
+ *    (`ROUTINE_REVIEW_SOURCES` above).
+ * 4. The rule has no `escalate` and no `require_approval` action — those
+ *    exist precisely to route a mention to a person, which auto-publish
+ *    would short-circuit.
+ *
+ * Rules without an `auto_publish` action always pass; this function has
+ * nothing to say about them.
+ *
+ * This is necessary but not sufficient for a rule to actually auto-publish
+ * at runtime: it only checks the conditions/actions an author can write.
+ * Whether the action is *executable at all* — a connected platform, a
+ * publishing capability that doesn't exist yet — lives in the capability
+ * registry (`src/lib/rules/capabilities.ts`) and is a Phase 2 concern.
  */
 export function isAutoPublishSafe(rule: {
   conditions: RuleCondition[];
   actions: RuleAction[];
 }): boolean {
-  const publishes = rule.actions.some((action) => action.type === "auto_publish");
+  const publishes = rule.actions.some(
+    (action) => action.type === "auto_publish",
+  );
   if (!publishes) return true;
 
-  return rule.conditions.some(
+  const hasPositiveSentiment = rule.conditions.some(
+    (condition) =>
+      condition.field === "sentiment" &&
+      condition.operator === "is" &&
+      condition.value === "positive",
+  );
+
+  const hasLowOnlyRisk = rule.conditions.some(
     (condition) =>
       condition.field === "risk_level" &&
-      ((condition.operator === "is" && condition.value === "low") ||
-        (condition.operator === "at_most" &&
-          (condition.value === "low" || condition.value === "medium"))),
+      condition.value === "low" &&
+      (condition.operator === "is" || condition.operator === "at_most"),
+  );
+
+  const hasRoutineReviewSource = rule.conditions.some(
+    (condition) =>
+      condition.field === "source_type" &&
+      condition.operator === "is" &&
+      (ROUTINE_REVIEW_SOURCES as readonly string[]).includes(condition.value),
+  );
+
+  const hasConflictingAction = rule.actions.some(
+    (action) =>
+      action.type === "escalate" || action.type === "require_approval",
+  );
+
+  return (
+    hasPositiveSentiment &&
+    hasLowOnlyRisk &&
+    hasRoutineReviewSource &&
+    !hasConflictingAction
   );
 }
