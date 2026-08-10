@@ -56,6 +56,11 @@ const RISK_ANY: RuleCondition = {
   operator: "at_least",
   value: "low",
 };
+const SOURCE_REDDIT_POST: RuleCondition = {
+  field: "source_type",
+  operator: "is",
+  value: "reddit_post",
+};
 
 const ESCALATE: RuleAction = { type: "escalate", assigneeUserId: null };
 const NOTIFY_EMAIL: RuleAction = { type: "notify", channel: "email" };
@@ -74,6 +79,21 @@ async function createRule(
   actions: RuleAction[] = [ESCALATE],
 ): Promise<AutomationRule> {
   return data.automationRules.create(scope, config(name, conditions, actions));
+}
+
+/** Count `items` into a `Record<string, number>` by `key`, the same shape breakdowns take. */
+function breakdownBy<T>(items: T[], key: (item: T) => string): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const bucket = key(item);
+    counts[bucket] = (counts[bucket] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/** Sum of every bucket in a breakdown record. */
+function sumValues(record: Record<string, number>): number {
+  return Object.values(record).reduce((total, count) => total + count, 0);
 }
 
 describe("simulateRule", () => {
@@ -213,6 +233,110 @@ describe("simulateRule", () => {
     expect(result.evaluated).toBeLessThan(SIMULATION_CANDIDATE_LIMIT);
     expect(result.truncated).toBe(false);
     expect(result.matchRate).toBeCloseTo(result.matched / result.evaluated);
+  });
+
+  it("breakdowns (sourceType, sentiment, riskLevel) match hand-computed counts from the seed, over matched candidates only", async () => {
+    const now = new Date(REFERENCE_NOW);
+    const rule = await createRule("Negative Google reviews breakdown", [
+      SENTIMENT_NEGATIVE,
+      SOURCE_GOOGLE,
+    ]);
+
+    const matchedMentions = SEED_DATASET.mentions.filter(
+      (mention) =>
+        mention.organizationId === ORG_USHG &&
+        mention.sentiment === "negative" &&
+        mention.sourceType === "google_review" &&
+        withinWindow(mention.publishedAt, now),
+    );
+    expect(matchedMentions.length).toBeGreaterThan(0); // sanity: exercises a non-empty breakdown
+
+    const result = await simulateRule({ dataSource: data, scope }, rule, now);
+
+    expect(result.breakdowns.sourceType).toEqual(
+      breakdownBy(matchedMentions, (mention) => mention.sourceType),
+    );
+    expect(result.breakdowns.sentiment).toEqual(
+      breakdownBy(matchedMentions, (mention) => mention.sentiment),
+    );
+    expect(result.breakdowns.riskLevel).toEqual(
+      breakdownBy(matchedMentions, (mention) => mention.riskLevel),
+    );
+  });
+
+  it("breakdown values sum to matched, not evaluated, for a rule where matched < evaluated", async () => {
+    const now = new Date(REFERENCE_NOW);
+    const rule = await createRule("Negative Google reviews sum check", [
+      SENTIMENT_NEGATIVE,
+      SOURCE_GOOGLE,
+    ]);
+
+    const result = await simulateRule({ dataSource: data, scope }, rule, now);
+
+    // Precondition for this to be a meaningful check: the rule is selective,
+    // so matched is strictly less than evaluated (an "aggregate over evaluated"
+    // bug and an "aggregate over matched" implementation would disagree here).
+    expect(result.matched).toBeLessThan(result.evaluated);
+
+    expect(sumValues(result.breakdowns.sourceType)).toBe(result.matched);
+    expect(sumValues(result.breakdowns.locationId)).toBe(result.matched);
+    expect(sumValues(result.breakdowns.sentiment)).toBe(result.matched);
+    expect(sumValues(result.breakdowns.riskLevel)).toBe(result.matched);
+    expect(sumValues(result.breakdowns.rating)).toBe(result.matched);
+  });
+
+  it('locationId breakdown buckets a null-location matched candidate under the literal key "none"', async () => {
+    const now = new Date(REFERENCE_NOW);
+    // The seed's reddit_post fixtures include a brand-wide post ("Maison
+    // Laurent — worth the hype?") with no location, alongside location-specific
+    // ones — exactly the mix this bucket exists to distinguish.
+    const rule = await createRule("Reddit posts for location bucketing", [SOURCE_REDDIT_POST]);
+
+    const matchedMentions = SEED_DATASET.mentions.filter(
+      (mention) =>
+        mention.organizationId === ORG_USHG &&
+        mention.sourceType === "reddit_post" &&
+        withinWindow(mention.publishedAt, now),
+    );
+    expect(matchedMentions.some((mention) => mention.locationId === null)).toBe(true);
+
+    const expectedLocationBreakdown = breakdownBy(
+      matchedMentions,
+      (mention) => mention.locationId ?? "none",
+    );
+
+    const result = await simulateRule({ dataSource: data, scope }, rule, now);
+
+    expect(result.breakdowns.locationId).toEqual(expectedLocationBreakdown);
+    expect(result.breakdowns.locationId.none).toBe(
+      matchedMentions.filter((mention) => mention.locationId === null).length,
+    );
+  });
+
+  it('rating breakdown buckets integer ratings as their string and null ratings as "unrated"', async () => {
+    // The seed corpus carries only whole-star ratings (1–5) or none at all —
+    // no fractional rating exists to exercise Math.round's rounding behavior,
+    // and every rated value already falls inside 1..5 so the clamp never
+    // engages either. This test therefore covers the two branches the seed
+    // *can* exercise (integer pass-through, null → "unrated"); rounding and
+    // clamping at the edges are covered by the production code's own
+    // documented contract, not by seed data, since none exists to drive them.
+    const now = new Date(REFERENCE_NOW);
+    const rule = await createRule("Everything for rating buckets", [RISK_ANY]);
+
+    const matchedMentions = SEED_DATASET.mentions.filter(
+      (mention) => mention.organizationId === ORG_USHG && withinWindow(mention.publishedAt, now),
+    );
+    const expectedRatingBreakdown = breakdownBy(matchedMentions, (mention) =>
+      mention.rating === null ? "unrated" : String(mention.rating),
+    );
+
+    const result = await simulateRule({ dataSource: data, scope }, rule, now);
+
+    expect(result.breakdowns.rating).toEqual(expectedRatingBreakdown);
+    // Sanity: the seed corpus exercises both the rated and unrated branches.
+    expect(result.breakdowns.rating.unrated).toBeGreaterThan(0);
+    expect(Object.keys(result.breakdowns.rating).some((key) => key !== "unrated")).toBe(true);
   });
 
   // No dedicated "no AI" behavioral test: the demo data source (used by every
