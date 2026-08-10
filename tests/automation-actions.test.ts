@@ -477,4 +477,31 @@ describe("setAutomationRuleEnabledAction", () => {
     const enabledEvents = events.filter((event) => event.eventType === "automation_rule.enabled");
     expect(enabledEvents.length).toBe(0);
   });
+
+  it("still returns the specific refusal message when the audit write itself fails", async () => {
+    const scope = ushg.admin();
+    mockAuthorizeAs(scope);
+
+    const mediaWatch = await findRuleByName(scope, "Flag high-authority media coverage");
+
+    const original = dataSource.auditEvents.record.bind(dataSource.auditEvents);
+    dataSource.auditEvents.record = () => {
+      throw new Error("audit down");
+    };
+
+    try {
+      const result = await setAutomationRuleEnabledAction({
+        automationRuleId: mediaWatch.id,
+        enabled: true,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatch(/can't be enabled yet/i);
+      expect(result.error).toMatch(/notification/i);
+      expect(result.error).not.toMatch(/something went wrong/i);
+    } finally {
+      dataSource.auditEvents.record = original;
+    }
+  });
 });

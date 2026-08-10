@@ -328,17 +328,30 @@ export async function setAutomationRuleEnabledAction(
     if (enabled) {
       const problems = activationProblems(existing);
       if (problems.length > 0) {
-        await recordAuditEvent(context, {
-          eventType: "automation_rule.activation_refused",
-          entityType: "automation_rule",
-          entityId: automationRuleId,
-          previousState: null,
-          newState: null,
-          metadata: {
-            ruleName: existing.name,
-            reasons: problems.map((problem) => problem.code),
-          },
-        });
+        // Best-effort only: this write changes no state, it just records that
+        // a refusal happened. The reason a person needs to see — which
+        // conditions to fix — must reach them even if the audit layer itself
+        // is unavailable, so a failure here is logged and swallowed rather
+        // than allowed to replace the specific message below with
+        // runAction's generic fallback.
+        try {
+          await recordAuditEvent(context, {
+            eventType: "automation_rule.activation_refused",
+            entityType: "automation_rule",
+            entityId: automationRuleId,
+            previousState: null,
+            newState: null,
+            metadata: {
+              ruleName: existing.name,
+              reasons: problems.map((problem) => problem.code),
+            },
+          });
+        } catch (error) {
+          console.error(
+            "[action:automation_rule.toggle] failed to record activation refusal:",
+            error,
+          );
+        }
         throw conflict(
           "This rule can't be enabled yet: " +
             problems.map((problem) => problem.message).join(" "),
