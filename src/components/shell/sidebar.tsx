@@ -34,7 +34,7 @@ export function Sidebar({
   badgeCounts,
   demoMode,
 }: SidebarProps) {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
