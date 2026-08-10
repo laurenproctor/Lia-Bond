@@ -46,13 +46,14 @@ export function RuleToggle({ rule, disabled = false }: RuleToggleProps) {
   }
 
   return (
-    <span className="inline-flex flex-col items-end gap-1">
+    <span className="relative inline-flex flex-col items-end gap-1">
       <button
         type="button"
         role="switch"
         aria-checked={enabled}
         aria-label={`${enabled ? "Disable" : "Enable"} ${rule.name}`}
         disabled={blocked || pending}
+        title={!disabled && rule.status === "draft" ? "Open the rule to simulate and enable it" : undefined}
         onClick={toggle}
         className={cn(
           "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",

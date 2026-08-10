@@ -1,4 +1,5 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from "react";
+import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -39,6 +40,29 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children?: ReactNode;
 }
 
+/**
+ * Builds the class list shared by `Button` and `ButtonLink` so both render
+ * pixel-identical controls — one a `<button>`, the other a real `<a>` (via
+ * `next/link`) for cases that need to be a navigable link rather than a
+ * client-side handler (e.g. an action gated behind a permission that still
+ * needs to look like the same button elsewhere in the UI).
+ */
+export function buttonClassName(
+  variant: ButtonVariant = "secondary",
+  size: ButtonSize = "md",
+  iconOnly = false,
+  className?: string,
+) {
+  return cn(
+    "inline-flex shrink-0 items-center justify-center font-medium whitespace-nowrap transition-colors",
+    "disabled:pointer-events-none disabled:opacity-45",
+    VARIANT_CLASSES[variant],
+    SIZE_CLASSES[size],
+    iconOnly && (size === "lg" ? "w-11 px-0" : size === "md" ? "w-9 px-0" : "w-8 px-0"),
+    className,
+  );
+}
+
 export function Button({
   variant = "secondary",
   size = "md",
@@ -53,14 +77,7 @@ export function Button({
   return (
     <button
       type={type}
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center font-medium whitespace-nowrap transition-colors",
-        "disabled:pointer-events-none disabled:opacity-45",
-        VARIANT_CLASSES[variant],
-        SIZE_CLASSES[size],
-        iconOnly && (size === "lg" ? "w-11 px-0" : size === "md" ? "w-9 px-0" : "w-8 px-0"),
-        className,
-      )}
+      className={buttonClassName(variant, size, iconOnly, className)}
       {...props}
     >
       {Icon && iconPosition === "leading" ? (
@@ -71,5 +88,46 @@ export function Button({
         <Icon className="size-4 shrink-0" aria-hidden />
       ) : null}
     </button>
+  );
+}
+
+export interface ButtonLinkProps
+  extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> {
+  href: string;
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  icon?: LucideIcon;
+  iconPosition?: "leading" | "trailing";
+  children?: ReactNode;
+  className?: string;
+  "aria-label"?: string;
+}
+
+/**
+ * A `Button` that is actually a link. Same classes as `Button`, but renders a
+ * real anchor (via `next/link`) so it's a proper navigation — middle-click,
+ * "open in new tab", and screen-reader link semantics all work as expected,
+ * which a `<button onClick={() => router.push(...)}>` would not give you.
+ */
+export function ButtonLink({
+  href,
+  variant = "secondary",
+  size = "md",
+  icon: Icon,
+  iconPosition = "leading",
+  className,
+  children,
+  ...props
+}: ButtonLinkProps) {
+  return (
+    <Link href={href} className={buttonClassName(variant, size, false, className)} {...props}>
+      {Icon && iconPosition === "leading" ? (
+        <Icon className="size-4 shrink-0" aria-hidden />
+      ) : null}
+      {children}
+      {Icon && iconPosition === "trailing" ? (
+        <Icon className="size-4 shrink-0" aria-hidden />
+      ) : null}
+    </Link>
   );
 }

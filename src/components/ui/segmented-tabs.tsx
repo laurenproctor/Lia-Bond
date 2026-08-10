@@ -14,6 +14,13 @@ export interface SegmentedTab {
 export interface SegmentedTabsProps {
   tabs: SegmentedTab[];
   defaultTabId?: string;
+  /**
+   * Controls the active tab from outside (e.g. a URL search param). When
+   * provided, this wins over internal state — the internal `useState` still
+   * updates on click, but harmlessly, since the controlled value takes over
+   * on the next render.
+   */
+  activeTabId?: string;
   onChange?: (tabId: string) => void;
   /** `pills` for source tabs, `chips` for the lighter status row beneath. */
   variant?: "pills" | "chips";
@@ -30,16 +37,18 @@ export interface SegmentedTabsProps {
 export function SegmentedTabs({
   tabs,
   defaultTabId,
+  activeTabId,
   onChange,
   variant = "pills",
   label,
   className,
 }: SegmentedTabsProps) {
   const baseId = useId();
-  const [activeId, setActiveId] = useState(defaultTabId ?? tabs[0]?.id ?? "");
+  const [internalActiveId, setInternalActiveId] = useState(defaultTabId ?? tabs[0]?.id ?? "");
+  const activeId = activeTabId ?? internalActiveId;
 
   function select(id: string) {
-    setActiveId(id);
+    setInternalActiveId(id);
     onChange?.(id);
   }
 
