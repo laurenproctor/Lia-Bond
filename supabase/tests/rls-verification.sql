@@ -3,7 +3,7 @@
 -- Repeatable manual check that the policies in
 -- 20260801000200_row_level_security.sql actually isolate tenants.
 --
--- Execution status: **all 34 checks pass** against a local stack
+-- Execution status: **all 37 checks pass** against a local stack
 -- (`supabase start`, then `supabase db reset`), as of the onboarding workflow.
 --
 -- It did not, until section 8's delete check was corrected. That check expected
@@ -56,7 +56,16 @@ select
     where o.slug = 'union-square-hospitality'
       and m.role = 'analyst'
       and m.status = 'active'
-    limit 1) as ushg_analyst;
+    limit 1) as ushg_analyst,
+  -- Section 10 below uses this as the role `automation_rules_insert`/
+  -- `automation_rules_update` actually admit (owner/admin/communications_lead).
+  (select m.user_id
+     from public.memberships m
+     join public.organizations o on o.id = m.organization_id
+    where o.slug = 'union-square-hospitality'
+      and m.role = 'communications_lead'
+      and m.status = 'active'
+    limit 1) as ushg_comms_lead;
 
 -- Impersonate an authenticated user. Supabase derives auth.uid() from the
 -- request JWT; setting the claim here reproduces that for a psql session.
@@ -554,6 +563,73 @@ begin
   perform pg_temp.check(
     raised,
     'nobody can delete an onboarding row — its absence reads as "completed", so a delete would look like a setup that never happened'
+  );
+
+  reset role;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 10. Automation rule writes are gated to owner/admin/communications_lead
+--     (rule authoring). `automation_rules_insert`/`automation_rules_update`
+--     in 20260801000200_row_level_security.sql admit that role set; there is
+--     no DELETE policy on this table at all, so — per the header note above —
+--     a cleanup DELETE here would silently match zero rows rather than prove
+--     anything about permissions. The row this section inserts is left in
+--     place and undone by the final `rollback;` below, the same way section
+--     8's admin-allowed insert is never explicitly deleted either.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  f record;
+  inserted_id uuid;
+  failed boolean := false;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.ushg_comms_lead);
+
+  begin
+    insert into public.automation_rules (organization_id, name, status)
+    values (f.ushg_id, 'rls fixture - comms lead allowed', 'draft')
+    returning id into inserted_id;
+  exception when insufficient_privilege then
+    failed := true;
+  end;
+  perform pg_temp.check(
+    not failed and inserted_id is not null,
+    'a communications lead (in automation_rules_insert''s role set) can insert an automation rule'
+  );
+
+  perform pg_temp.check(
+    exists (
+      select 1 from public.automation_rules
+       where id = inserted_id and organization_id = f.ushg_id
+    ),
+    'the automation rule a communications lead inserted is visible in their own organization'
+  );
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.ushg_analyst);
+
+  begin
+    insert into public.automation_rules (organization_id, name, status)
+    values (f.ushg_id, 'rls fixture - analyst denied', 'draft');
+  exception when insufficient_privilege or check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'an analyst cannot insert an automation rule (member of the org, but not owner/admin/communications_lead)'
   );
 
   reset role;

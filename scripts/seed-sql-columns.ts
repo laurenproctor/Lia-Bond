@@ -111,7 +111,8 @@ export const SEED_TABLE_COLUMNS = {
   ],
   automation_rules: [
     "id", "organizationId", "name", "description", "status", "priority",
-    "conditions", "actions", "lastRunAt", "createdAt", "updatedAt",
+    "conditions", "actions", "lastRunAt", "revision", "lastSimulatedAt",
+    "simulatedRevision", "archivedAt", "createdAt", "updatedAt",
   ],
   // The five axes are one nested `axes` object on the domain type and five
   // flat columns in the migration, so `generate-seed-sql.ts` flattens the row

@@ -49,6 +49,22 @@ describe("diff", () => {
   });
 });
 
+describe("diff with structured values", () => {
+  it("serialises arrays and objects as JSON values, not strings", () => {
+    const before = { conditions: [{ field: "risk_level", operator: "is", value: "low" }], priority: 10 };
+    const after  = { conditions: [{ field: "risk_level", operator: "is", value: "high" }], priority: 10 };
+    const { previousState, newState } = diff(before, after, ["conditions", "priority"]);
+    expect(previousState.conditions).toEqual([{ field: "risk_level", operator: "is", value: "low" }]);
+    expect(newState.conditions).toEqual([{ field: "risk_level", operator: "is", value: "high" }]);
+    expect(previousState.priority).toBeUndefined();   // deep-equal fields stay out of the diff
+  });
+  it("treats deep-equal arrays as unchanged", () => {
+    const value = [{ type: "escalate", assigneeUserId: null }];
+    const { previousState } = diff({ actions: value }, { actions: structuredClone(value) }, ["actions"]);
+    expect(previousState).toEqual({});
+  });
+});
+
 describe("recordAuditEvent", () => {
   it("attributes the event to the acting user and organization", async () => {
     const scope = ushg.admin();
