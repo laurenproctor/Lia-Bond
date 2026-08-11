@@ -68,6 +68,26 @@ export const ruleConditionSchema = z.discriminatedUnion("field", [
 export type RuleCondition = z.infer<typeof ruleConditionSchema>;
 
 /**
+ * The rule-action vocabulary.
+ *
+ * Kept in lockstep with `ruleActionSchema`'s discriminated-union `type`
+ * literals below — this list exists so execution code (which needs the plain
+ * literal set, not a union schema) has one source of truth to import instead
+ * of re-deriving it.
+ */
+export const RULE_ACTION_TYPES = [
+  "generate_draft",
+  "auto_publish",
+  "require_approval",
+  "assign",
+  "escalate",
+  "notify",
+  "tag",
+  "set_status",
+] as const;
+export type RuleActionType = (typeof RULE_ACTION_TYPES)[number];
+
+/**
  * Rule actions.
  *
  * `auto_publish` exists but is only reachable for low-risk content — the guard
