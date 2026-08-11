@@ -61,13 +61,13 @@ function buildColumns(canToggle: boolean): DataTableColumn<AutomationRule>[] {
       },
     },
     {
-      id: "lastRun",
-      header: "Last run",
+      id: "lastApplied",
+      header: "Last applied",
       align: "right",
       secondary: true,
       cell: (rule) =>
-        rule.lastRunAt ? (
-          <span className="text-gray-500">{formatRelativeShort(rule.lastRunAt)}</span>
+        rule.lastAppliedAt ? (
+          <span className="text-gray-500">{formatRelativeShort(rule.lastAppliedAt)}</span>
         ) : (
           <span className="text-gray-400">Never</span>
         ),

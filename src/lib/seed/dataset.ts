@@ -1805,8 +1805,9 @@ const escalations: Escalation[] = [
 // rule: the three active rules below carry only executable actions
 // (`escalate`) and a fresh simulation so `activationProblems` is empty for
 // them — they are truthfully "armed" — while every draft is left never
-// simulated, which is also true. `lastRunAt` is always null: nothing in
-// this seed has ever actually run.
+// simulated, which is also true. `lastEvaluatedAt`, `lastMatchedAt`, and
+// `lastAppliedAt` are always null: nothing in this seed has ever actually
+// run.
 function rule(
   label: string,
   fields: Omit<
@@ -1856,7 +1857,9 @@ const automationRules: AutomationRule[] = [
       { type: "generate_draft", voiceProfile: null },
       { type: "auto_publish" },
     ],
-    lastRunAt: null,
+    lastEvaluatedAt: null,
+    lastMatchedAt: null,
+    lastAppliedAt: null,
   }),
   rule("escalate-high-risk", {
     name: "Escalate high-risk mentions",
@@ -1866,7 +1869,9 @@ const automationRules: AutomationRule[] = [
     priority: 1,
     conditions: [{ field: "risk_level", operator: "at_least", value: "high" }],
     actions: [{ type: "escalate", assigneeUserId: null }],
-    lastRunAt: null,
+    lastEvaluatedAt: null,
+    lastMatchedAt: null,
+    lastAppliedAt: null,
     revision: 1,
     simulatedRevision: 1,
     lastSimulatedAt: daysAgo(2),
@@ -1882,7 +1887,9 @@ const automationRules: AutomationRule[] = [
       { type: "generate_draft", voiceProfile: null },
       { type: "require_approval", approverUserId: null },
     ],
-    lastRunAt: null,
+    lastEvaluatedAt: null,
+    lastMatchedAt: null,
+    lastAppliedAt: null,
   }),
   rule("food-safety-hold", {
     name: "Hold all food safety mentions",
@@ -1892,7 +1899,9 @@ const automationRules: AutomationRule[] = [
     priority: 0,
     conditions: [{ field: "risk_level", operator: "is", value: "critical" }],
     actions: [{ type: "escalate", assigneeUserId: null }],
-    lastRunAt: null,
+    lastEvaluatedAt: null,
+    lastMatchedAt: null,
+    lastAppliedAt: null,
     revision: 1,
     simulatedRevision: 1,
     lastSimulatedAt: daysAgo(2),
@@ -1911,7 +1920,9 @@ const automationRules: AutomationRule[] = [
       { type: "assign", assigneeUserId: null },
       { type: "notify", channel: "email" },
     ],
-    lastRunAt: null,
+    lastEvaluatedAt: null,
+    lastMatchedAt: null,
+    lastAppliedAt: null,
   }),
   rule("media-watch", {
     name: "Flag high-authority media coverage",
@@ -1924,7 +1935,9 @@ const automationRules: AutomationRule[] = [
       { field: "relevance_score", operator: "greater_than", value: 0.7 },
     ],
     actions: [{ type: "notify", channel: "in_app" }],
-    lastRunAt: null,
+    lastEvaluatedAt: null,
+    lastMatchedAt: null,
+    lastAppliedAt: null,
   }),
   rule("dismiss-irrelevant", {
     name: "Dismiss low-relevance chatter",
@@ -1933,7 +1946,9 @@ const automationRules: AutomationRule[] = [
     priority: 90,
     conditions: [{ field: "relevance_score", operator: "less_than", value: 0.3 }],
     actions: [{ type: "set_status", status: "dismissed" }],
-    lastRunAt: null,
+    lastEvaluatedAt: null,
+    lastMatchedAt: null,
+    lastAppliedAt: null,
   }),
   rule(
     "harbor-escalate",
@@ -1944,7 +1959,9 @@ const automationRules: AutomationRule[] = [
       priority: 0,
       conditions: [{ field: "risk_level", operator: "is", value: "critical" }],
       actions: [{ type: "escalate", assigneeUserId: null }],
-      lastRunAt: null,
+      lastEvaluatedAt: null,
+      lastMatchedAt: null,
+      lastAppliedAt: null,
       revision: 1,
       simulatedRevision: 1,
       lastSimulatedAt: daysAgo(2),
