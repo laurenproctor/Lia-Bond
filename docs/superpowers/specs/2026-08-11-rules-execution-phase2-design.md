@@ -1,112 +1,118 @@
-# Rules execution engine (Phase 2) — revised implementation plan
+# Rules execution engine (Phase 2) — final implementation plan
 
-Plan, v2. Written 2026-08-11; revised the same day after design review.
-Supersedes v1 (git history holds it). Not implemented; no code changes yet.
+Plan, v3 (final for approval). Written 2026-08-11; revised twice the same
+day after design review. Supersedes v2 (git history holds v1 and v2). Not
+implemented; no code changes yet.
 
-Scope holds at `set_status` and `escalate`. Everything else in v1 that
-promised semantics for draft generation, approval, notification, assignment,
-or publishing is demoted in this revision to "future design considerations"
-(Section 9).
+Scope holds at `set_status` and `escalate`. Draft generation, approval,
+notification, assignment, tagging, and publishing remain future design
+considerations (Section 9 of v2 stands and is restated briefly in §12).
 
-Terminology discipline for this document: the design is described as
-idempotent or atomic **only where a specific mechanism provides it and a
-listed test demonstrates it**. Nothing here is called production-safe;
-Section 2 defines what must be true and verified before `apply` mode is
-enabled anywhere.
+Property claims in this document follow one rule: **atomic, idempotent, and
+safe are used only about a specific mechanism, and only where a listed test
+demonstrates the property under crashes, retries, overlapping sweeps,
+authorization-bypass attempts, or database failures.** Phase 2 as a whole is
+not called production-safe; §3's gates define what must be true, and
+verified, at each release stage.
 
-## 1. Verified current-state findings
+## 1. Resolved decisions
 
-Each finding below was checked against the repository on 2026-08-11, not
-carried over from review feedback.
+**Q1 — what gates `apply`.** Resolved per review: engine development and
+`dry_run` proceed now; the full transactionality retrofit does not block
+them. Staged gates in §3. The ~20 unrelated actions are explicitly *not* a
+prerequisite for engine development; the shared mention/escalation mutation
+paths *are* a prerequisite for customer-facing `apply`.
+
+**Q2 — execution-history visibility.** Resolved per review: location
+managers get read-only access to execution history for their assigned
+locations; rule configuration stays with organization administrators.
+`location_id` is on the execution row from day one, database-constrained to
+equal the mention's location (§5). Organization-wide or unlocated
+executions are visible only to administrator roles.
+
+Carried decisions that stand from v1/v2 (per review's "preserve" list):
+transactional database-only execution RPC; service-role-only RPC access;
+explicit transition matrix; rule-revision validation inside the
+transaction; deterministic ordering (`priority asc, created_at asc, id
+asc`); per-organization sweep claims; `off | dry_run | apply`;
+environment-variable organization allowlist (acceptable for Phase 2);
+runtime and volume budgets; monotonic rule-activity timestamps; database
+concurrency tests; restrictive deletion and history retention; external
+side effects excluded from Phase 2; automation never reopens dismissed
+mentions.
+
+## 2. Verified repository findings
+
+v2's findings F1–F12 were re-verified and stand. New findings for v3, each
+checked against the repository on 2026-08-11:
 
 | # | Finding | Evidence |
 | --- | --- | --- |
-| F1 | Migration versions are unique. The two collisions (`monitoring_query_origin`, `response_edited_audit_event`) were renumbered in `b93ce2a` before reaching the hosted project. | `ls supabase/migrations` shows no duplicate version prefixes; `docs/architecture/current-state.md` "Still open" records the renumbering. |
-| F2 | A clean `supabase db reset` has **never been verified**. `npm run db:verify-rls` needs Docker and has never been executed; `supabase/tests/rls-verification.sql` has never run. | current-state.md "Still open". |
-| F3 | **Audit events are forgeable by any authenticated member.** `audit_events_insert` allows any org member to insert any `event_type` with `actor_user_id null` — i.e. events attributed to system/AI actors. | `20260801000200_row_level_security.sql:307-313`. |
-| F4 | **Two location-scoping omissions confirmed.** The permission matrix grants `location_manager` both `escalation.update_status` and `response.assign` with the stated contract "location managers appear only where a scoping check can constrain them" — but `updateEscalationStatusAction` and `assignResponseDraftAction` use plain `authorize()`, giving a location manager organization-wide reach. `mention.update_status` does it correctly via `assertPermissionForLocation`. | `src/app/actions/escalations.ts:27`, `src/app/actions/responses.ts:23`, `src/lib/auth/permissions.ts:44-46`, `src/app/actions/mentions.ts:30`. |
-| F5 | Database authorization enforces **organization** boundaries everywhere (`is_organization_member`) and a coarse **role** boundary on writes (`can_write_in_organization`: owner/admin/comms lead/location manager/approver). **Location** boundaries are enforced nowhere in the database; they exist only in `canForLocation` at the application layer. | `20260801000200_row_level_security.sql:59-75`; `src/lib/auth/permissions.ts:202`. |
-| F6 | **No mutation is transactional with its audit record.** Every action performs the business write, then `recordAuditEvent` as a second, separate write; a failure between the two leaves a mutation with no trail (the activation action already carries a workaround for the reverse case, `92e6f13`). No Supabase JS transaction exists; atomicity requires an RPC (D17 recorded this constraint for brand voice). | `src/lib/audit/record.ts:31-47`; any action in `src/app/actions/`. |
-| F7 | Config posture is fail-closed where it matters today: mock modes are refused in production, and a missing `CRON_SECRET` refuses every scheduled request rather than opening the route. Phase 2 settings must match this posture. | `src/lib/env.ts` header comment; `src/lib/cron/authorize.ts:28-30`. |
-| F8 | **The cron response over-reports success.** `/api/cron/analyze-mentions` returns `status: "ok"` with HTTP 200 even when `erroredOrganizations > 0` or `mentionsFailed > 0`. | `src/app/api/cron/analyze-mentions/route.ts:139-150`. |
-| F9 | A per-organization concurrency claim already exists as a pattern: `analysisRuns.start` throws a conflict when a run is in progress, and the cron route counts the refusal as `skipped`, not a failure. | `src/lib/analysis/analyze.ts:222-242`; route lines 113-136. |
-| F10 | Neither `automation_rules` nor `mentions` carries a `unique (id, organization_id)` constraint, so composite same-organization foreign keys are not yet possible. | `20260801000100_initial_schema.sql` (mentions, automation_rules definitions). |
-| F11 | `automation_rules.last_run_at` exists from the initial schema, is written by nothing, and every seeded value is null (D143). It can be replaced without data migration. | `20260801000100_initial_schema.sql:553`; seed tests pin null. |
-| F12 | Mentions and rules are never deleted by the application (rules are archive-only with no DELETE policy, D142; deleted Google reviews are deliberately retained). Cascade behavior on the new table is therefore about posture, not observed traffic. | current-state.md workflow 03 gaps; D142. |
+| F13 | `mention_analyses.id` is a durable per-occurrence identifier: the table is append-only ("re-analysis inserts, never updates"), rows are removed only by mention/organization cascade, and `createAnalysis` returns the row, so the sweep holds the id that authorized reconsideration. `analysis_run_id` is **not** suitable: it is nullable and `on delete set null`. | `20260801000100_initial_schema.sql:386-411`; `20260804000100_mention_analysis.sql:108`; `src/lib/data/types.ts:559`. |
+| F14 | `mentions.location_id` is a **simple** FK (`references locations (id) on delete set null`): nothing in the database prevents a mention pointing at another organization's location. Application code prevents it today; §5 closes it structurally, since the execution table's location proof builds on it. | `20260801000100_initial_schema.sql:323`. |
+| F15 | `locations.manager_user_id` exists (`on delete set null`), so a location-manager RLS predicate can be expressed in SQL. No `(id, organization_id)` unique exists on `locations`; composite FKs need one added. | `20260801000100_initial_schema.sql:183-201`. |
+| F16 | A service-role client exists server-side (`getServiceRoleClient`, fails hard when unconfigured), and audit writing is already centralized in one function (`recordAuditEvent`) backed by one repository method — so removing authenticated audit inserts is a one-point change in the Supabase adapter, not a per-action retrofit. | `src/lib/supabase/server.ts:70-78`; `src/lib/audit/record.ts:31`. |
+| F17 | Response actions do not write mentions today (they touch drafts and revalidate paths); the mutation paths that overlap the engine's rows are: the analysis service (`applyAnalysisOutcome` + `escalations.create` + audit), `updateMentionStatusAction`, `updateEscalationStatusAction`, and `assignEscalationAction`. This is the Gate-2 inventory, to be re-verified when Gate 2 starts. | `src/app/actions/responses.ts`; `src/lib/analysis/analyze.ts:133-175`; `src/app/actions/mentions.ts`, `escalations.ts`. |
 
-## 2. P0 prerequisites
+## 3. Release gates
 
-`RULES_EXECUTION_MODE=apply` must not be enabled anywhere — including a
-personal test project — until every item below is **done and verified**.
-Build order for the engine itself may proceed in parallel where noted.
-
-| P0 | Status | What remains |
+| Gate | Stage | Requirements (all verified, not merely merged) |
 | --- | --- | --- |
-| P0-1 Unique migration versions | **Done** (F1) | Nothing. |
-| P0-2 Clean `supabase db reset` | **Outstanding** (F2) | Run `npm run db:verify-rls` (needs Docker) on a machine that has it; fix whatever surfaces; record the run in current-state.md. Acceptance: reset + all migrations + seed + RLS harness pass from scratch. |
-| P0-3 DB boundaries: organization, role, location | **Partial** (F5) | Organization: done. Role: coarse write gate exists; the new tables/RPC in this plan get exact role policies (Section 3). Location: a product decision plus policy work — see the visibility decision in Section 3 and open question Q2. |
-| P0-4 Location-scoping omissions | **Outstanding** (F4) | Fix both actions with `assertPermissionForLocation`, resolving the record's location through its mention (`escalation → mention.locationId`, `responseDraft → mention.locationId`), the exact pattern `updateMentionStatusAction` uses. Cross-location refusal tests for both. Small, self-contained; lands in this phase's first commit block. |
-| P0-5 Audit forgery | **Outstanding** (F3) | Tighten `audit_events_insert`: authenticated inserts must set `actor_user_id = auth.uid()` — no authenticated path may write a null-actor (system/ai/integration-attributed) event; those become service-role-only. Requires a call-site audit first: at least `analyzeMentions` (manual trigger writes `actorType: "ai"`, `actorUserId: null` through the user's client) and `escalation.created_from_analysis` violate the tightened policy today. Each such site either (a) attributes the event to the triggering user (`actorUserId = auth.uid()`, keeping `actor_type` as the description of agency), or (b) moves to the service client. Recommendation: (a) for manual triggers — a person pressed the button and the trail should say who — leaving null-actor events exclusively to cron/service paths. |
-| P0-6 Transactional mutation + audit | **Split** (F6) | For everything Phase 2 writes: provided by the execution RPC (Section 4) — mutation, escalation, execution record, and audit commit or roll back together. For the ~20 existing actions: a retrofit workstream (per-action-family RPCs) that this plan does not attempt. See open question Q1 on whether that retrofit gates `apply` mode. |
-| P0-7 Fail-closed configuration | **Verified for existing config** (F7); Phase 2 settings specified to match | `RULES_EXECUTION_MODE` parses as a Zod enum; absent → `off`; an unknown value fails startup shape-validation like every other mode enum. `apply` with an empty allowlist executes nothing. No default ever enables execution. |
+| G0 | **Development + `dry_run`** | Phase 2 migrations, evaluation, and dry-run recording. Dry run performs no business mutations (§8), so its risk surface is operational rows only. P0-2 (clean `supabase db reset` + harness on Docker) must pass before the migrations reach the hosted project. |
+| G1 | **Internal `apply`** — founder/test organization only, via allowlist | The transactional execution RPC with its database-harness tests (§7, §11); audit hardening — no authenticated audit inserts (§6); the two location-scoping action fixes (P0-4); all database-level tests in §11 green. |
+| G2 | **Customer `apply`** | Every overlapping human and automated mutation path from F17 is atomic (business write + audit in one transaction — per-path RPCs following the execution RPC's pattern), and location authorization for mention/escalation mutations is a database guarantee, not only an application check: the database rejects an unauthorized location mutation even when application checks are bypassed (location-aware write policies or authorization inside the per-path RPCs). |
+| G3 | **Broader release** | The remaining critical-action transactionality retrofit (member management, integrations, onboarding, brand voice, monitoring) — scheduled as its own workstream; not part of this plan's implementation order. |
 
-## 3. Final schema and RLS design
+Mode changes are operator actions against these gates; nothing in code
+auto-advances a gate.
 
-### Parent-table prerequisites (one migration)
+## 4. Configuration and rollout controls
+
+Unchanged from v2 §7 except as noted: `RULES_EXECUTION_MODE = off | dry_run
+| apply` (absent → `off`; unknown → startup validation failure);
+`RULES_EXECUTION_ORG_ALLOWLIST` (consulted in both active modes; empty
+allowlist + active mode = no work, said plainly in the response);
+`RULES_MAX_MENTIONS_PER_SWEEP` 200, `RULES_MAX_ACTIONS_PER_SWEEP` 500, max
+rules per mention 50, `RULES_EXECUTION_BUDGET_MS` 60 000 checked between
+units; every truncation counted and reported. Snapshot semantics stand: a
+sweep executes the revisions it loaded; the RPC re-validates per unit.
+
+## 5. Final schema, composite constraints, RLS, and grants
+
+### Parent-table integrity (one migration)
 
 ```sql
 alter table public.automation_rules
   add constraint automation_rules_id_org unique (id, organization_id);
+alter table public.locations
+  add constraint locations_id_org unique (id, organization_id);
 alter table public.mentions
-  add constraint mentions_id_org unique (id, organization_id);
+  add constraint mentions_id_org unique (id, organization_id),
+  -- Proof target for "execution location = mention location" (F14 fix):
+  add constraint mentions_id_org_location unique (id, organization_id, location_id),
+  -- A mention's own location must belong to its own organization:
+  add constraint mentions_location_same_org
+    foreign key (location_id, organization_id)
+    references public.locations (id, organization_id);
+alter table public.mention_analyses
+  add constraint mention_analyses_id_mention_org
+    unique (id, mention_id, organization_id);
 ```
 
-These exist to make same-organization composite foreign keys possible; they
-are implied by the primary keys plus the org column and cost one index each.
+(`mentions_location_same_org` needs a backfill check first; the migration
+asserts no violating rows exist — if any did, that is a live cross-tenant
+defect to fix, not data to grandfather.)
 
 ### Sweeps
 
-One row per cron execution pass per organization — the concurrency claim
-(modelled on `analysisRuns.start`, F9) and the anchor for observability.
+As v2 §3, plus the review's integrity additions:
 
 ```sql
-create table public.automation_sweeps (
-  id uuid primary key default gen_random_uuid(),          -- the sweep_id
-  organization_id uuid not null references public.organizations (id) on delete cascade,
-  mode text not null check (mode in ('dry_run', 'apply')),
-  status text not null check (status in ('running', 'completed', 'failed'))
-    default 'running',
-  started_at timestamptz not null default now(),
-  completed_at timestamptz,
-  -- counters: mentions_evaluated, rules_matched, actions_applied,
-  -- actions_blocked, actions_skipped, actions_failed, retryable_failures,
-  -- terminal_failures — integer not null default 0 each
-  mentions_evaluated integer not null default 0,
-  rules_matched integer not null default 0,
-  actions_applied integer not null default 0,
-  actions_blocked integer not null default 0,
-  actions_skipped integer not null default 0,
-  actions_failed integer not null default 0,
-  retryable_failures integer not null default 0,
-  terminal_failures integer not null default 0,
-  error_code text
-);
-
--- One live sweep per organization; a crashed worker's claim expires by age.
-create unique index automation_sweeps_one_running
-  on public.automation_sweeps (organization_id)
-  where status = 'running';
+  constraint automation_sweeps_id_org unique (id, organization_id)
 ```
 
-**Lease semantics:** claiming = inserting the `running` row (unique partial
-index makes double-claims impossible at the database, not the application).
-A `running` sweep older than **30 minutes** (twice the cron interval margin;
-the analysis sweep's own budget is far shorter) is considered abandoned: the
-claimer marks it `failed` with `error_code = 'lease_expired'` in the same
-statement batch that inserts its own claim. Recovery after a worker crash is
-therefore automatic on the next cron tick, and an in-flight sweep whose
-executions already committed loses nothing — each execution row is
-independently final (Section 4).
+Partial unique index `(organization_id) where status = 'running'` stands as
+the claim; 30-minute lease expiry stands.
 
 ### Executions
 
@@ -114,16 +120,18 @@ independently final (Section 4).
 create table public.automation_rule_executions (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations (id) on delete cascade,
-  sweep_id uuid not null references public.automation_sweeps (id) on delete restrict,
+  sweep_id uuid not null,
   automation_rule_id uuid not null,
   rule_revision integer not null check (rule_revision > 0),
   mention_id uuid not null,
+  -- The durable trigger occurrence: the analysis row that authorized
+  -- reconsidering this mention (F13).
+  trigger_analysis_id uuid not null,
+  -- Denormalized from the mention at execution time; constrained below to
+  -- equal the mention's location. Null = unlocated mention.
+  location_id uuid,
   mode text not null check (mode in ('dry_run', 'apply')),
-  status text not null check (status in
-    ('applied', 'partial', 'blocked', 'failed', 'no_op')),
-  -- [{ index, type, outcome: 'applied'|'no_op'|'blocked'|'failed', code }]
-  -- `index` is the action's position in the executed revision's actions
-  -- array — the stable action identity for that revision.
+  status text not null,
   outcomes jsonb not null default '[]'::jsonb
     check (jsonb_typeof(outcomes) = 'array'),
   outcome_schema_version integer not null default 1,
@@ -132,13 +140,37 @@ create table public.automation_rule_executions (
   error_class text check (error_class in ('retryable', 'terminal')),
   started_at timestamptz not null default now(),
   completed_at timestamptz,
-  -- Same-organization integrity, database-enforced (F10 fixed above):
+
+  -- Outcome vocabulary is mode-specific (§8):
+  constraint execs_status_by_mode check (
+    (mode = 'apply' and status in
+      ('applied', 'partial', 'blocked', 'failed', 'no_op'))
+    or
+    (mode = 'dry_run' and status in
+      ('would_apply', 'would_partial', 'would_block', 'would_no_op',
+       'would_fail_validation'))
+  ),
+
+  -- Everything belongs together, database-proven:
+  constraint execs_sweep_same_org foreign key (sweep_id, organization_id)
+    references public.automation_sweeps (id, organization_id) on delete restrict,
   constraint execs_rule_same_org foreign key (automation_rule_id, organization_id)
     references public.automation_rules (id, organization_id) on delete restrict,
   constraint execs_mention_same_org foreign key (mention_id, organization_id)
     references public.mentions (id, organization_id) on delete restrict,
-  constraint execs_idempotent
-    unique (automation_rule_id, rule_revision, mention_id, mode)
+  constraint execs_analysis_same_mention
+    foreign key (trigger_analysis_id, mention_id, organization_id)
+    references public.mention_analyses (id, mention_id, organization_id)
+    on delete restrict,
+  -- Location equals the MENTION's location, not merely "a location in this
+  -- organization" — the FK targets the mention row's own triple (F14):
+  constraint execs_location_is_mentions
+    foreign key (mention_id, organization_id, location_id)
+    references public.mentions (id, organization_id, location_id)
+    on update cascade,
+
+  constraint execs_idempotent unique
+    (automation_rule_id, rule_revision, mention_id, trigger_analysis_id, mode)
 );
 
 create index execs_by_org_rule_recent
@@ -146,458 +178,399 @@ create index execs_by_org_rule_recent
   (organization_id, automation_rule_id, started_at desc);
 create index execs_by_mention
   on public.automation_rule_executions (organization_id, mention_id);
+create index execs_by_location
+  on public.automation_rule_executions (organization_id, location_id)
+  where location_id is not null;
 ```
 
-Deletion posture: `on delete restrict` for rules and mentions — neither is
-deleted by the application today (F12), and the constraint converts "never
-happens" into "cannot happen without a deliberate migration." Organization
-deletion cascades: removing a tenant removes the tenant's history, which is
-tenant teardown, not history loss. `sweep_id` is `restrict` so a sweep row
-cannot vanish out from under its executions.
+Notes on the constraint set:
 
-`mode` is part of the idempotency key so a dry run never blocks the later
-real execution of the same (rule, revision, mention), and vice versa.
-
-### Outcome vocabulary (mutually exclusive, exact)
-
-Per action: `applied` (the effect happened), `no_op` (the desired effect
-already existed — escalation already open, status already the target),
-`blocked` (the transition matrix or a policy refused it), `failed` (it was
-attempted and errored). v1's `skipped_duplicate` is replaced by `no_op`.
-
-Per execution row: `applied` — every action applied (or `no_op`; a row of
-pure no-ops is `no_op`); `partial` — at least one applied and at least one
-blocked or failed; `blocked` — nothing applied, at least one blocked, none
-failed; `failed` — nothing applied and at least one failed; `no_op` — every
-action was a no-op.
-
-**`no_match` writes no execution row.** A rule that evaluated and did not
-match contributes to sweep counters (`mentions_evaluated`; and the rule's
-`last_evaluated_at`, Section 6) only. Rationale: rows for non-matches would
-multiply as (rules × mentions) and record nothing an operator can act on;
-the sweep row preserves the evidence that evaluation happened.
-
-### Retry classification
-
-`error_class = 'retryable'`: serialization/deadlock failures, lock
-timeouts, transient connection errors. A later sweep may re-attempt: the
-RPC, on finding an existing row with `status='failed'` and
-`error_class='retryable'` and `attempt_count < 3`, re-executes and updates
-the same row (`attempt_count + 1`). `'terminal'`: refused transition, rule
-archived/revision changed mid-flight, malformed action payload — never
-re-attempted; the row is final. A failed **insert** cannot wedge recovery:
-the claim is `insert … on conflict` + row lock, never insert-only.
+- `execs_location_is_mentions` is deliberately **not** a plain FK to
+  `locations` — the review is correct that such an FK proves only "a real
+  location in some organization." Targeting the mention's own
+  `(id, organization_id, location_id)` unique proves equality with the
+  mention's location. When `location_id` is null (unlocated mention),
+  MATCH SIMPLE skips this constraint — and tenant/mention integrity is
+  still held by `execs_mention_same_org`. `on update cascade`: if a
+  mention's location assignment changes (remap, or location deletion
+  nulling it), history follows the mention — visibility tracks the current
+  assignment, and the audit trail of *what happened* is unaffected.
+- **The idempotency key** is `(automation_rule_id, rule_revision,
+  mention_id, trigger_analysis_id, mode)`. The trigger occurrence is the
+  analysis row the sweep just wrote for this mention — the thing that
+  authorized reconsideration. A reanalyzed mention gets a new
+  `mention_analyses` row, hence a new key, hence the same rule revision may
+  legitimately execute again; the same occurrence can never apply twice.
+  Dry runs carry the same occurrence, so a later analysis produces a fresh
+  projection and an old dry-run row never blocks anything (`mode` in the
+  key separates projection from application of the same occurrence).
+- Deletion posture: `restrict` throughout (rules, mentions, analyses,
+  sweeps); organization cascade only (tenant teardown). Unchanged from v2.
 
 ### RLS and grants
 
-- `automation_rule_executions`, `automation_sweeps`: `select` restricted to
-  members holding an automation role — `has_organization_role(org_id,
-  array['owner','admin','communications_lead'])` — matching
-  `automation_rule.manage`'s roles. **Recommendation (decision recorded,
-  see Q2): execution history is an organization-level administrative
-  resource.** Location managers cannot author, toggle, or read rules'
-  execution history; there is consequently no `location_id` column and no
-  location-scoped select policy. The alternative (constrained
-  `location_id` + location-scoped selects) is specified in Q2 if product
-  decides location managers should see what automation did to their own
-  restaurants' mentions.
-- No `insert`/`update`/`delete` policies for `authenticated` on either
-  table, **and** those privileges revoked outright (the
-  `revoke … from authenticated` convention), so a future policy cannot
-  re-open them by accident. This is deliberately *not* v1's "same posture
-  as audit_events" claim — audit_events' actual posture is
-  member-insertable and is itself a P0 defect (F3).
-- The execution RPC (Section 4): `security definer`, `set search_path =
-  public, pg_temp`, `revoke execute from public, anon, authenticated` —
-  callable by the service role only. Cron is the only caller (D88 posture).
+```sql
+-- Administrators read everything in their organization:
+create policy execs_select_admin on public.automation_rule_executions
+  for select to authenticated
+  using (public.has_organization_role(organization_id,
+    array['owner','admin','communications_lead']::membership_role[]));
 
-### Audit vocabulary
+-- Location managers read rows for locations they manage — and only those.
+-- Unlocated rows (location_id null) never match this policy.
+create policy execs_select_location_manager on public.automation_rule_executions
+  for select to authenticated
+  using (
+    location_id is not null
+    and exists (
+      select 1 from public.locations l
+      where l.id = location_id
+        and l.organization_id = automation_rule_executions.organization_id
+        and l.manager_user_id = auth.uid()
+    )
+  );
 
-New event types via the established vocabulary-migration pattern:
-`automation_rule.executed`, `automation_rule.execution_failed`,
-`automation_sweep.completed`. Counts only in metadata; no mention content.
+-- No insert/update/delete policies for authenticated, and revoked outright:
+revoke insert, update, delete
+  on public.automation_rule_executions from authenticated;
+```
 
-## 4. Execution algorithm (transactional, claim-based)
+`automation_sweeps`: admin-role select only (a sweep row is organization-
+wide telemetry, not location-scoped); writes service-role only, same
+revoke pattern. The execution RPC: `security definer`, `set search_path =
+public, pg_temp`, `revoke execute … from public, anon, authenticated` —
+service role is the only caller.
 
-All of Phase 2's business effects are database-only, so one plpgsql RPC —
-`execute_automation_rule(...)` — performs the entire execution of one
-(rule, revision, mention, actions) unit inside a single transaction:
+## 6. Audit hardening (replaces v2's P0-5 design)
 
-1. **Claim.** `insert into automation_rule_executions … on conflict
-   (automation_rule_id, rule_revision, mention_id, mode) do nothing`, then
-   `select … for update` on the row. If the row pre-exists with a final
-   status other than retryable-failed (Section 3), return it unchanged —
-   the completed-execution replay path, no effects. If it pre-exists as
-   retryable-failed under the attempt cap, proceed as a retry.
-2. **Validate.** Under the same transaction: the rule row (`for share`) is
-   `active`, unarchived, and its `revision` equals the requested revision —
-   otherwise terminal failure `rule_changed`; the mention row (`for
-   update`) exists in the same organization (the composite FKs make the
-   cross-org case unrepresentable, this check makes it legible).
-3. **Apply actions in order, each in a savepoint** (plpgsql nested
-   `begin … exception` block):
-   - `set_status`: permitted only by the transition matrix (Section 5),
-     evaluated against the mention's **current, locked** status — not the
-     status the sweep read earlier. Refusals → `blocked` with the matrix's
-     code. Target equals current → `no_op`.
-   - `escalate`: `insert … where not exists (open escalation for this
-     mention)` — the same dedupe contract `escalations.create` implements,
-     here enforced inside the transaction; duplicate → `no_op`. On insert:
-     severity = mention's stored risk level, category `other`, title from
-     the rule name, no due date; then status → `escalated` via the matrix
-     (which always permits it for eligible statuses).
-   - An action's savepoint rolling back records that action `failed` and
-     continues with the next — which is precisely what makes `partial`
-     reachable and keeps one bad action from voiding the others.
-4. **Record.** Update the claimed row: status, outcomes array, attempt
-   count, error fields, `completed_at`.
-5. **Audit.** Insert the `automation_rule.executed` (or
-   `execution_failed`) event.
-6. **Commit.** Everything above commits together or not at all.
-
-**The crash window the v1 design had is closed by construction:** there is
-no state where the mutation committed but the execution record did not,
-because they are one transaction. A crash anywhere before commit rolls back
-both; the retry re-runs from a clean claim. A crash after commit finds the
-final row at step 1 and replays nothing. The tests in Section 10 demonstrate
-both halves rather than asserting them.
-
-**Whole-unit failure** (validation failure, or the RPC's outer block
-catching an error outside any action savepoint): the outer exception
-handler still commits the claimed row as `failed` with its class and code —
-failure visibility survives the rollback of effects, via the nested-block
-savepoint structure. If the connection itself dies mid-transaction, no row
-remains, no effect remains, and the next sweep retries from nothing — safe
-because zero effects escaped.
-
-**Demo adapter parity.** The demo adapter implements the identical
-algorithm in TypeScript (single-threaded, so its atomicity is trivial), so
-every service-level test runs against the same claim/validate/apply/record
-semantics without Docker.
-
-**Engine loop (TypeScript, `src/lib/rules/execute.ts`).** Per organization:
-claim sweep → load active rules once (config + revision snapshot; ordered
-`priority asc, created_at asc, id asc`) → for each just-analyzed mention id
-(the population decision from v1 stands: never the backlog): build
-`RuleSubject` via the Phase 1 evaluator module, evaluate rules in order,
-and for each matching rule call the RPC (apply mode) or record the decision
-(dry-run mode). Multiple matching rules execute in the deterministic order
-above; every action a later rule loses to the matrix or to an earlier
-rule's effect is recorded on that rule's own execution row with its code —
-nothing is silently suppressed.
-
-## 5. Status transition matrix
-
-The lattice is gone; v1's "stronger/weaker" ordering treated `dismissed`,
-`responded`, and `escalated` as ranked when they are different outcomes.
-In its place, an explicit matrix of what **Phase 2 automation** may do.
-Humans are governed by their own paths and are untouched by this table;
-resolving an escalation stays a human action in the escalations centre.
-
-Automation-permitted transitions (everything not listed is refused,
-`blocked` / code `forbidden_transition`):
-
-| From \ To | analyzed | monitoring | no_action_recommended | dismissed | escalated |
-| --- | --- | --- | --- | --- | --- |
-| analyzed | no_op | ✓ | ✓ ¹ | ✓ ¹ | ✓ (escalate action) |
-| monitoring | ✗ | no_op | ✓ ¹ | ✓ ¹ | ✓ (escalate action) |
-| no_action_recommended | ✗ | ✗ | no_op | ✗ | ✓ (escalate action) |
-| dismissed | ✗ | ✗ | ✗ | no_op | ✗ ² |
-
-¹ **High-risk guard:** refused (`blocked` / `high_risk_guardrail`) when the
-mention's stored risk level is high or critical — automation may never move
-high-risk content into a non-escalated resting state, enforced in the RPC
-even if a stale rule slipped activation.
-² Escalating a dismissed mention is refused: a human explicitly closed it;
-automation reopening it would need a product decision nobody has made.
-
-Rows and columns absent entirely — and why:
-
-- `new` never appears as a source: the engine's population is post-analysis
-  mentions only.
-- `escalated`, `responded`, `needs_approval`, `draft_ready` as **sources**:
-  automation may not move a mention out of any of them. Escalation is
-  sticky; the response pipeline (drafting, approval, publishing) owns its
-  own states.
-- `responded`, `needs_approval`, `draft_ready`, `new` as **targets**:
-  publishing owns `responded`; the draft/approval flow owns the middle
-  states; nothing returns a mention to `new`.
-
-The matrix is defined once as data in `src/lib/rules/transitions.ts`
-(consumed by dry-run decisions and the demo adapter) and restated in the
-RPC's SQL. Two statements of one truth is a real drift risk: a
-database-harness test (Section 10) asserts the SQL function agrees with the
-TypeScript module on every (from, to, risk) combination.
-
-## 6. Rule activity timestamps
-
-`automation_rules.last_run_at` (never written, all null — F11) is dropped
-and replaced:
+The review's correction is accepted: `actor_user_id = auth.uid()` prevents
+impersonation, not fabrication — a member could still invent
+self-attributed events. The v3 posture: **no authenticated inserts at
+all.**
 
 ```sql
-alter table public.automation_rules
-  drop column last_run_at,
-  add column last_evaluated_at timestamptz,
-  add column last_matched_at timestamptz,
-  add column last_applied_at timestamptz;
+drop policy audit_events_insert on public.audit_events;
+revoke insert on public.audit_events from authenticated;
 ```
 
-- `last_evaluated_at`: the engine considered the rule against at least one
-  mention — **updated in apply mode regardless of outcome**, including
-  all-blocked and all-failed sweeps.
-- `last_matched_at`: at least one subject matched the rule's conditions.
-- `last_applied_at`: at least one action reached `applied`.
+Audit events are then written only by trusted server-side paths:
 
-All three are written once per rule per sweep, monotonically:
-`set last_x = greatest(coalesce(last_x, 'epoch'), $sweep_started_at)` — an
-older sweep completing after a newer one (possible across the lease
-boundary) can never move a timestamp backwards. Updates ride inside the
-sweep-finalization transaction, not per execution.
+- The execution RPC writes its own events inside its transaction (§7).
+- Every existing action keeps calling `recordAuditEvent` unchanged; the
+  Supabase adapter's `auditEvents.record` switches internally to the
+  service-role client (F16: one method, one change point — this is *not*
+  the ~20-action retrofit). The adapter is `server-only` code and the
+  scope it stamps has already passed `getOrganizationContext()`; what the
+  RLS change removes is the ability of any *client-credentialed* path —
+  PostgREST with a user JWT — to insert trail rows at all.
+- The demo adapter is unaffected (in-memory).
 
-Revision changes do not reset any of them: they are rule-lifetime facts
-("when did this rule last do anything"), and per-revision truth lives in
-the execution rows, which carry `rule_revision`. Dry-run sweeps update
-**none** of them — dry run makes zero writes outside its own execution and
-sweep rows, so the "dry run mutates nothing" test stays absolute; a
-dry-run's evaluation evidence is its recorded decisions.
+Sequencing: this lands in the G1 block. Until the adapter change and the
+migration land **together**, nothing else in this plan depends on them.
+Test: §11-DB-1.
 
-UI: the list and detail pages replace "Last run" with "Last applied"
-(`last_applied_at`), the honest number, with evaluated/matched shown on the
-detail page alongside the execution history.
+## 7. The execution unit: transaction structure, rollback, retry, concurrency
 
-## 7. Rollout, concurrency, and budget controls
+### Semantics (review corrections 5 and 8 adopted)
 
-Configuration (all parsed in `src/lib/env.ts`, Zod-validated at startup,
-F7 posture):
+- **Policy refusals are outcomes, not errors.** A `blocked` (matrix
+  refusal, guardrail) or `no_op` (already true) coexists with other
+  actions' successes; a unit with ≥1 applied and ≥1 blocked/failed commits
+  as `partial`.
+- **Any technical failure rolls back the whole unit's business effects.**
+  No per-action savepoint survival, no partially-committed technical
+  failure, no action-level retry machinery in Phase 2. After rollback, a
+  `failed` attempt with `error_class = 'retryable'` (or `'terminal'`, per
+  classification) is recorded and survives. A retry starts from the last
+  committed business state.
+- **Validation precedes all mutation.** Malformed/unknown action payloads
+  and stale rule revisions fail validation before any business write is
+  attempted (`would_fail_validation` in dry run; terminal `failed` with
+  code in apply).
+- **`set_status` may never target `escalated`** (`blocked`, code
+  `escalation_reserved`). Only the `escalate` executor produces the
+  escalated state, and it performs — inside the one transaction, in
+  order — (1) eligibility validation against the matrix and current locked
+  state, (2) escalation creation or confirmation (dedupe → `no_op`),
+  (3) the mention status change, (4) execution and audit records. The
+  transition matrix (v2 §5) is amended accordingly: the `escalated`
+  column belongs to the escalate executor alone; `escalated` remains
+  forbidden as a set_status target from every source status.
 
-- `RULES_EXECUTION_MODE = off | dry_run | apply`. Absent → `off`. Unknown
-  value → startup validation failure, not a fallback.
-- `RULES_EXECUTION_ORG_ALLOWLIST`: comma-separated organization ids.
-  Consulted in both `dry_run` and `apply`; an organization not listed is
-  skipped entirely. Empty or absent allowlist + any active mode = the
-  sweep does nothing and says so in its response. (Env-var storage is the
-  Phase 2 answer; a DB-backed rollout table is future work, noted in Q3.)
-- `RULES_MAX_MENTIONS_PER_SWEEP` (default 200), `RULES_MAX_ACTIONS_PER_SWEEP`
-  (default 500), max rules evaluated per mention (default 50, a structural
-  backstop rather than a knob — active rule counts are tiny today).
-- `RULES_EXECUTION_BUDGET_MS` (default 60 000): checked between mentions;
-  on exhaustion the sweep stops cleanly, finalizes counters, reports
-  `budget_exhausted` in its sweep row and the cron response. Never
-  mid-mention: the RPC unit is atomic, so stopping between units is always
-  a consistent stop.
+### Transaction structure (plpgsql)
 
-Every truncation is reported, never silent: mentions skipped by cap or
-budget appear as a count in the sweep row and cron response.
+```text
+execute_automation_rule(p_org, p_sweep, p_rule, p_revision,
+                        p_mention, p_analysis, p_actions, p_mode)
+security definer; single transaction per call.
 
-**Concurrency.** The sweep claim (Section 3's partial unique index) is the
-per-organization lock; two overlapping cron ticks race on the insert and
-the loser skips the organization, exactly the F9 pattern. Within a sweep,
-the RPC's claim row + `for update` locks make two workers on the same
-(rule, revision, mention) impossible to double-apply — one claims, one
-replays the final row.
+-- OUTER SCOPE: claim + attempt accounting. Never rolled back except by
+-- connection death (in which case nothing committed and no effects exist).
+insert into automation_rule_executions
+    (org, sweep, rule, revision, mention, trigger_analysis, location,
+     mode, status := 'failed', error_class := 'retryable',
+     last_error_code := 'claim_only', attempt_count := 1)
+  values (…)
+  on conflict on constraint execs_idempotent do nothing;
 
-**Snapshot semantics.** A sweep executes the rule revisions it loaded at
-claim time. A rule edited, disabled, or archived mid-sweep is caught by the
-RPC's validate step (rule status and revision re-checked inside each
-execution's transaction) and recorded as terminal `rule_changed` — the
-sweep never executes a moving target, and never half-applies an old
-revision after the new one exists.
+select * into v_exec from automation_rule_executions
+  where <idempotency key> for update;          -- blocks a concurrent claimer
+if v_exec.status is terminal (applied/partial/blocked/no_op,
+                              or failed+terminal,
+                              or failed+retryable at attempt cap 3):
+    return v_exec;                              -- replay: zero effects
+-- else: we own the unit; this is attempt v_exec.attempt_count (+1 if retry)
 
-**Dry run** evaluates conditions, runs the full decision pipeline including
-the transition matrix against current mention state, and records execution
-rows (`mode='dry_run'`) with the outcomes that *would* have occurred — and
-performs no business mutation: no status writes, no escalations, no rule
-timestamps, no audit events beyond the sweep-completed event. Its rows are
-the rollout evidence to read before flipping an organization to `apply`.
+-- VALIDATION (before any business write; failure here never mutates):
+--   rule row FOR SHARE: active, unarchived, revision = p_revision
+--       else -> finalize('failed', terminal, 'rule_changed')
+--   p_actions parse against the action schema
+--       else -> finalize('failed', terminal, 'invalid_action')
+--   mention row FOR UPDATE: exists (composite FKs already prove tenancy)
 
-## 8. Observability and the cron response contract
+-- INNER SCOPE: the business-mutation subtransaction.
+begin                                           -- plpgsql block = savepoint
+    for each action in p_actions (in order):
+        evaluate matrix / guardrail against CURRENT locked mention state
+            -> outcome 'blocked' (code) or 'no_op'; continue
+        set_status  -> update mentions …        (never to 'escalated')
+        escalate    -> validate eligibility; insert escalation
+                       where no open one exists (else 'no_op');
+                       update mention status to 'escalated'
+    insert audit event (automation_rule.executed, counts only)
+exception when others then
+    -- every business write above rolls back to the savepoint;
+    -- the claim row from the OUTER scope is untouched
+    update automation_rule_executions set
+        status = 'failed',
+        error_class = classify(sqlstate),       -- retryable | terminal
+        last_error_code = …, attempt_count = attempt, completed_at = now()
+      where id = v_exec.id;
+    return …;                                   -- COMMIT: failure survives
+end;
 
-The route (`/api/cron/analyze-mentions`, unchanged URL — execution stays
-inside the existing sweep per D88/prereq 6) returns:
-
-```jsonc
-{
-  "status": "ok" | "degraded" | "failed",
-  "analysis": { /* existing totals, unchanged shape */ },
-  "execution": {
-    "mode": "off" | "dry_run" | "apply",
-    "sweeps": [{ "sweepId": "…", "organizationId": "…", "status": "…",
-                 "mentionsEvaluated": 0, "rulesMatched": 0,
-                 "actionsApplied": 0, "actionsBlocked": 0,
-                 "actionsSkipped": 0, "actionsFailed": 0,
-                 "retryableFailures": 0, "terminalFailures": 0 }],
-    "organizationsAttempted": 0, "organizationsCompleted": 0
-  }
-}
+-- SUCCESS: becomes terminal in the same transaction as its effects.
+update automation_rule_executions set
+    status = derive(outcomes),   -- applied | partial | blocked | no_op
+    outcomes = …, attempt_count = attempt, completed_at = now()
+  where id = v_exec.id;
+return …;                                        -- COMMIT
 ```
 
-- **HTTP 401** — cron secret missing/wrong (existing behavior, unchanged).
-- **HTTP 500, `status: "failed"`** — the route itself could not run its
-  loop (organization enumeration failed, config invalid). No partial work
-  happened or its records stand on their own.
-- **HTTP 200, `status: "degraded"`** — the sweep ran and *any* material
-  work failed: `erroredOrganizations > 0`, `mentionsFailed > 0`, any
-  execution sweep `failed`, or `actionsFailed > 0`. This fixes F8 for the
-  analysis totals too — the current code answers `ok` to a sweep where
-  every mention failed.
-- **HTTP 200, `status: "ok"`** — everything attempted completed; blocked
-  and no-op outcomes are normal operation, not degradation.
+Why this shape holds the required properties:
 
-`sweep_id` appears in: the response, every execution row, every
-execution-related audit event's metadata, and every engine log line.
-Persistence for diagnosis is the sweep row itself — counters, error code,
-timing — queryable without log access, which is what an alert can be hung
-on later.
+- **Concurrent claims:** two callers race on the `on conflict` insert; the
+  second blocks at `for update` until the first commits, then sees a
+  terminal row and replays with zero effects. Demonstrated in §11-DB-8.
+- **Crash before commit:** the claim, the effects, and the audit event are
+  one transaction — all vanish together; the next sweep retries from
+  nothing, and no effect escaped. (The `claim_only` placeholder status is
+  never observable outside the transaction.)
+- **Technical failure:** the inner block is a subtransaction; its
+  exception handler rolls back every business write while the outer
+  claim row remains, is finalized as `failed` + class, and **commits** —
+  the failure record survives the rollback of effects. §11-DB-6/7.
+- **Retry:** a later sweep calling with the same key finds
+  `failed`/`retryable` under the cap, takes the row lock, increments
+  `attempt_count`, and re-runs validation and the inner block against the
+  now-current committed state. `failed`+`terminal` and all success states
+  return immediately as replays. §11-DB-5.
+- **Success is terminal atomically:** the status update commits with the
+  effects; there is no window where effects exist without their terminal
+  record.
 
-## 9. Future executors — considerations, not commitments
+This behavior is verified in the PostgreSQL harness (§11-DB), not only in
+the TypeScript twin. The demo adapter implements the same algorithm for
+service-level tests; the harness is the authority.
 
-Phase 2 finalizes semantics for `set_status` and `escalate` only. For the
-rest, the following are recorded as design **considerations** the future
-phases must answer, deliberately unresolved here:
+## 8. Dry-run semantics
 
-- `generate_draft`: provider-level idempotency (an AI call is not
-  transactional with anything), draft-per-mention dedupe, cost bounding.
-- `require_approval` / `notify` / `auto_publish`: external side effects
-  need an outbox pattern — a transactionally-recorded intent executed by a
-  delivery worker — because a Postgres transaction cannot span an email or
-  a Google API call. Nothing in this phase's schema presumes the outbox's
-  shape; the executions table records database effects only.
-- `assign` / `tag`: blocked on product decisions (assignee of what? tag on
-  what entity?), unchanged from Phase 1's deferral.
+Dry run projects; it never applies. Accepted vocabulary per action:
+`would_apply`, `would_block`, `would_no_op`, `would_fail_validation`; row
+status per the §5 check constraint (`would_partial` for mixed
+projections). Projections evaluate the real pipeline — condition match,
+matrix, guardrails — against current mention state, without taking locks
+beyond a plain read and without calling the mutation RPC at all (a
+separate read-only recording path writes the projection rows).
 
-The conflict rules v1 pre-committed for these actions (approval blocks
-auto-publish, notification dedupe, and so on) are demoted to notes inside
-`transitions.ts` comments; only the matrix rows for the two real executors
-are normative.
+**Exactly what dry run may write (operational records, not business
+records):** its `automation_sweeps` row, and its `mode='dry_run'`
+execution rows. Nothing else: no mention writes, no escalations, no
+rule-timestamp updates, **no audit events of any kind** — the sweep row is
+the telemetry. The operational/business distinction is tested explicitly
+(§11-INT-9): a dry-run sweep leaves `mentions`, `escalations`,
+`automation_rules`, and `audit_events` byte-identical.
 
-## 10. Migration order, implementation order, tests
+## 9. Rule-activity timestamps
 
-### Migrations (in order)
+Unchanged from v2 §6: `last_evaluated_at` / `last_matched_at` /
+`last_applied_at`, written once per rule per **apply** sweep with
+`greatest()` monotonic updates inside sweep finalization; blocked/failed
+evaluations still advance `last_evaluated_at`; revision changes reset
+nothing; dry run touches none of them; `last_run_at` dropped; UI shows
+"Last applied."
 
-1. `…_automation_execution_prereqs.sql` — parent `(id, organization_id)`
-   uniques (F10).
-2. `…_automation_execution.sql` — sweeps + executions tables, indexes,
-   timestamp column swap on `automation_rules`.
-3. `…_automation_execution_rls.sql` — policies, revokes, role-restricted
-   selects.
-4. `…_automation_execution_rpc.sql` — `execute_automation_rule`, matrix in
-   SQL, security posture (definer, search_path, revokes).
-5. `…_automation_execution_audit_vocabulary.sql` — three event types.
-6. P0-5's separate pair: audit call-site changes + tightened
-   `audit_events_insert` policy (sequenced after the call-site audit; may
-   land before or after 1–5, they are independent).
+## 10. Cron status and HTTP response contract
 
-Operational note (unchanged from v1): all of these must reach the hosted
-project before any mode above `off` is set there, and P0-2's reset
-verification gates the set.
+Response shape as v2 §8 (analysis block unchanged; execution block with
+per-sweep rows, `sweep_id`s, organization counts, evaluation counts, action
+outcomes, retryable vs terminal failure counts). Status semantics per the
+review's correction:
+
+| Condition | Status | HTTP |
+| --- | --- | --- |
+| Cron secret missing/invalid | — | 401 (unchanged) |
+| Route cannot run its loop at all (config invalid, organization enumeration failed) | `failed` | 500 |
+| Work was attempted and **zero** attempted units of work succeeded, due to systemic or execution failures (every attempted org errored, or every execution failed) | `failed` | 503 |
+| Some work succeeded and any material work failed (`erroredOrganizations > 0`, `mentionsFailed > 0`, any sweep `failed`, `actionsFailed > 0`, retryable failures present) | `degraded` | 200 |
+| Everything attempted completed; blocked/no_op are normal operation | `ok` | 200 |
+| Nothing to do (no due organizations, mode `off`, empty allowlist) | `ok`, with the reason stated | 200 |
+
+Sweep rows persist the same counters for diagnosis and alerting without log
+access; `sweep_id` propagates through response, execution rows, audit
+metadata, and log lines.
+
+## 11. Migration order, implementation order, tests
+
+### Migrations
+
+1. `…_tenant_integrity_prereqs.sql` — §5 parent uniques + the
+   `mentions_location_same_org` composite FK (with its pre-flight
+   violating-rows assertion).
+2. `…_automation_execution.sql` — sweeps + executions + indexes + rule
+   timestamp swap.
+3. `…_automation_execution_rls.sql` — §5 policies, revokes.
+4. `…_automation_execution_rpc.sql` — the RPC of §7, matrix in SQL,
+   security posture.
+5. `…_automation_execution_audit_vocabulary.sql` — `automation_rule.executed`,
+   `automation_rule.execution_failed`, `automation_sweep.completed`.
+6. `…_audit_events_no_client_inserts.sql` — §6 (lands together with the
+   adapter change, same PR).
+
+All applied to the hosted project only after P0-2 (reset + harness) passes
+locally.
 
 ### Implementation order
 
-1. **P0 block**: location-scoping fixes (P0-4) with tests; audit call-site
-   audit + P0-5 migration; P0-2 reset run on a Docker machine.
-2. Domain + `transitions.ts` (matrix as data) + outcome vocabulary types.
-3. Migrations 1–3; repository contract (`sweeps.claim/finalize`,
-   `executions.record/listForRule`, `automationRules.markActivity`,
-   `listActiveForExecution`) in the demo adapter with the full algorithm.
-4. RPC migration (4) + Supabase adapter calling it; audit vocabulary (5).
-5. Engine loop + env config + route integration + response contract.
-6. Outcome UI on `/rules/[ruleId]` (execution history, three timestamps,
-   mode-aware empty states: "Rule execution is off", "Dry run only —
-   nothing is applied yet", "No executions yet").
-7. Docs: current-state decisions ledger entries; this plan marked
-   implemented.
+1. **G0 block:** P0-2 harness run; migration 1; domain types
+   (`transitions.ts` matrix with `escalation_reserved`, outcome and
+   projection vocabularies); migrations 2–3; repository contract + demo
+   adapter (full algorithm, including the claim/replay/retry semantics in
+   TypeScript); engine loop with `dry_run` + `off` only; route contract;
+   dry-run UI states. *Releasable: dry run internally.*
+2. **G1 block:** migration 4 (RPC) + Supabase adapter; migration 5;
+   migration 6 + audit adapter change; P0-4 location-scoping action fixes;
+   full §11 test suite; `apply` for the internal organization via
+   allowlist.
+3. **G2 block (its own plan):** F17 inventory re-verification; per-path
+   transactional RPCs for the overlapping mutations; database-level
+   location authorization for mention/escalation writes. Not scheduled
+   here; a prerequisite line item for customer `apply`.
+4. Outcome UI on `/rules/[ruleId]` (execution history with mode column,
+   projected vs applied outcomes visually distinct, three timestamps,
+   mode-aware empty states) — lands with block 1 for dry-run visibility.
+5. Docs: decision-ledger entries; current-state updates; this plan marked
+   implemented per gate.
 
-### Tests (each maps to a required scenario from review)
+### Tests
 
-Vitest, demo adapter (algorithm semantics):
+**DB harness** (`supabase/tests/`, Docker; the authority for transactional
+claims — every test here runs against real PostgreSQL):
 
-1. Crash after mutation before recording — *by construction* this state
-   cannot exist in the RPC design; the demo adapter test proves the
-   TypeScript twin: inject a throw between apply and record → assert the
-   mutation did not persist (transaction semantics of the adapter's unit),
-   then retry → exactly one effect, one record.
-2. Two concurrent sweeps, same (rule, revision, mention): first claims and
-   applies; second replays the final row; effects applied exactly once.
-3. Escalation insert succeeds, status write fails (injected) → escalation
-   and status roll back together in the unit; recorded `failed`; retry
-   produces exactly one escalation.
-4. Audit insert failure (injected) → the whole unit rolls back; no
-   unaudited mutation survives.
-5. Repeated execution after success → `no_op` replay, zero new effects,
-   zero new rows.
-6. Retryable failure → same row, `attempt_count` 2, then success; terminal
-   failure → never re-attempted; attempt cap respected.
-7. Every matrix cell: all permitted transitions apply; all refused
-   combinations return `blocked`/`forbidden_transition`; high-risk guard
-   on both ¹-marked columns; escalate-from-dismissed refused.
-8. Older sweep finishing after newer → `greatest()` keeps the newer
-   timestamps.
-9. Rule edited / disabled / archived between sweep load and execution →
-   terminal `rule_changed`, no effects.
-10. Malformed and unknown action payloads → terminal failure with code,
-    sweep continues.
-11. Dry run: full decision records, and a byte-for-byte assertion that no
-    mention, escalation, rule-timestamp, or audit write occurred.
-12. Caps and budget: mentions-per-sweep cap, actions cap, budget
-    exhaustion — all stop cleanly and report truncation counts.
-13. Route contract: `off` → no sweeps; allowlist filtering; `ok` /
-    `degraded` / `failed` responses each produced under the conditions in
-    Section 8; 401 unchanged.
-14. Location-scoping fixes (P0-4): location manager refused on another
-    location's escalation status and response assignment; permitted on
-    their own.
+1. Authenticated users cannot insert audit events at all (post-§6);
+   service-role and RPC writes succeed. Cross-org audit reads still
+   refused.
+2. Cross-organization combinations rejected by constraints, attempted as
+   service role so the constraint itself is what refuses: sweep from org A
+   with execution from org B; rule A + mention B; analysis of mention B on
+   an execution for mention A; location B on a mention-A execution.
+3. Execution location must equal the mention's location: inserting an
+   execution whose `location_id` differs from its mention's fails on
+   `execs_location_is_mentions`; a mention remap cascades.
+4. Location-manager visibility: manager of location L reads only rows with
+   `location_id = L`; unlocated rows invisible to managers, visible to
+   admin roles; org-B manager sees nothing in org A.
+5. Idempotency and occurrence: same key replays with zero effects
+   (repeated RPC call after success — row count and mention state
+   unchanged); a **new** `mention_analyses` row for the same mention
+   permits the same rule revision to execute again; the same occurrence
+   can never produce duplicate effects (asserted on escalation count and
+   status-write count).
+6. Technical failure rollback: a forced mid-unit error (e.g. injected via
+   a constraint-violating second action) rolls back the whole unit's
+   business writes — escalation created earlier in the unit is gone,
+   status unchanged — while the `failed`/`retryable` row **survives and is
+   committed**.
+7. Retry: after DB-6, a second RPC call re-executes from the last
+   committed state, succeeds, `attempt_count = 2`; a `terminal` failure
+   and an at-cap retryable failure both replay without effects.
+8. Concurrency: two sessions, same unit — one applies, the blocked second
+   replays the terminal row; effects exactly once. Two sessions claim the
+   same organization's sweep — the partial unique index refuses one.
+9. Matrix parity and the escalation reservation: SQL agrees with
+   `transitions.ts` on every (from, to, risk) cell; `set_status` to
+   `escalated` refused with `escalation_reserved` from every source
+   status; escalate validates eligibility before any write (an ineligible
+   subject leaves no escalation row and no status change).
+10. Clean `supabase db reset` + all migrations + seed + the whole harness
+    (P0-2 acceptance).
 
-Database harness (`supabase/tests/`, needs Docker — extends the existing
-RLS script):
+**Integration/service** (vitest, demo adapter twin — semantics mirrored,
+authority stays with the DB harness):
 
-1. Clean `supabase db reset` + all migrations + seed (P0-2 acceptance).
-2. Cross-organization integrity: inserting an execution whose rule and
-   mention belong to different organizations fails on the composite FKs —
-   attempted as service role, so the constraint itself is what refuses.
-3. RLS: member without automation role cannot select executions/sweeps;
-   automation-role member of org A cannot read org B's rows; authenticated
-   cannot insert/update/delete either table; authenticated cannot execute
-   the RPC; tightened audit policy refuses null-actor authenticated
-   inserts (P0-5 acceptance).
-4. SQL/TypeScript matrix parity: every (from, to, risk) combination agrees
-   between `transitions.ts` and the RPC.
-5. Concurrency at the database: two sessions claim the same sweep →
-   partial unique index rejects one; two sessions execute the same unit →
-   one applies, one replays.
+1. Engine loop ordering, snapshot semantics (`rule_changed` mid-sweep),
+   caps, budget stop, allowlist filtering.
+2. Sweep counter correctness across mixed outcomes.
+3. Timestamps: monotonic under an older-sweep-finishes-last interleaving;
+   dry run advances nothing.
+4. Route: every row of §10's table, including `failed`/503 when all
+   attempted work fails and `degraded`/200 on mixed results; `off` and
+   empty-allowlist responses.
+5. Location-scoping action fixes (P0-4): cross-location refusal for
+   escalation status and response assignment; own-location success.
+6. Malformed/unknown action payloads fail validation before mutation
+   (projected as `would_fail_validation` in dry run).
+7. UI: history renders both modes distinctly; projected outcomes never
+   read as applied; empty states per mode.
+8. Replay/no-effect: calling the service twice over the same analyzed
+   set produces no new rows and no new effects.
+9. Dry run distinction: full projection rows recorded; `mentions`,
+   `escalations`, `automation_rules`, `audit_events` unchanged —
+   asserted table-by-table.
 
 ### Acceptance criteria
 
-- All tests above pass; `npm run verify` green.
-- P0-2 recorded as run; P0-4 and P0-5 landed with their tests.
-- With `RULES_EXECUTION_MODE` unset, the deployed behavior is
-  byte-identical to today's (route response gains the `execution` block
-  with `mode: "off"` and nothing else).
-- A dry-run sweep on the hosted project over the seeded organizations
-  produces decision records and zero mutations (verified by row counts
-  before/after).
-- No document or UI string describes execution as enabled, safe, or
-  automatic while mode is `off` or `dry_run`.
+- All §11 tests green; `npm run verify` green; P0-2 recorded as run.
+- With `RULES_EXECUTION_MODE` unset, deployed behavior is identical to
+  today except the response's `execution` block reporting `mode: "off"`.
+- A dry-run sweep over the seeded organizations on the hosted project:
+  projection rows exist, business tables and audit trail byte-identical
+  (row counts + checksums before/after).
+- G1 `apply` on the internal organization: first live sweep's execution
+  rows, escalation dedupe against D38, and audit events all reconciled by
+  hand against the sweep response before any other organization is
+  allowlisted.
+- No claim of atomicity/idempotency in docs or UI beyond what §7's tested
+  mechanism provides; nothing describes execution as enabled while the
+  mode says otherwise.
 
-## Open questions requiring product input
+## 12. Out of scope, restated
 
-- **Q1 — Does the existing-actions transactionality retrofit (P0-6) gate
-  `apply` mode?** My recommendation: no. The rules-execution path is fully
-  transactional in this design and never traverses the existing action
-  code; retrofitting ~20 human-triggered actions is real work with its own
-  risk, and holding automation hostage to it protects nothing automation
-  touches. It should be its own scheduled workstream regardless.
-- **Q2 — Execution-history visibility.** Recommended and specified above:
-  org-level administrative resource (owner/admin/communications lead),
-  matching who can manage rules; no `location_id` on the table. The
-  alternative — location managers see executions touching their own
-  restaurants — requires a constrained `location_id` column (composite FK
-  to `locations(id, organization_id)`, denormalized from the mention at
-  execution time) and a location-scoped select policy, and can be added by
-  migration later without rewriting history.
-- **Q3 — Allowlist storage.** Env var now (operator-controlled, no UI);
-  a `organizations.automation_enabled` column with an admin surface is the
-  eventual home. Acceptable to defer?
-- **Q4 — Escalating dismissed mentions.** The matrix refuses it. If
-  product wants "a rule may reopen a dismissed mention when new risk
-  appears," that is a deliberate row flip plus an audit story, not a
-  default.
+Future executors (`generate_draft`, `require_approval`, `notify`,
+`auto_publish`, `assign`, `tag`) remain unresolved by design; external side
+effects will need an outbox pattern that nothing in this schema presumes.
+The G3 retrofit workstream is acknowledged, gated, and not planned here.
+
+## Remaining product decisions
+
+- **Q5 — allowlist graduation.** Env-var allowlist is accepted for
+  Phase 2. When customer `apply` (G2) arrives, does rollout move to a
+  database-backed per-organization setting with an admin surface, and who
+  flips it — Lia operators only, or organization owners? (Affects G2
+  scope, not this phase.)
+- **Q6 — location-manager notification surface.** Location managers can
+  now *read* what automation did to their locations' mentions. Should
+  anything actively surface it to them (a feed, a digest) or is the
+  history page enough for Phase 2? Plan assumes the page is enough.
+- Q4 from v2 stands resolved as specified: automation never reopens
+  dismissed mentions.
