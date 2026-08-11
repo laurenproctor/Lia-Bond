@@ -1036,10 +1036,15 @@ Two useful things fell out of doing it:
   row so a later version can be compared against this one.
 - Cost per run is now measurable rather than theoretical: the sweep of 12
   mentions spent roughly 1,500 input and 5,200 output tokens.
-- **`20260808000500_response_edited_audit_event.sql` has not been applied to
-  the hosted Supabase project yet.** It is the migration that adds
-  `response.edited` to `audit_events_known_event_type`; until the next `npm
-  run db:migrate` (or equivalent hosted deploy) applies it, saving a composer
-  edit or approving one against the hosted database hits the same `23514`
-  rejection D93 describes for an unlisted event type, even though the demo
-  adapter and every local test already pass.
+- **Two migration files shared versions with unrelated siblings and were
+  renumbered before they ever reached the hosted project.**
+  `monitoring_query_origin` (was `20260808000300`, now `20260808000600`) and
+  `response_edited_audit_event` (was `20260808000500`, now `20260808000700`)
+  each collided with a same-day migration that had already been applied under
+  that version (`gate_rejection_reason_vocabulary` and `avatar_storage`
+  respectively). The duplicate versions broke `supabase db reset` — and
+  therefore `npm run db:verify-rls` — with a `schema_migrations` primary-key
+  conflict. The applied files keep their original versions; the unapplied
+  pair moved to free slots that still sort before
+  `20260809000100_automation_rule_authoring`, which must remain the last word
+  on `audit_events_known_event_type`.
