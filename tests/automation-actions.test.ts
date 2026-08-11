@@ -504,4 +504,31 @@ describe("setAutomationRuleEnabledAction", () => {
       dataSource.auditEvents.record = original;
     }
   });
+
+  it("refuses to enable an archived rule", async () => {
+    const scope = ushg.admin();
+    mockAuthorizeAs(scope);
+
+    const created = await createAutomationRuleAction(executableConfig("Rule to archive then enable"));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const simulated = await simulateAutomationRuleAction({ automationRuleId: created.data.id });
+    expect(simulated.ok).toBe(true);
+
+    const archived = await archiveAutomationRuleAction({ automationRuleId: created.data.id });
+    expect(archived.ok).toBe(true);
+
+    const result = await setAutomationRuleEnabledAction({
+      automationRuleId: created.data.id,
+      enabled: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/archived/i);
+
+    const unchanged = await dataSource.automationRules.get(scope, created.data.id);
+    expect(unchanged?.status).not.toBe("active");
+  });
 });

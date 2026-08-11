@@ -2139,6 +2139,17 @@ export function createDemoDataSource(): LiaDataSource {
 
         const value = automationRuleConfigSchema.parse(input);
 
+        // Same case-insensitive duplicate-name check `create` enforces,
+        // excluding the rule being updated itself — renaming a rule to its
+        // own name (whatever the casing) is not a collision.
+        const name = value.name.trim().toLowerCase();
+        const duplicate = orgRows(store().automationRules, scope).some(
+          (row) => row.id !== ruleId && row.name.trim().toLowerCase() === name,
+        );
+        if (duplicate) {
+          throw conflict("A rule with this name already exists.");
+        }
+
         // simulatedRevision is deliberately left alone: staleness is derived
         // by comparing it against the new `revision`, not reset here.
         const updated: AutomationRule = {
@@ -2192,6 +2203,13 @@ export function createDemoDataSource(): LiaDataSource {
       async setEnabled(scope, ruleId, enabled) {
         const rule = orgRows(store().automationRules, scope).find((row) => row.id === ruleId);
         if (!rule) throw notFound("Automation rule");
+
+        // An archived rule is soft-deleted: restore it before it can run
+        // again. Disabling stays permissive — an archived rule is never
+        // active while this guard holds, so turning it off is harmless.
+        if (enabled && rule.archivedAt !== null) {
+          throw conflict("This rule is archived. Restore it before enabling it.");
+        }
 
         // Enabling requires the rule to be genuinely ready — every condition
         // `activationProblems` checks, including a fresh simulation and

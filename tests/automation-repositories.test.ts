@@ -193,6 +193,43 @@ describe("automationRules.update", () => {
       ),
     ).rejects.toThrow(/conflict|archiv/i);
   });
+
+  it("refuses to rename a rule to another rule's name, case-insensitively", async () => {
+    const ruleA = await data.automationRules.create(ushg.admin(), executableConfig("Rule Alpha"));
+    await data.automationRules.create(ushg.admin(), executableConfig("Rule Beta"));
+
+    await expect(
+      data.automationRules.update(
+        ushg.admin(),
+        ruleA.id,
+        { ...executableConfig("rule BETA"), name: "rule BETA" },
+        ruleA.revision,
+      ),
+    ).rejects.toThrow(/already exists/i);
+  });
+
+  it("allows renaming a rule to its own name, same or different casing", async () => {
+    const created = await data.automationRules.create(
+      ushg.admin(),
+      executableConfig("Rule Gamma"),
+    );
+
+    const sameCasing = await data.automationRules.update(
+      ushg.admin(),
+      created.id,
+      executableConfig("Rule Gamma"),
+      created.revision,
+    );
+    expect(sameCasing.name).toBe("Rule Gamma");
+
+    const differentCasing = await data.automationRules.update(
+      ushg.admin(),
+      created.id,
+      executableConfig("RULE GAMMA"),
+      sameCasing.revision,
+    );
+    expect(differentCasing.name).toBe("RULE GAMMA");
+  });
 });
 
 describe("automationRules.archive", () => {
@@ -280,6 +317,20 @@ describe("automationRules.setEnabled readiness backstop", () => {
     await expect(
       data.automationRules.setEnabled(ushg.admin(), draft.id, true),
     ).rejects.toThrow(/simulate/i);
+  });
+
+  it("refuses to enable an archived rule, even one that is otherwise fully ready", async () => {
+    const created = await data.automationRules.create(
+      ushg.admin(),
+      executableConfig("Rule archived before enabling"),
+    );
+    await data.automationRules.recordSimulation(ushg.admin(), created.id, created.revision);
+    const archived = await data.automationRules.archive(ushg.admin(), created.id);
+    expect(archived.archivedAt).not.toBeNull();
+
+    await expect(
+      data.automationRules.setEnabled(ushg.admin(), created.id, true),
+    ).rejects.toThrow(/archived/i);
   });
 });
 

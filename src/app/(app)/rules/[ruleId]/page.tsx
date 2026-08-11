@@ -74,7 +74,7 @@ export default async function RuleDetailPage({ params }: RuleDetailPageProps) {
         description={sentence}
         actions={
           <div className="flex items-center gap-3">
-            <RuleToggle rule={rule} disabled={!canToggle} />
+            {archived ? null : <RuleToggle rule={rule} disabled={!canToggle} />}
             <RuleRowActions rule={rule} canManage={canManage} />
           </div>
         }

@@ -325,6 +325,14 @@ export async function setAutomationRuleEnabledAction(
     );
     if (!existing) throw notFound("Automation rule");
 
+    // A lifecycle refusal, not a readiness one — an archived rule is
+    // soft-deleted and must be restored before it can run again, so this is
+    // checked before (and does not get) the activation-refused audit trail
+    // readiness problems below receive.
+    if (enabled && existing.archivedAt !== null) {
+      throw conflict("This rule is archived. Restore it before enabling it.");
+    }
+
     if (enabled) {
       const problems = activationProblems(existing);
       if (problems.length > 0) {

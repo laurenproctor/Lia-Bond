@@ -2502,6 +2502,13 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           .select("*")
           .maybeSingle();
 
+        // The unique (organization_id, name) constraint is the duplicate
+        // check here too, mirroring `create` — renaming to a name another
+        // rule in the org already owns collides the same way creating one
+        // would.
+        if (error?.code === "23505") {
+          throw conflict("A rule with this name already exists.");
+        }
         if (error) fail(error, "update the rule");
         // A null row here, after the guards above passed against a fresh
         // read, means somebody else's write landed between that read and
@@ -2573,6 +2580,13 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       async setEnabled(scope, ruleId, enabled) {
         const current = await this.get(scope, ruleId);
         if (!current) throw notFound("Automation rule");
+
+        // An archived rule is soft-deleted: restore it before it can run
+        // again. Disabling stays permissive — an archived rule is never
+        // active while this guard holds, so turning it off is harmless.
+        if (enabled && current.archivedAt !== null) {
+          throw conflict("This rule is archived. Restore it before enabling it.");
+        }
 
         // Enabling requires the rule to be genuinely ready — every condition
         // `activationProblems` checks, including a fresh simulation and

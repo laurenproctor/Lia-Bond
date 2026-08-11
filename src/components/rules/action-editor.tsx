@@ -70,6 +70,14 @@ export function ActionEditor({
 }: ActionEditorProps) {
   const capability = ACTION_CAPABILITIES[value.type];
   const position = index + 1;
+  // A rule authored before `showInBuilder` existed (or seeded directly) can
+  // carry a hidden action type like `assign`/`tag`. Without an option for it,
+  // the select would silently fall back to showing the first listed type
+  // instead of the truth — so a hidden current type gets its own disabled
+  // option prepended.
+  const currentTypeIsHidden = !BUILDER_ACTION_TYPES.some(
+    (option) => option.type === value.type,
+  );
 
   let extra: ReactNode = null;
   if (value.type === "set_status") {
@@ -106,6 +114,11 @@ export function ActionEditor({
           disabled={disabled}
           onChange={(event) => onChange(buildDefaultAction(event.target.value as RuleActionType))}
         >
+          {currentTypeIsHidden ? (
+            <option value={value.type} disabled>
+              {capability.label}
+            </option>
+          ) : null}
           {BUILDER_ACTION_TYPES.map((option) => (
             <option key={option.type} value={option.type} disabled={!option.executable}>
               {option.label}
