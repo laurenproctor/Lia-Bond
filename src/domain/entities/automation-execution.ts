@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { RULE_ACTION_TYPES } from "./automation";
-import { uuidSchema, timestampSchema } from "../primitives";
+import { organizationOwnedSchema, uuidSchema, timestampSchema } from "../primitives";
 
 /**
  * Sweep and rule-execution vocabulary.
@@ -47,16 +47,16 @@ export const sweepCountersSchema = z.object({
 });
 export type SweepCounters = z.infer<typeof sweepCountersSchema>;
 
-export const automationSweepSchema = z.object({
-  id: uuidSchema,
-  organizationId: uuidSchema,
-  mode: z.enum(AUTOMATION_EXECUTION_MODES),
-  status: z.enum(["running", "completed", "failed"]),
-  startedAt: timestampSchema,
-  completedAt: timestampSchema.nullable(),
-  counters: sweepCountersSchema,
-  errorCode: z.string().nullable(),
-});
+export const automationSweepSchema = z
+  .object({
+    mode: z.enum(AUTOMATION_EXECUTION_MODES),
+    status: z.enum(["running", "completed", "failed"]),
+    startedAt: timestampSchema,
+    completedAt: timestampSchema.nullable(),
+    counters: sweepCountersSchema,
+    errorCode: z.string().nullable(),
+  })
+  .extend(organizationOwnedSchema.shape);
 export type AutomationSweep = z.infer<typeof automationSweepSchema>;
 
 export const executionActionOutcomeSchema = z.object({
@@ -70,8 +70,6 @@ export type ExecutionActionOutcome = z.infer<typeof executionActionOutcomeSchema
 
 export const automationRuleExecutionSchema = z
   .object({
-    id: uuidSchema,
-    organizationId: uuidSchema,
     sweepId: uuidSchema,
     automationRuleId: uuidSchema,
     ruleRevision: z.number().int().min(1),
@@ -89,6 +87,7 @@ export const automationRuleExecutionSchema = z
     startedAt: timestampSchema,
     completedAt: timestampSchema.nullable(),
   })
+  .extend(organizationOwnedSchema.shape)
   .superRefine((row, ctx) => {
     const applyStatus = (APPLY_EXECUTION_STATUSES as readonly string[])
       .includes(row.status);
