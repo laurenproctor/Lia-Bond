@@ -168,13 +168,16 @@ Reference: `public/reference-screens/09-locations.png`
 
 Route: `/rules`
 
+Built: active rules list, rule templates, the when/and/then builder,
+simulation, and enable/disable controls.
+
 Required modules:
 - Active rules list
 - Rule templates
-- Rule history
+- Rule history (Phase 2 — execution-dependent)
 - Simulation
 - When/and/then builder
-- Performance summary
+- Performance summary (Phase 2 — execution-dependent)
 - Enable/disable controls
 
 Reference: `public/reference-screens/10-rules-automation.png`

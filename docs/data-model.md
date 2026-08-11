@@ -117,10 +117,18 @@
 - id
 - organizationId
 - name
-- enabled
-- conditionsJson
-- actionsJson
+- description nullable
+- status (active | inactive | draft)
+- priority (0-1000, lower runs first)
+- conditions (typed JSON array; all conditions must match)
+- actions (typed JSON array)
+- revision
 - lastSimulatedAt nullable
+- simulatedRevision nullable
+- archivedAt nullable
+- lastRunAt nullable (null until real execution exists)
+- createdAt
+- updatedAt
 
 ### VoiceProfile
 - id
