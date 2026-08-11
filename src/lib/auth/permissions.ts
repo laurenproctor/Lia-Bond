@@ -19,6 +19,7 @@ export const PERMISSIONS = [
   "escalation.assign",
   "escalation.update_status",
   "automation_rule.toggle",
+  "automation_rule.manage",
   "brand_voice.update",
   "location.update_manager",
   "organization.manage_members",
@@ -79,6 +80,12 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // Automation changes what the product does without a human, so it stays with
   // owners, admins, and the communications lead who owns response policy.
   "automation_rule.toggle": ["owner", "admin", "communications_lead"],
+  // Structural rule changes. Same roles as `automation_rule.toggle` today —
+  // and as the `automation_rules_insert`/`update` RLS policies — but a distinct
+  // name, because writing organizational policy and arming it are different
+  // acts, and the day the product wants approvers to activate rules they did
+  // not author, that is a one-line edit here.
+  "automation_rule.manage": ["owner", "admin", "communications_lead"],
   // Brand voice sets how every generated response sounds, so it belongs with
   // automation rather than with administration: both change what the product
   // says without a person in the loop. The communications lead is the role

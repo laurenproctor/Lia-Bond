@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  automationRuleConfigSchema,
   BRAND_VOICE_AXIS_KEYS,
   canDecideOnDraft,
   canEditDraft,
@@ -74,9 +75,11 @@ import {
   toPlatformProfile,
   toPlatformSyncRun,
   toResponseDraft,
+  toSimulationCandidate,
   toUser,
 } from "@/lib/data/supabase/mappers";
 import { createMonitoringRepositories } from "@/lib/data/supabase/monitoring";
+import { activationProblems } from "@/lib/rules/readiness";
 
 /**
  * The Supabase adapter.
@@ -2120,6 +2123,31 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (error) fail(error, "load the analysis");
         return data ? toMentionAnalysis(data as Row) : null;
       },
+
+      async listSimulationCandidates(scope, { publishedAfter, limit }) {
+        // Selects `content` in full, not truncated: there is no excerpt
+        // column, and PostgREST's select grammar has no `left()` or other SQL
+        // truncation function to ask for one server-side. A generated
+        // `excerpt` column (or view) would fix this but is a schema change
+        // outside this adapter's scope — deferred follow-up. `content` is cut
+        // down to a ≤140-char excerpt in `toSimulationCandidate` below before
+        // it crosses the repository boundary, which is the guarantee
+        // `SimulationCandidate`'s doc comment actually makes; transferring
+        // the full column for up to `limit` (capped at 500) rows is an
+        // acceptable cost for a bounded preview read.
+        const { data, error } = await client
+          .from("mentions")
+          .select(
+            "id, platform_connection_id, location_id, source_type, rating, status, sentiment, risk_level, relevance_score, published_at, content",
+          )
+          .eq("organization_id", scope.organizationId)
+          .gte("published_at", publishedAfter)
+          .order("published_at", { ascending: false })
+          .limit(limit);
+
+        if (error) fail(error, "load simulation candidates");
+        return rows(data).map(toSimulationCandidate);
+      },
     },
 
     responseDrafts: {
@@ -2380,6 +2408,9 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       async list(scope, filter = {}) {
         let query = from("automation_rules", scope).order("priority").order("name");
 
+        // Archived rules are soft-deleted: hidden from the ordinary list
+        // unless the caller explicitly asks to see them (the archive tab).
+        if (!filter.includeArchived) query = query.is("archived_at", null);
         if (filter.statuses?.length) query = query.in("status", filter.statuses);
         if (filter.search) {
           const term = filter.search.replaceAll(",", " ").replaceAll("%", "");
@@ -2392,6 +2423,8 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       async get(scope, ruleId) {
+        // Unlike `list`, this returns archived rules too — the detail page
+        // renders them read-only rather than 404ing on an old link.
         const { data, error } = await from("automation_rules", scope)
           .eq("id", ruleId)
           .maybeSingle();
@@ -2399,12 +2432,175 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return data ? toAutomationRule(data as Row) : null;
       },
 
+      async create(scope, input) {
+        // Reparse at the boundary, house style: a caller reaching the
+        // repository directly bypasses none of the config schema's checks.
+        const value = automationRuleConfigSchema.parse(input);
+
+        const { data, error } = await client
+          .from("automation_rules")
+          .insert({
+            organization_id: scope.organizationId,
+            name: value.name,
+            description: value.description,
+            priority: value.priority,
+            conditions: value.conditions,
+            actions: value.actions,
+            status: "draft",
+            revision: 1,
+          })
+          .select("*")
+          .single();
+
+        // The unique (organization_id, name) constraint is the duplicate
+        // check here — no read-first lookup, so two concurrent creates with
+        // the same name cannot both slip past a check-then-insert race.
+        if (error?.code === "23505") {
+          throw conflict("A rule with this name already exists.");
+        }
+        if (error) fail(error, "create the rule");
+        return toAutomationRule(data as Row);
+      },
+
+      async update(scope, ruleId, input, expectedRevision) {
+        const rule = await this.get(scope, ruleId);
+        if (!rule) throw notFound("Automation rule");
+
+        // Structural edits are refused outright on an active rule (disable it
+        // first) or an archived one (it is soft-deleted, not editable).
+        if (rule.status === "active") {
+          throw conflict("Disable this rule to edit it.");
+        }
+        if (rule.archivedAt !== null) {
+          throw conflict("This rule is archived. Restore it before editing it.");
+        }
+
+        // Optimistic concurrency: the caller names the revision it read, so a
+        // save against a copy someone else has since changed fails loudly
+        // instead of silently clobbering their edit.
+        if (expectedRevision !== rule.revision) {
+          throw conflict(
+            "Someone else changed this rule since you loaded it. Reload to see the latest version.",
+          );
+        }
+
+        const value = automationRuleConfigSchema.parse(input);
+
+        const { data, error } = await client
+          .from("automation_rules")
+          .update({
+            name: value.name,
+            description: value.description,
+            priority: value.priority,
+            conditions: value.conditions,
+            actions: value.actions,
+            revision: expectedRevision + 1,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", ruleId)
+          .eq("revision", expectedRevision)
+          .select("*")
+          .maybeSingle();
+
+        // The unique (organization_id, name) constraint is the duplicate
+        // check here too, mirroring `create` — renaming to a name another
+        // rule in the org already owns collides the same way creating one
+        // would.
+        if (error?.code === "23505") {
+          throw conflict("A rule with this name already exists.");
+        }
+        if (error) fail(error, "update the rule");
+        // A null row here, after the guards above passed against a fresh
+        // read, means somebody else's write landed between that read and
+        // this one — the same lost race the revision check above exists to
+        // catch, just resolved by the database instead of the pre-read.
+        if (!data) {
+          throw conflict(
+            "Someone else changed this rule since you loaded it. Reload to see the latest version.",
+          );
+        }
+        return toAutomationRule(data as Row);
+      },
+
+      async archive(scope, ruleId) {
+        const rule = await this.get(scope, ruleId);
+        if (!rule) throw notFound("Automation rule");
+
+        // Idempotent: archiving an already-archived rule returns it as-is
+        // rather than erroring on a double-submitted form.
+        if (rule.archivedAt !== null) return rule;
+
+        if (rule.status === "active") {
+          throw conflict("Disable this rule before archiving it.");
+        }
+
+        const { data, error } = await client
+          .from("automation_rules")
+          .update({ archived_at: new Date().toISOString() })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", ruleId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "archive the rule");
+        if (!data) throw notFound("Automation rule");
+        return toAutomationRule(data as Row);
+      },
+
+      async recordSimulation(scope, ruleId, revision) {
+        const rule = await this.get(scope, ruleId);
+        if (!rule) throw notFound("Automation rule");
+
+        if (rule.revision !== revision) {
+          throw conflict("This rule changed since it was simulated. Simulate it again.");
+        }
+
+        const { data, error } = await client
+          .from("automation_rules")
+          .update({
+            last_simulated_at: new Date().toISOString(),
+            simulated_revision: revision,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", ruleId)
+          .eq("revision", revision)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "record the simulation");
+        // Null after a matching `get` means the rule was edited (and its
+        // revision bumped) between that read and this write — the same
+        // staleness the guard above exists to catch.
+        if (!data) {
+          throw conflict("This rule changed since it was simulated. Simulate it again.");
+        }
+        return toAutomationRule(data as Row);
+      },
+
       async setEnabled(scope, ruleId, enabled) {
         const current = await this.get(scope, ruleId);
         if (!current) throw notFound("Automation rule");
 
-        if (enabled && current.status === "draft") {
-          throw conflict("Finish and simulate this draft rule before enabling it.");
+        // An archived rule is soft-deleted: restore it before it can run
+        // again. Disabling stays permissive — an archived rule is never
+        // active while this guard holds, so turning it off is harmless.
+        if (enabled && current.archivedAt !== null) {
+          throw conflict("This rule is archived. Restore it before enabling it.");
+        }
+
+        // Enabling requires the rule to be genuinely ready — every condition
+        // `activationProblems` checks, including a fresh simulation and
+        // actions that are actually executable — enforced here as a backstop
+        // even though the rule builder and the list toggle both call the same
+        // check before ever getting this far.
+        if (enabled) {
+          const problems = activationProblems(current);
+          if (problems.length > 0) {
+            throw conflict(
+              "This rule can't be enabled yet: " +
+                problems.map((problem) => problem.message).join(" "),
+            );
+          }
         }
 
         const { data, error } = await client

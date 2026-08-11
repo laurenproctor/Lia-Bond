@@ -234,7 +234,7 @@ parallel write path.
   requires `monitoring.manage_queries`, the same permission that screen
   requires.
 - **Which query onboarding manages** is decided by `findOnboardingNewsQuery`
-  over the persisted `origin` column (`20260808000300_monitoring_query_origin`):
+  over the persisted `origin` column (`20260808000600_monitoring_query_origin`):
   among organization-wide brand queries, the wizard's own
   (`origin = 'onboarding'`) wins outright, then the oldest by `createdAt`
   (id as tiebreak) as the fallback for rows that predate the column — never

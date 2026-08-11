@@ -45,6 +45,7 @@ import {
   type User,
 } from "@/domain";
 import { DataError } from "@/lib/data/errors";
+import type { SimulationCandidate } from "@/lib/data/types";
 
 /**
  * Row mapping between PostgreSQL and the domain.
@@ -90,6 +91,19 @@ function isoOrNull(value: unknown): string | null {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+/**
+ * A short, single-line preview of a mention's content.
+ *
+ * Used only by `toSimulationCandidate`: the simulator's sample carries no
+ * full mention body, just enough to recognise the match by eye. Mirrors the
+ * demo adapter's `truncateExcerpt` exactly — same limit, same ellipsis rule.
+ */
+function truncateExcerpt(content: string, limit = 140): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit).replace(/\s+\S*$/, "")}…`;
 }
 
 export function toOrganization(row: Row): Organization {
@@ -347,6 +361,30 @@ export function toMention(row: Row): Mention {
 }
 
 /**
+ * The slim read `mentions.listSimulationCandidates` returns.
+ *
+ * Not a domain entity, so there is no Zod schema to re-parse against — this
+ * is a narrow, deliberately incomplete projection of a mentions row (see the
+ * doc comment on `SimulationCandidate` itself for why `excerpt` replaces the
+ * full `content` column).
+ */
+export function toSimulationCandidate(row: Row): SimulationCandidate {
+  return {
+    id: String(row.id),
+    platformConnectionId: String(row.platform_connection_id),
+    locationId: row.location_id ? String(row.location_id) : null,
+    sourceType: row.source_type as SimulationCandidate["sourceType"],
+    rating: num(row.rating),
+    status: row.status as SimulationCandidate["status"],
+    sentiment: row.sentiment as SimulationCandidate["sentiment"],
+    riskLevel: row.risk_level as SimulationCandidate["riskLevel"],
+    relevanceScore: num(row.relevance_score),
+    publishedAt: iso(row.published_at),
+    excerpt: truncateExcerpt(String(row.content ?? "")),
+  };
+}
+
+/**
  * A sync run.
  *
  * The counts arrive as five separate columns and are folded into one object,
@@ -546,6 +584,10 @@ export function toAutomationRule(row: Row): AutomationRule {
       conditions: row.conditions ?? [],
       actions: row.actions ?? [],
       lastRunAt: isoOrNull(row.last_run_at),
+      revision: row.revision,
+      lastSimulatedAt: isoOrNull(row.last_simulated_at),
+      simulatedRevision: row.simulated_revision ?? null,
+      archivedAt: isoOrNull(row.archived_at),
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
     },

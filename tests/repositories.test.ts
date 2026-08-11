@@ -24,6 +24,13 @@ beforeEach(() => {
   data = freshDataSource();
 });
 
+async function findRuleByName(name: string) {
+  const rules = await data.automationRules.list(ushg.admin(), { includeArchived: true });
+  const rule = rules.find((row) => row.name === name);
+  if (!rule) throw new Error(`Seeded rule "${name}" not found`);
+  return rule;
+}
+
 describe("mention filtering", () => {
   it("filters by status", async () => {
     const escalated = await data.mentions.list(ushg.admin(), { statuses: ["escalated"] });
@@ -310,13 +317,27 @@ describe("automation rule enable and disable", () => {
     expect(updated.status).toBe("inactive");
   });
 
-  it("re-enables an inactive rule", async () => {
-    const [inactive] = await data.automationRules.list(ushg.admin(), {
-      statuses: ["inactive"],
-    });
+  it("re-enables a rule that passes readiness", async () => {
+    // media-watch — the only seeded inactive rule — carries a `notify`
+    // action, which is not executable, so it can no longer stand in here
+    // (see the refusal case below). escalate-high-risk is active with a
+    // fresh simulation, so disabling then re-enabling it round-trips cleanly.
+    const active = await findRuleByName("Escalate high-risk mentions");
 
-    const updated = await data.automationRules.setEnabled(ushg.admin(), inactive!.id, true);
-    expect(updated.status).toBe("active");
+    const disabled = await data.automationRules.setEnabled(ushg.admin(), active.id, false);
+    expect(disabled.status).toBe("inactive");
+
+    const reenabled = await data.automationRules.setEnabled(ushg.admin(), active.id, true);
+    expect(reenabled.status).toBe("active");
+  });
+
+  it("refuses to re-enable a rule with unexecutable actions", async () => {
+    const mediaWatch = await findRuleByName("Flag high-authority media coverage");
+    expect(mediaWatch.status).toBe("inactive");
+
+    await expect(
+      data.automationRules.setEnabled(ushg.admin(), mediaWatch.id, true),
+    ).rejects.toThrow(/notification/i);
   });
 
   it("refuses to enable a draft rule", async () => {

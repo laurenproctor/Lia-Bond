@@ -428,6 +428,15 @@ export const AUDIT_EVENT_TYPES = [
   "escalation.status_changed",
   "automation_rule.enabled",
   "automation_rule.disabled",
+  // Rule authoring. previousState/newState carry the rule's own
+  // configuration — conditions, actions, priority — never mention content.
+  // automation_rule.simulated metadata carries counts only.
+  "automation_rule.created",
+  "automation_rule.updated",
+  "automation_rule.duplicated",
+  "automation_rule.archived",
+  "automation_rule.simulated",
+  "automation_rule.activation_refused",
   "location.manager_changed",
   // A location somebody typed in, as opposed to one discovered through an
   // integration. Kept apart from `location.created_from_integration` because

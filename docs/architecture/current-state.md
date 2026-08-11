@@ -617,6 +617,25 @@ same list; those are D91–D93. The rest were resolved by taking both sides.
 | D94 | `SEED_TABLE_COLUMNS` wins over the inline column lists | News monitoring pulled the seed generator's hand-written column lists into one module and added a test comparing them against the migrations in both directions — a response to hitting the same silent bug three times, where a column exists everywhere except the generator's list and simply never reaches `seed.sql`. Brand voice added a table to the old inline form. Folding it into the refactor puts the newest table under that test rather than outside it, which is the only version of this resolution that gets the benefit. |
 | D95 | Rejection reasons split three ways rather than one added | Only the ambiguity case was mislabelled, but the fix for it also retires an implicit convention: "score 0 means nothing matched" was load-bearing and documented only in a comment. Three reasons for three operator actions costs one extra enum value and makes each return site say what it means. |
 
+## Decisions made building rules and automation
+
+Rule authoring, simulation, and honest activation now exist end to end.
+Execution — a rule actually doing something to a mention — does not; it is
+the Phase 2 design recorded below the decisions.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D138 | Active rules cannot be structurally edited; disable → edit → re-simulate → enable | An edit mid-flight would let a rule someone is relying on change meaning with nobody re-checking it still holds. The constraint keeps "what an active rule does" always backed by a simulation of that exact configuration, at the cost of one disable click. |
+| D139 | `revision` doubles as optimistic-concurrency token and simulation-staleness marker | Activation requires `simulatedRevision === revision`. One counter instead of two: incrementing on every save both rejects a write against a stale copy and tells the authoring UI a simulation no longer reflects the saved rule, with no separate invalidation logic to keep in sync. |
+| D140 | One capability registry (`src/lib/rules/capabilities.ts`) is the single activatability gate | Zod schema validity says a rule is well-formed, not that Lia can do what it says — `notify` parses fine and still cannot enable, because no connector delivers it. Routing every activation check through one registry means an action becomes activatable in exactly one place, never at a second inline check that could drift from it. |
+| D141 | Strengthened `isAutoPublishSafe`: positive sentiment + low-only risk + routine review source + no approval/escalate conflict | Closes the `at_most medium` bug — a risk condition capped at medium still let medium-risk content through unattended, which the product spec's "high-risk content must always be escalated" promise cannot survive. All four legs must hold, and even a passing rule is not activatable yet: no connector implements automated publishing in Phase 1. |
+| D142 | Archive, not delete: `archived_at` column, no DELETE policy on `automation_rules`, deliberately | A deleted rule's history — what it once did, what an escalation traces back to — would disappear with it. RLS enforces the same posture as `audit_events`: nothing short of a migration removes a row. Restore-from-archive has no UI yet (deferred), but the data supports it. |
+| D143 | Seed truthfulness: no fabricated `lastRunAt`; drafts state why they are drafts; the three active seeded rules carry only executable actions and fresh simulations | The seed previously implied rules had run, had SLAs, and had capabilities that do not exist. Every seeded rule's `lastRunAt` is null because nothing executes in Phase 1, and the active rules are active honestly — actions the capability registry actually permits, simulated against their current revision — rather than staged to look busier than the product is. |
+| D144 | JSON-aware audit diffs: `toJson` recurses; diff compares non-primitives structurally | The existing diff serialized any non-primitive as `String(value)`, so a conditions/actions edit recorded `"[object Object]"` in the audit trail — evidence something changed, useless for what. Recursing through arrays and objects gives a rule-update event a real before/after; existing callers diffing primitives only (status, role, text lengths) are unaffected. |
+| D145 | `automation_rule.manage` vs `automation_rule.toggle` split | Authorship (create, edit, archive, simulate) and activation (enable/disable) are different questions even though the same roles hold both today. The split gives a future role that may draft rules but not switch them on somewhere to attach, without a later permission-matrix rework. |
+| D146 | Simulation requires a saved rule; staleness tracked on `revision`, not a config hash | No simulate-before-first-save. Reusing the counter that already guards concurrent edits needs no extra state and matches "editing invalidates simulation" for free; the cost is one extra save click before a first simulation. Simulation itself is read-only — no AI call, no side effects — and its audit metadata carries counts only. |
+| D147 | Phase 2 idempotency design: execution records keyed unique on (rule revision, mention) | A retry must not double-apply a rule, and an edited rule must re-apply rather than being silently treated as "already handled" — the composite unique key gives both for free via `on conflict do nothing`. The engine runs inside the existing analysis sweep, never from a page request, matching the no-verified-human-behind-it posture D88 established for analysis. |
+
 ## Known gaps after workflow 04
 
 Carried over from workflow 01:
@@ -1017,10 +1036,15 @@ Two useful things fell out of doing it:
   row so a later version can be compared against this one.
 - Cost per run is now measurable rather than theoretical: the sweep of 12
   mentions spent roughly 1,500 input and 5,200 output tokens.
-- **`20260808000500_response_edited_audit_event.sql` has not been applied to
-  the hosted Supabase project yet.** It is the migration that adds
-  `response.edited` to `audit_events_known_event_type`; until the next `npm
-  run db:migrate` (or equivalent hosted deploy) applies it, saving a composer
-  edit or approving one against the hosted database hits the same `23514`
-  rejection D93 describes for an unlisted event type, even though the demo
-  adapter and every local test already pass.
+- **Two migration files shared versions with unrelated siblings and were
+  renumbered before they ever reached the hosted project.**
+  `monitoring_query_origin` (was `20260808000300`, now `20260808000600`) and
+  `response_edited_audit_event` (was `20260808000500`, now `20260808000700`)
+  each collided with a same-day migration that had already been applied under
+  that version (`gate_rejection_reason_vocabulary` and `avatar_storage`
+  respectively). The duplicate versions broke `supabase db reset` — and
+  therefore `npm run db:verify-rls` — with a `schema_migrations` primary-key
+  conflict. The applied files keep their original versions; the unapplied
+  pair moved to free slots that still sort before
+  `20260809000100_automation_rule_authoring`, which must remain the last word
+  on `audit_events_known_event_type`.
