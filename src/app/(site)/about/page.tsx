@@ -12,6 +12,16 @@ import {
   ABOUT_CAPABILITIES,
   ABOUT_FEEDBACK_SIGNALS,
   ABOUT_PRINCIPLES,
+  ABOUT_INTRO_PROSE,
+  ABOUT_AI_PHILOSOPHY_PROSE,
+  ABOUT_CAPABILITIES_INTRO,
+  ABOUT_CAPABILITIES_CONCLUSION,
+  ABOUT_FEEDBACK_INTRO,
+  ABOUT_FEEDBACK_CONCLUSION,
+  ABOUT_TARGET_ORGS_PROSE,
+  ABOUT_STORYWORLDING_PROSE,
+  ABOUT_FOUNDER_PROSE,
+  ABOUT_FUTURE_VISION_PROSE,
 } from "@/lib/site/content/about";
 
 export const metadata: Metadata = {
@@ -60,18 +70,9 @@ export default function AboutPage() {
           Lia is an AI-powered customer intelligence and response platform
           built for businesses that care about how they are experienced.
         </Lede>
-        <Body>
-          Customers are constantly telling businesses what they think. They
-          leave reviews, ask questions, post comments, share frustrations,
-          recommend products, describe experiences, and signal what they want
-          next.
-        </Body>
-        <Body>
-          The problem is no longer a lack of feedback. The problem is making
-          sense of it all, responding thoughtfully, and turning thousands of
-          individual interactions into something useful. Lia exists to help
-          businesses do that.
-        </Body>
+        {ABOUT_INTRO_PROSE.map((paragraph) => (
+          <Body key={paragraph}>{paragraph}</Body>
+        ))}
       </header>
 
       <Section tinted>
@@ -79,38 +80,16 @@ export default function AboutPage() {
           Technology can scale communication. Judgment is what makes it
           meaningful.
         </SectionHeading>
-        <Body>
-          Artificial intelligence makes it possible to process more customer
-          conversations than any individual team could reasonably manage. But
-          scale alone is not the goal.
-        </Body>
-        <Body>
-          A technically correct response can still feel indifferent. A
-          perfectly efficient system can still misunderstand context. And
-          automation without judgment can create distance at precisely the
-          moment a customer is trying to be heard.
-        </Body>
-        <Body>
-          We believe the strongest applications of AI do something different:
-          they give people greater capacity to listen.
-        </Body>
-        <Body>
-          Lia uses technology to help organizations understand what customers
-          are saying, identify what matters, respond consistently, and
-          recognize patterns that would otherwise disappear inside thousands
-          of individual interactions. The technology does the work computers
-          are good at. People remain responsible for judgment.
-        </Body>
+        {ABOUT_AI_PHILOSOPHY_PROSE.map((paragraph) => (
+          <Body key={paragraph}>{paragraph}</Body>
+        ))}
       </Section>
 
       <Section>
         <SectionHeading className={`mb-6 ${MEASURE}`}>
           What Lia does
         </SectionHeading>
-        <Body>
-          Lia brings customer conversations into a single intelligence layer.
-          The platform is designed to help businesses:
-        </Body>
+        <Body>{ABOUT_CAPABILITIES_INTRO}</Body>
         <ul className="my-8 grid max-w-[900px] grid-cols-1 gap-x-[clamp(24px,4vw,56px)] gap-y-4 md:grid-cols-2">
           {ABOUT_CAPABILITIES.map((capability) => (
             <li
@@ -125,10 +104,7 @@ export default function AboutPage() {
             </li>
           ))}
         </ul>
-        <Body>
-          The objective is not to automate every conversation. It is to make
-          every conversation more manageable, more informed, and more useful.
-        </Body>
+        <Body>{ABOUT_CAPABILITIES_CONCLUSION}</Body>
       </Section>
 
       <Section tinted>
@@ -163,11 +139,7 @@ export default function AboutPage() {
         <SectionHeading className={`mb-6 ${MEASURE}`}>
           Customer feedback is more than reputation management
         </SectionHeading>
-        <Body>
-          A review is not merely something to answer. It is evidence.
-          Thousands of reviews become a record of what customers experience
-          repeatedly.
-        </Body>
+        <Body>{ABOUT_FEEDBACK_INTRO}</Body>
         <ul className={`my-6 flex ${MEASURE} flex-col gap-3`}>
           {ABOUT_FEEDBACK_SIGNALS.map((signal) => (
             <li
@@ -182,36 +154,16 @@ export default function AboutPage() {
             </li>
           ))}
         </ul>
-        <Body>
-          Feedback contains information about the business itself. Lia is
-          being built to help organizations move beyond responding to
-          individual reviews and toward understanding the larger story those
-          interactions tell.
-        </Body>
+        <Body>{ABOUT_FEEDBACK_CONCLUSION}</Body>
 
         <SectionHeading
           className={`mt-[clamp(40px,6vw,64px)] mb-6 ${MEASURE} text-[clamp(22px,2.6vw,32px)]!`}
         >
           Built for organizations with reputations worth protecting
         </SectionHeading>
-        <Body>
-          Lia is designed for businesses where customer experience happens
-          repeatedly, across teams, locations, and channels: hospitality
-          groups, restaurants, retailers, service businesses, multi-location
-          organizations, and other companies whose reputation is shaped one
-          interaction at a time.
-        </Body>
-        <Body>
-          As those organizations grow, maintaining attentiveness becomes
-          harder. The founder may once have read every review. A general
-          manager may once have known every customer complaint. A small team
-          may once have understood instinctively how the business should
-          respond. Scale changes that.
-        </Body>
-        <Body>
-          Lia is intended to preserve that institutional awareness as
-          organizations become more complex.
-        </Body>
+        {ABOUT_TARGET_ORGS_PROSE.map((paragraph) => (
+          <Body key={paragraph}>{paragraph}</Body>
+        ))}
       </Section>
 
       <Section tinted>
@@ -236,24 +188,9 @@ export default function AboutPage() {
         <SectionHeading className={`mb-6 ${MEASURE}`}>
           A Storyworlding company
         </SectionHeading>
-        <Body>
-          Lia is a Storyworlding company. Founded by Lauren Proctor,
-          Storyworlding builds and stewards a portfolio of companies that
-          place human judgment, relationships, and agency at the center of
-          emerging technology.
-        </Body>
-        <Body>
-          We believe emerging technologies will change not only what people
-          can do, but how people relate to businesses, institutions,
-          information, one another, and eventually themselves. That creates an
-          enormous field of technological possibility. It also creates
-          questions technology cannot answer on its own.
-        </Body>
-        <Body>
-          What should remain human? Where should judgment live? Which
-          relationships are worth protecting? What becomes more important when
-          intelligence becomes abundant?
-        </Body>
+        {ABOUT_STORYWORLDING_PROSE.map((paragraph) => (
+          <Body key={paragraph}>{paragraph}</Body>
+        ))}
         <Body>
           Storyworlding builds companies around those questions.{" "}
           <strong className="font-semibold text-site-ink">
@@ -269,50 +206,18 @@ export default function AboutPage() {
         >
           Founded by Lauren Proctor
         </SectionHeading>
-        <Body>
-          Lauren Proctor is an entrepreneur and marketing strategist who has
-          spent her career working at the intersection of technology, media,
-          brands, and human behavior. She previously co-founded a technology
-          platform in the creator and influencer economy that was acquired by
-          Twitter, and has since worked with organizations on positioning,
-          growth, digital strategy, customer acquisition, and emerging
-          technologies.
-        </Body>
-        <Body>
-          Lia grew from a simple observation: businesses have never had access
-          to more information about what their customers think, yet many still
-          struggle to hear them at scale.
-        </Body>
-        <Body>
-          Artificial intelligence changes what is possible. The opportunity is
-          not simply to generate more responses. It is to build better systems
-          for listening.
-        </Body>
+        {ABOUT_FOUNDER_PROSE.map((paragraph) => (
+          <Body key={paragraph}>{paragraph}</Body>
+        ))}
       </Section>
 
       <Section tinted>
         <SectionHeading className={`mb-6 ${MEASURE}`}>
           What we are building toward
         </SectionHeading>
-        <Body>
-          Today, Lia helps businesses manage and understand customer
-          conversations. The larger ambition is to create an intelligence
-          system around the relationship between businesses and their
-          customers.
-        </Body>
-        <Body>
-          A system that can recognize patterns across thousands of
-          interactions. A system that understands the difference between an
-          isolated complaint and an emerging problem. A system that knows when
-          automation is sufficient and when someone should pay attention. A
-          system that helps organizations become more responsive without
-          becoming less human.
-        </Body>
-        <Body>
-          The most valuable outcome of artificial intelligence may not be
-          removing people from every process. It may be giving people enough
-          leverage to pay attention to the things that deserve them.
-        </Body>
+        {ABOUT_FUTURE_VISION_PROSE.map((paragraph) => (
+          <Body key={paragraph}>{paragraph}</Body>
+        ))}
         <PullLine>That is the company we are building.</PullLine>
       </Section>
 
