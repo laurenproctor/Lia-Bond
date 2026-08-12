@@ -162,9 +162,16 @@ Workflow 03 established that **a sync may not write Lia state**. This workflow
 establishes the mirror: **an analysis may not write source state.**
 
 Analysis never touches `content`, `rating`, `author_name`, `published_at`, or
-any `source_*` column. `MentionAnalysisOutcome` has fields for exactly four
-columns, so the guarantee is structural rather than a rule a call site has to
-remember.
+any `source_*` column. `MentionAnalysisOutcome` (workflow 04) had fields for
+exactly four columns, so the guarantee was structural rather than a rule a
+call site has to remember. Its successor since the G1 occurrence lifecycle,
+`ApplyAnalysisOccurrenceInput` (the parameter list of
+`apply_analysis_occurrence` — see `docs/architecture/current-state.md`
+D160/D161), carries the same four columns and nothing else — and now also
+has no `status` field: the final mention status is derived inside the
+database from current state and the escalation contract's result, never
+supplied by the caller. The structural guarantee this section describes now
+covers both what an analysis may write and what it may decide.
 
 Advancing status only from `new` means a mention somebody has escalated,
 dismissed, or responded to keeps the state that person set. In Postgres this is

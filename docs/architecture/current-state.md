@@ -432,9 +432,11 @@ reachable without a session, so provider errors are logged and swallowed too.
   than the provider rule for Google, and for a specific reason: a model error
   can echo the prompt, and the prompt contains a review and a reviewer's name.
 - An analysis writes only `sentiment`, `risk_level`, `relevance_score`, and a
-  status advanced from `new`. Source-owned columns are not reachable from
-  `MentionAnalysisOutcome`, the mirror of the rule that keeps a sync out of
-  Lia's workflow state.
+  final status the database itself derives from the mention's current state —
+  never a status the caller names. Source-owned columns are not reachable from
+  `ApplyAnalysisOccurrenceInput` (the G1 occurrence-lifecycle successor to the
+  now-deleted `MentionAnalysisOutcome`: see D160, D161), the mirror of the rule
+  that keeps a sync out of Lia's workflow state.
 - A synchronisation writes only source-owned fields. Lia's workflow state —
   status, sentiment, risk, assignment, drafts, approvals, escalations — is not
   reachable from `IngestMentionInput`, so an ingest cannot overwrite it even by
@@ -524,10 +526,10 @@ reachable without a session, so provider errors are logged and swallowed too.
 | D36 | One call per mention returning one combined analysis | `mention_analyses` is one row carrying all five results — the schema already said this. The fields are interdependent, so five calls would each re-read the review and still merge into one row. |
 | D37 | Analysis is its own run, with a partial unique index as the lock | Mirrors `platform_sync_runs`. An application check is two statements with a race between them, and serverless means two requests are routinely two processes. |
 | D38 | High and critical risk auto-create an open, unassigned escalation | Keeps the product spec's promise. Reversible by dismissal, and an unowned item in the escalations centre is exactly the "somebody must look at this" signal. |
-| D39 | An analysis may not write source state | The mirror of D22. `MentionAnalysisOutcome` has fields for four columns and nothing else, so the guarantee is structural rather than a rule a call site must remember. |
+| D39 | An analysis may not write source state | The mirror of D22. `MentionAnalysisOutcome` had fields for four columns and nothing else, so the guarantee was structural rather than a rule a call site must remember. **Superseded in shape, not in force, by D160/D161:** `MentionAnalysisOutcome` no longer exists; its successor, `ApplyAnalysisOccurrenceInput` (the parameter list of `apply_analysis_occurrence`), carries the same four columns and nothing else — no `content`, `rating`, `author_name`, `published_at`, or any `source_*` field. The guarantee is now structural in a second dimension too: the type has no `status` field and no `due_at` field, because the final mention status and the escalation's due date are no longer caller-supplied at all — the database derives the status from current state (D161) and `raise_escalation` is called with `due_at := null` from every entry point. An analysis cannot write source state, and, as of G1, it cannot dictate the workflow outcome either; both are absent from the type rather than merely unused by convention. |
 | D40 | Rating-only reviews are analysed deterministically, with no model call | A rating with no text has nothing to classify. The saving is incidental — the real reason is that asking a model to explain a wordless review invites it to invent a reason, and an invented reason stored as an analysis would be quoted back by a later drafting workflow. |
 | D41 | Reviewer display names are sent to the model | The user's explicit decision. Recorded because it sends personal data to a third party for a classification task that does not require it. |
-| D42 | The `mention_analyses` insert is the per-item commit point | No transaction is available (D17). Ordering escalation → mention update → analysis insert means a crash costs a repeated call, never a silently un-analysed mention. Analysis-first would leave a record that looks analysed, never gets its risk level, and is never selected again. |
+| D42 | The `mention_analyses` insert is the per-item commit point | No transaction is available (D17). Ordering escalation → mention update → analysis insert means a crash costs a repeated call, never a silently un-analysed mention. Analysis-first would leave a record that looks analysed, never gets its risk level, and is never selected again. **Superseded by D160/D161.** This reasoning optimised an ordering of three independent writes because no transaction was available at the repository layer; the G1 occurrence lifecycle removes the choice instead. `record_analysis_occurrence` is now the sole commit point for the classification itself (insert-or-load on the event key), and `apply_analysis_occurrence` applies the escalation, the mention transition, and the completion stamp as one Postgres transaction — there is no longer an ordering of three separate writes to reason about, and no window in which an escalation exists without its mention transition or vice versa. `analyzeOne`'s doc comment in `src/lib/analysis/analyze.ts` states the replacement crash matrix in full. |
 | D43 | `effort` left at the API default | Judging whether a mildly-worded review describes a safety incident is the call the guardrails rest on. Sweeping down needs labelled data, not a guess made before the feature has run. |
 | D44 | Synchronous Messages API, not Batches | Batches are half the price and can take an hour. Wrong for a button somebody is waiting on; the right home for a future overnight run. |
 | D45 | A run's first model call goes alone | The system prompt is cached, and no request can read an entry another is still writing. Firing the batch at once would pay full price for every mention. |
@@ -656,7 +658,28 @@ against real data does not — the Supabase adapter deliberately throws on
 | D155 | The cron route folds a *returned-but-unsuccessful* analysis run into `degraded`, and treats "every attempted organization's analysis failed" and "every attempted execution sweep failed" as two independent triggers for `failed`/503 | `analyzeMentions` can return normally carrying an error code and nothing analyzed — a run that succeeds at returning while succeeding at nothing — so counting only thrown exceptions against status, the route's first reading, rendered a total outage indistinguishable from an organization with no backlog. `analysisRunsWithErrors`/`analysisRunsWithoutProgress` close that gap (closes F8). The 503 clause is a disjunction, not a conjunction — matching the spec's parenthetical — because requiring both halves to fail before paging would leave the execution half structurally unable to report systemic breakage on its own: a sweep is only attempted after its own organization's analysis already succeeded, so it can never independently satisfy an analysis-side conjunct. Accepted consequence for the runbook: while the allowlist holds a single organization, that organization's sweep throwing is the only attempted execution sweep, so it alone satisfies "every attempted sweep failed" and pages the whole invocation — honest paging for a single-tenant rollout, worth revisiting only if the allowlist grows before G2. |
 | D156 | An authorable-but-unwired action executes to `blocked` with the outcome code `action_not_executable`, driven off `ACTION_CAPABILITIES` in both G0 and G1 | `notify` (and anything else D140's registry marks non-executable) parses as a valid action and can be authored, so a unit can legitimately be handed one. Treating it as silently done would report an effect nobody delivered; throwing would classify a configuration fact as a technical failure and burn a retry. `activationProblems` already stops such an action reaching an active rule, so the code is a backstop for the case where one arrives anyway — and it says exactly which case it is. The string is part of the outcome vocabulary the G1 RPC is parity-tested against: the SQL must emit `action_not_executable` for the same actions, and must derive "which actions" from the same capability registry rather than a hand-copied list that could drift from it. |
 | D157 | The executor ignores `escalate`'s `assigneeUserId` by design; the field stays in the rule schema as V1 compatibility only | `ruleActionSchema`'s `escalate` variant carries `assigneeUserId`, but Phase 1 pins it to null for every authorable rule — the builder's `buildDefaultAction` writes null and exposes no editor for it, and every seeded and templated `escalate` action is null too. Meanwhile `createEscalationInputSchema` deliberately has no assignee field at all (an escalation raised without a human has no owner yet; an unassigned item *is* the "somebody must look at this" signal) — there is nowhere for the value to land, and inventing an assignment path would make the executor claim a routing capability the escalation model does not have. So the executor reads the action, drops the field, and records the escalation unassigned. Recorded rather than left implicit because a silent drop is exactly the kind of thing a G1 parity test would otherwise flag as a twin/RPC divergence: the RPC must drop it too. Revisit when escalations gain an assignee — at that point this becomes a real behaviour change, not a schema cleanup. |
-| D158 | Escalation dedupe is open-only, globally: `escalations.create` (analysis path and rule execution alike) blocks a new escalation only while an *open* one exists on the mention, enforced by a partial unique index (at most one open escalation per mention); resolving Q7 after the G0 merge | Never-per-mention permanently capped a mention at one escalation for its lifetime, which breaks the product's "high-risk content must always be escalated" promise the first time content changes after a handled escalation (a review edited to add a legal threat could never resurface). Re-escalation is not a hair trigger: it requires a human to close the old escalation, a human to re-triage the mention off `escalated` (the matrix refuses escalate from `escalated` and permanently from `dismissed`), and a genuinely new analysis occurrence — rule execution's idempotency key already carries the occurrence (`trigger_analysis_id`), and the analysis path's crash-retry safety survives because a just-created escalation is open and therefore still blocks the retry. Applied to both paths at once so the platform keeps one escalation contract, with the invariant in the schema (partial unique index) rather than a read-then-check. Mention-level `dismissed` stays the sole permanent "never again" control; no resolved-versus-dismissed semantic exists at the escalation level. Lands as a G1 task: contract change + index migration, deliberate updates to G0's pinned `escalation_exists` tests, re-escalation coverage for both paths, and false-positive re-escalation recorded as an apply-phase watch item. |
+| D158 | Escalation dedupe is open-only, globally: `escalations.create` (analysis path and rule execution alike) blocks a new escalation only while an *open* one exists on the mention, enforced by a partial unique index (at most one open escalation per mention); resolving Q7 after the G0 merge | Never-per-mention permanently capped a mention at one escalation for its lifetime, which breaks the product's "high-risk content must always be escalated" promise the first time content changes after a handled escalation (a review edited to add a legal threat could never resurface). Re-escalation is not a hair trigger: it requires a human to close the old escalation, a human to re-triage the mention off `escalated` (the matrix refuses escalate from `escalated` and permanently from `dismissed`), and a genuinely new analysis occurrence — rule execution's idempotency key already carries the occurrence (`trigger_analysis_id`), and the analysis path's crash-retry safety survives because a just-created escalation is open and therefore still blocks the retry. Applied to both paths at once so the platform keeps one escalation contract, with the invariant in the schema (partial unique index) rather than a read-then-check. Mention-level `dismissed` stays the sole permanent "never again" control; no resolved-versus-dismissed semantic exists at the escalation level. Lands as a G1 task: contract change + index migration, deliberate updates to G0's pinned `escalation_exists` tests, re-escalation coverage for both paths, and false-positive re-escalation recorded as an apply-phase watch item. **Landed.** Migrations `20260812000100`–`20260812000600` (below); the contract itself is `20260812000300_escalation_contract.sql` (D159). |
+
+## Decisions made building rule execution (G1)
+
+The internal-`apply` gate from `docs/superpowers/specs/2026-08-11-rules-execution-phase2-design.md`
+now exists end to end against real Postgres: the shared escalation contract
+and the occurrence lifecycle it depends on, the transactional execution RPC,
+atomic sweep claiming, audit hardening, and the CI harness that keeps SQL and
+TypeScript from drifting apart. Six migrations, `20260812000100` through
+`20260812000600`. Nothing in this worktree turns `apply` on for any
+organization — that is an operator action against `RULES_EXECUTION_MODE` and
+`RULES_EXECUTION_ORG_ALLOWLIST`, gated by the runbook below.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D159 | The escalation contract (`raise_escalation`) is the sole creator of escalation rows, enforced by grant rather than by convention — `insert` on `escalations` is revoked from every role including `service_role`, and `raise_escalation` itself is granted to nobody, not even `service_role` — so the only path to a new escalation is calling `apply_analysis_occurrence` or `execute_automation_rule`, both `security definer`, which reach it as the function owner | A function only the owner can call cannot be invoked by an application role holding a stolen or misconfigured grant, which closes the class of bug a simple "only `service_role` may call this" grant does not: `service_role` itself is excluded, so even a compromised service-role credential cannot create an escalation except through one of the two audited transactional entry points. Inside the function, the contract is a ladder evaluated in a fixed, load-bearing order: occurrence identity is mandatory (`p_trigger_analysis_id` null raises `22004` — an escalation with no provenance cannot exist), provenance is validated *before* any replay lookup (the supplied occurrence must belong to the named mention and organization, or the call raises `23503` and returns nothing — never another mention's escalation id), and only then does the ladder check, in order: occurrence replay (this exact occurrence already has an escalation — return it, whatever the mention's current status, because a consumed occurrence reports history and never mutates state — the "dismissed-replay" case: a mention dismissed after its escalation was created still returns that escalation on replay rather than `mention_dismissed`), mention dismissed, an open escalation already exists, the mention is already `escalated` awaiting retriage, or create. The return contract is precise — `(escalation_id, created, reason)` with `reason` naming exactly which arm answered (`occurrence_replayed`, `mention_dismissed`, `escalation_exists`, `awaiting_retriage`, or `null` on creation) — so callers never have to infer intent from a null id alone. Creation and its audit event commit in the same statement sequence inside the one transaction, so no crash can produce an escalation with no trail. The fix-round ruling from Task 4 governs the replay case at the caller: `apply_analysis_occurrence` maps `occurrence_replayed` to *preserve the mention's current status*, never to `escalated` — a human decision made between recording and a replayed application (dismissing the mention, for instance) is never overwritten by a replay. |
+| D160 | Occurrence identity is the logical analysis event `(organization_id, analysis_run_id, mention_id)`, enforced by a partial unique index (`mention_analyses_one_per_event`); "pending" (`outcome_applied_at is null`) is a separate lifecycle invariant enforced by its own partial unique index (`mention_analyses_one_pending`), explicitly **not** the idempotency key | Every pipeline recording happens inside a run, so the run id is the identity every recorder of the same event carries — collapsing recording onto that key is what makes `record_analysis_occurrence` idempotent under every arrival order, including a late recorder arriving after the event already completed (its unique-violation arm on `mention_analyses_one_per_event` returns the stored row with `created: false` and discards the late output). Pending is a different question — "does this mention have exactly one unfinished occurrence to recover" — and keeping it a separate index means a *second, distinct* event arriving while an older one is still pending is handed the older pending row (`created: false`) rather than either colliding with it or silently starting a second recovery target; the caller finishes the old event first. `analysis_run_id`'s foreign key was hardened from `on delete set null` to `on delete restrict`, because a null run id would fall outside the partial index and make identity evidence for that row unrecoverable — nothing deletes runs today, so the constraint converts "never happens" into "cannot happen." Stated plainly, the honest scope of the guarantee: the database guarantees exactly one durable occurrence row and exactly one applied outcome per logical event, under every arrival order and every crash point. It does **not** guarantee exactly one model call — two racing recorders can each pay for a classification before either inserts, and only one insert wins; that race is bounded only by the per-organization analysis-run lock (D37), a coarser mechanism than the occurrence contract, and the cost of losing it is one wasted classification, never a duplicate occurrence or a duplicate applied effect. |
+| D161 | The final mention status is derived inside `apply_analysis_occurrence` from the mention's current state and the escalation ladder's result — never supplied by a caller — and a human decision made between recording and application is never overwritten | `escalation_id`/`created`/`reason` map to status as: `created` or `escalation_exists` → `escalated`; `awaiting_retriage` → preserve `escalated`; `mention_dismissed` → preserve `dismissed`; `occurrence_replayed` → preserve the mention's *current* status, whatever it now is. The non-escalating branch is the mirror: `new` → `analyzed`, every other current status preserved, because a status the mention already holds (human-set or previously automated) is a decision this occurrence has no authority to overturn. `occurrence_replayed` preserving current status rather than re-deriving `escalated` is the fix-round semantics from Task 4's ruling: the v5 plan's SQL sketch would have moved a dismissed mention back to `escalated` on a replay, contradicting the user's explicit instruction that "replay must never change the dismissed state" — the guarantee governs, and the shipped SQL matches the ruling, not the sketch. |
+| D162 | The audit contract for execution: identifiers, outcomes, status, SQLSTATE, and counts only — never mention, review, or rule-configuration content — written exclusively by service-role/security-definer paths, with the RPCs writing their own events inside the same transaction as the effects they describe | `automation_rule.executed` and `automation_rule.execution_failed` metadata carries `originSweepId` (the sweep that first claimed the unit — preserved across retries because the claim insert's `on conflict do nothing` never updates it), `attemptSweepId` (the sweep making *this* call), `mentionId`, `analysisId`, outcome counts (`applied`/`blocked`/`noOp`), and on failure `errorCode` (this attempt's SQLSTATE) — the same metadata-key vocabulary on both branches so a reader does not need to know which branch produced a row to query it. No mention content, no rule name beyond what the escalation's own `summary` field already states for a human reading the escalation itself. This lands together with `audit_events_insert` being dropped and `insert` revoked from `authenticated` (spec §6, closes F3): actor-stamping alone (`actor_user_id = auth.uid()`) stops impersonation but not fabrication, so the only remaining writers are the service-role adapter method (`recordAuditEvent`, one change point per F16) and the security-definer functions (`raise_escalation`, `execute_automation_rule`) writing their own rows as the function owner, inside the transaction whose effects they describe — an audit row for an execution can never exist without the execution it describes, and vice versa. |
+| D163 | `execute_automation_rule` executes only the stored rule revision — the caller names a unit (`rule_id`, `revision`, `mention_id`, `analysis_id`), never supplies action payloads — and validates the stored `actions` jsonb null-safely against all eight authorable action shapes before any business write | A caller-supplied payload would let a request define what a "rule" does at execution time, defeating the point of `revision`-gated activation (D138, D139): what runs is what was simulated and activated, looked up fresh from the row under `for share`, with a stale revision failing closed (`rule_changed`, terminal). Validation covers `generate_draft`, `auto_publish`, `require_approval`, `assign`, `escalate`, `notify`, `tag`, and `set_status` — the same eight `ruleActionSchema` recognizes — and is null-safe by construction: every case arm is wrapped in `coalesce(…, false)` so a missing or null field fails validation rather than evaluating to SQL `null`, which `bool_and` would silently discard from the aggregate and let slip through. A validation failure is `would_fail_validation` in dry run and terminal `failed`/`invalid_action` in apply, before any mutation. Once inside the apply loop, each action's raw decision (from `automation_set_status_decision`/`automation_escalate_decision`, or the escalation ladder's own `reason`) is mapped at the boundary into the pinned outcome vocabulary — `escalation_exists`/`occurrence_replayed` become `no_op`/`escalation_exists`; the matrix-unreachable `mention_dismissed`/`awaiting_retriage` arms map defensively to `blocked`/`forbidden_transition` — so SQL-internal reason strings never leak into the outcome rows the UI and the parity tests read. |
+| D164 | Sweep claiming is one atomic decision inside `claim_automation_sweep`: the existing `running` row (if any) is locked `for update` first, so exactly one caller performs a stale-lease takeover and every other concurrent caller blocks on that lock, re-reads, and receives the winner's claim as an ordinary `claimed: false` outcome — never a race against the insert | An application-level "check then insert" would race exactly like every other unlocked check-then-write in this codebase (D24's reasoning restated for sweeps). Locking the running row first, rather than racing straight to the insert, means the 30-minute lease-expiry decision itself only ever happens once per stale row, by whichever caller won the lock — no second caller can also decide the lease is expired and insert a competing claim. The unique-violation absorption on the fallback insert path is diagnostics-verified rather than assumed: `get stacked diagnostics constraint_name` is checked against the literal `automation_sweeps_one_running`, and anything else re-raises, because a partial unique index has no entry in `pg_constraint` — the constraint-name string in the diagnostics is the only reliable identity available, and asserting it (rather than swallowing every `unique_violation`) keeps an unrelated future unique constraint on the same table from being silently absorbed here too. |
+| D165 | CI is the parity gate: a `database` job runs the full `db:verify-execution` harness (RLS + execution-verification + the generated matrix-parity SQL + the concurrency race script) against a freshly started local Supabase instance on every PR and push to `master`, at a Supabase CLI version pinned to the combination verified safe during Task 11 | A TypeScript-only review of a matrix or RPC change cannot catch SQL that silently disagrees with `transitions.ts` or the demo adapter's twin; running the harness on every change is what makes that drift a merge blocker instead of a later production surprise. The CLI pin (`2.101.0`, Postgres 17.6) is not cosmetic: Task 11 found that this local Postgres image **segfaults** the whole cluster on an EXECUTE-denied call of a non-immutable function after `set role` — exactly the shape of an unauthorized PostgREST RPC call — while an *immutable* function under the same denial returns a clean `42501` (the ACL check happens during constant folding rather than in the executor, which is what narrows the trigger to non-immutable functions specifically). `db:verify-execution` is written around this: the one place the spec calls for asserting "`service_role` cannot execute `raise_escalation` directly" is proven statically, from `pg_catalog.has_function_privilege`, rather than by attempting the denied call — because attempting it would take the harness's own database down mid-run. Bumping the pinned image requires a local `npm run db:verify-execution` run first, precisely because a newer image is not assumed safe by default. Marking the `database` job a required status check in branch protection is recorded as the runbook's owner action, not done by this task — CI enforces the check only once a human enables it as a merge gate. |
 
 ## Known gaps after workflow 04
 
@@ -986,6 +1009,158 @@ New building rule execution (G0):
   `127.0.0.1:54322`); the hosted project received nothing. This is the
   first time `db:verify-rls` has completed — see the "Still open" entry
   below, now resolved.
+
+New building rule execution (G1):
+
+- **G1 landed.** The transactional execution RPC (`execute_automation_rule`),
+  the shared escalation contract and occurrence lifecycle
+  (`record_analysis_occurrence`/`apply_analysis_occurrence`/`raise_escalation`),
+  atomic sweep claiming (`claim_automation_sweep`), the transition matrix
+  restated in SQL, audit hardening (no authenticated `audit_events` inserts),
+  and the CI database harness all exist against real Postgres, verified by
+  `npm run db:verify-execution` locally (37 RLS checks + the execution
+  harness + generated matrix parity + the concurrency race script) and by the
+  `database` job in `.github/workflows/verify.yml` on every PR. See D159–D165.
+  `RULES_EXECUTION_MODE=apply` is still off everywhere it is not explicitly
+  turned on by an operator — nothing in this worktree enables it for any
+  organization, and the hosted project has received none of these six
+  migrations. The Internal-apply runbook below governs turning it on for the
+  founder/test organization only (G1's own scope, per the spec's release
+  gates).
+- **The local-image segfault finding (Task 11) is an operational fact, not
+  merely a test-harness workaround.** An EXECUTE-denied call of a
+  non-immutable function after `set role` — the exact shape of an
+  unauthorized PostgREST RPC call reaching, say, `raise_escalation` or
+  `organizations_with_unanalyzed_mentions` — crashes the whole local Postgres
+  cluster (`SIGSEGV`, into crash recovery) rather than returning a `403`.
+  This has been reproduced against the local Supabase image
+  (PostgreSQL 17.6, aarch64) only. **Hosted behavior on this same class of
+  call is unverified** — nobody has probed it, because nothing has pushed
+  these migrations to the hosted project yet. The runbook below makes
+  confirming the hosted build returns `403`/`42501` (not a crash) a
+  pre-push gate, not an assumption.
+- **Two items are explicitly G2, not G1, and neither is started here:**
+  - The inert cross-tenant uuid disclosure in `record_analysis_occurrence`'s
+    pending arm (Task 11 Finding 2): if organization A records against
+    organization B's `mention_id` and that mention already holds a pending
+    occurrence, the `mention_analyses_one_pending` unique-violation arm
+    returns B's occurrence id to A instead of the `23503` the composite FK
+    would otherwise raise. Nothing is written and no analysis content comes
+    back — only a uuid, unusable without a coherent mention id to pair it
+    with, and every real caller supplies coherent ids — but it is a real
+    ordering property of two constraints firing in sequence, adjudicated as
+    accept-and-document for G1 (Task 11's ledger entry). An explicit tenant
+    check in that arm is batched with G2's other execution-path work rather
+    than fixed in isolation.
+  - The spec's G2 gate itself: per-path transactional RPCs for every
+    overlapping human/automated mutation path the F17 inventory names
+    (response actions, `updateMentionStatusAction`,
+    `updateEscalationStatusAction`, `assignEscalationAction`), and
+    location-aware write policies making location authorization a database
+    guarantee rather than only an application check. Customer-facing
+    `apply` (G2) does not begin until both land; G1's RPC and escalation
+    contract are internal-organization-only by design, not a subset of G2
+    already done.
+- **The `analyze.ts` crash-window comment history is superseded by the
+  occurrence lifecycle, not merely extended.** D42's "escalation → mention
+  update → analysis insert" ordering — the best available answer with no
+  transaction at the repository layer — described real production code
+  through G0. `analyzeOne`'s doc comment in `src/lib/analysis/analyze.ts`
+  now states outright that it "replaces the old write-order reasoning
+  entirely," and does: `record_analysis_occurrence` is the sole commit point
+  for a classification, and `apply_analysis_occurrence` applies the
+  escalation, the mention transition, and the completion stamp as one
+  Postgres transaction, so there is no longer an ordering of three
+  independent writes to reason about. D42 is marked superseded in place
+  (above) rather than deleted, so the historical reasoning stays legible to
+  a reader working from an older commit.
+
+## Internal-apply runbook (G1)
+
+Human-executed; nothing here is automated by this worktree. Scope is
+strictly the founder/test organization via allowlist (the spec's G1 gate,
+§3) — this is not a path to customer-facing `apply`, which is G2 and
+requires its own, separate work (see the G1 gaps above).
+
+### The six migrations, in push order
+
+| Version | File | What it does |
+| --- | --- | --- |
+| `20260812000100` | `execution_audit_vocabulary.sql` | Redefines `audit_events_known_event_type` to add `automation_rule.executed`, `automation_rule.execution_failed`, `automation_sweep.completed`. |
+| `20260812000200` | `audit_events_no_client_inserts.sql` | Drops `audit_events_insert`; revokes `insert` on `audit_events` from `authenticated` (spec §6). |
+| `20260812000300` | `escalation_contract.sql` | The occurrence lifecycle columns/indexes on `mention_analyses`; escalation provenance; `raise_escalation`, `record_analysis_occurrence`, `apply_analysis_occurrence`; the open-only partial unique index (D158); grants. |
+| `20260812000400` | `automation_transition_functions.sql` | `automation_set_status_decision`/`automation_escalate_decision`, the matrix restated in SQL. |
+| `20260812000500` | `execute_automation_rule_rpc.sql` | The transactional execution RPC (D163). |
+| `20260812000600` | `automation_execution_support.sql` | `claim_automation_sweep`, `automation_mark_activity`, and the widened `organizations_with_unanalyzed_mentions`. |
+
+### Pre-push gates (all must hold before `supabase db push` touches the hosted project)
+
+1. **Local harness green, at the pinned CLI.** `npm run db:verify-execution`
+   passes against a freshly `supabase db reset` local stack, using the CLI
+   version pinned in `.github/workflows/verify.yml` (`2.101.0` at time of
+   writing) — not merely "some recent CLI." The `database` CI job running
+   this on every PR is the ongoing form of this gate; a manual local run
+   before pushing is the one-time form of it for the push itself.
+2. **Probe the hosted build for the segfault finding before enabling
+   anything.** Task 11 found that the *local* Postgres 17.6 image crashes
+   (`SIGSEGV`, whole cluster into recovery) on an EXECUTE-denied call of a
+   non-immutable function after `set role` — the same shape as an
+   unauthorized PostgREST RPC call. After the six migrations reach the
+   hosted project (and before `RULES_EXECUTION_MODE` is set to anything but
+   `off` there), make an unauthorized RPC call against the hosted
+   PostgREST endpoint — for example, call `raise_escalation` or
+   `organizations_with_unanalyzed_mentions` as an `authenticated` (non
+   service-role) client — and confirm the response is `403`/`42501`, not a
+   dropped connection or an error indicating the backend restarted. A crash
+   response means the hosted image shares the local finding and nothing
+   past this point should proceed until that is resolved with Supabase
+   support or a different image/CLI pin.
+3. **Owner marks `database` a required status check.** Branch protection
+   does not enforce the CI harness until a human adds it; `verify.yml`'s own
+   comment records this as the intended next step. Do this before treating
+   a green PR as sufficient evidence the harness ran — an optional check that
+   nobody looks at is not a gate.
+4. Only after 1–3 hold: push the six migrations
+   (`supabase db push`) to the hosted project.
+
+### Turning `apply` on, internal organization only
+
+1. Set `RULES_EXECUTION_MODE=dry_run` first, `RULES_EXECUTION_ORG_ALLOWLIST`
+   naming only the founder/test organization's id. Confirm one scheduled
+   sweep produces projection rows and leaves `mentions`, `escalations`,
+   `automation_rules`, and `audit_events` byte-identical (the same
+   zero-mutation property §11-INT-9 pins in the test suite, now observed
+   against the hosted project).
+2. Flip `RULES_EXECUTION_MODE=apply`, allowlist unchanged (internal
+   organization only). Watch the next scheduled sweep run — do not flip and
+   walk away.
+3. **First-live-sweep reconciliation**, per the spec's acceptance criteria
+   (§11): reconcile the sweep's execution rows, the escalation dedupe
+   behavior against D38's "high/critical always escalates" promise, and the
+   audit events it wrote — all by hand, against the sweep's own cron
+   response — before any second organization is ever added to the
+   allowlist. This is a one-time manual check, not a script; the acceptance
+   criteria are written that way deliberately.
+4. **False-positive re-escalation is a standing watch item during this
+   rollout** (D158's own text names it explicitly): the open-only dedupe
+   means a mention re-escalates whenever it is re-triaged off `escalated`
+   and a genuinely new analysis occurrence follows. Watch the internal
+   organization's escalations centre for a mention re-escalating on stale
+   or noisy grounds during the rollout window, since this is the first time
+   the open-only contract runs against anything but a test suite.
+5. **Cron response-shape note, for whoever wires external monitoring on
+   this:** the `/api/cron/analyze-mentions` response's `execution` block
+   carries per-sweep rows keyed by `sweep_id`, with organization counts,
+   evaluation counts, action outcomes, and retryable-vs-terminal failure
+   counts (spec §10). `status: "degraded"`/HTTP 200 is normal operation
+   under real-world partial failure and must not page; `status:
+   "failed"`/HTTP 503 — every attempted unit of work failed — is the actual
+   page condition. While the allowlist holds exactly one organization
+   (true for the whole of this rollout), that organization's sweep failing
+   is, by itself, "every attempted execution sweep failed," so it alone
+   satisfies the 503 condition (D155's accepted consequence, restated here
+   because it is exactly what a monitor watching this endpoint needs to
+   know going in).
 
 ## Closed by the first live run
 
