@@ -28,7 +28,6 @@ import {
   type RiskLevel,
   type SweepCounters,
 } from "@/domain";
-import { isEscalationClosed } from "@/domain";
 import { DataError } from "@/lib/data/errors";
 import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
 import { rulesExecutionLimits, type RulesExecutionLimits } from "@/lib/env";
@@ -107,6 +106,26 @@ interface Projection {
 }
 
 /**
+ * What a dry run believes the mention has become, part-way through its turn.
+ *
+ * This is the piece apply mode gets for free: `executeUnit` re-reads the stored
+ * mention, so the second rule to touch a mention sees the first rule's effect.
+ * A dry run has no store to re-read — nothing is written — so the same
+ * continuity has to be carried between rules by hand, or two rules with the
+ * same `set_status` target both project `would_apply` where apply would give
+ * `applied` then `no_op`, and the preview stops matching the run.
+ */
+interface ProjectedMention {
+  status: MentionStatus;
+  /**
+   * Any escalation on the mention, open or closed — the same question
+   * `escalationFor` asks in the adapter, not an open-only one. Automation
+   * refuses to raise a second case for a mention that has ever had one.
+   */
+  escalationExists: boolean;
+}
+
+/**
  * The matrix's verdict in dry-run vocabulary.
  *
  * Spelled out rather than derived from the decision's name: `blocked` projects
@@ -123,27 +142,31 @@ function projectedOutcome(
 
 /**
  * What this rule *would* do to this mention, decided by the same matrix the
- * apply path uses and against the same current state — no locks, no writes.
+ * apply path uses, against the mention as this sweep has projected it so far.
  *
- * `workingStatus` mirrors the unit's private view: a second action sees the
- * first one's projected effect, so a rule that escalates and then dismisses
- * projects the sequence the transaction would actually produce rather than two
- * independent guesses.
+ * `workingStatus` mirrors the unit's private view *within* the rule — a rule
+ * that escalates and then dismisses projects the sequence the transaction would
+ * produce rather than two independent guesses — and the returned `state`
+ * carries that view on to the next rule, which is what makes a whole mention's
+ * preview match the run.
  */
 function projectUnit(
   rule: AutomationRule,
-  mention: { status: MentionStatus; riskLevel: RiskLevel },
-  hasOpenEscalation: boolean,
-): Projection {
+  riskLevel: RiskLevel,
+  state: ProjectedMention,
+): { projection: Projection; state: ProjectedMention } {
   // Validation precedes projection, as it precedes mutation in apply mode
   // (spec §7): a malformed action list is `would_fail_validation`, never a
-  // preview of an effect that could never have been attempted.
+  // preview of an effect that could never have been attempted. Nothing was
+  // projected, so the mention's projected state is handed on untouched.
   const parsed = ruleActionSchema.array().safeParse(rule.actions);
-  if (!parsed.success) return { status: "would_fail_validation", outcomes: [] };
+  if (!parsed.success) {
+    return { projection: { status: "would_fail_validation", outcomes: [] }, state };
+  }
 
   const outcomes: ExecutionActionOutcome[] = [];
-  let workingStatus = mention.status;
-  let escalationExists = hasOpenEscalation;
+  let workingStatus = state.status;
+  let escalationExists = state.escalationExists;
 
   parsed.data.forEach((action, index) => {
     if (!ACTION_CAPABILITIES[action.type].executable) {
@@ -157,7 +180,7 @@ function projectUnit(
     }
 
     if (action.type === "set_status") {
-      const decision = decideSetStatus(workingStatus, action.status, mention.riskLevel);
+      const decision = decideSetStatus(workingStatus, action.status, riskLevel);
       if (decision.kind === "apply") workingStatus = action.status;
       outcomes.push({
         index,
@@ -197,7 +220,10 @@ function projectUnit(
     outcomes.push({ index, type: action.type, outcome: "would_apply", code: null });
   });
 
-  return { status: deriveProjectedStatus(outcomes), outcomes };
+  return {
+    projection: { status: deriveProjectedStatus(outcomes), outcomes },
+    state: { status: workingStatus, escalationExists },
+  };
 }
 
 /**
@@ -251,6 +277,15 @@ export async function executeRules(
   // this revision; `executeUnit` re-validates the revision and fails the unit
   // terminally (`rule_changed`) if an edit landed underneath us.
   const rules = active.slice(0, limits.maxRulesPerMention);
+
+  /**
+   * Whether any rule in the snapshot could raise an escalation. Dry run needs
+   * the mention's escalation state to project the dedupe, and this is what
+   * keeps that read off every other sweep.
+   */
+  const anyRuleEscalates =
+    input.mode === "dry_run" &&
+    rules.some((rule) => rule.actions.some((action) => action.type === "escalate"));
 
   const counters = zeroSweepCounters();
   const matchedRuleIds = new Set<string>();
@@ -306,9 +341,22 @@ export async function executeRules(
         };
         counters.mentionsEvaluated += 1;
 
-        // Read lazily and only in dry run: the apply path learns this inside
-        // the unit's transaction, where it is the only answer worth trusting.
-        let openEscalation: boolean | null = null;
+        // The dry run's running view of this mention, carried from rule to
+        // rule. Apply mode has no equivalent because it does not need one:
+        // `executeUnit` re-reads the stored mention, so the next rule already
+        // sees the last one's effect.
+        //
+        // The seed is read with no status filter, matching the adapter's
+        // `escalationFor`: a mention that has ever been escalated is not
+        // escalated again, resolved or not. Filtering to open escalations here
+        // would have made dry run promise a case that apply then refuses.
+        let projected: ProjectedMention = {
+          status: mention.status,
+          escalationExists: anyRuleEscalates
+            ? (await dataSource.escalations.list(scope, { mentionId: mention.id }))
+                .length > 0
+            : false,
+        };
 
         for (const rule of rules) {
           if (!matchesRule(subject, rule.conditions)) continue;
@@ -332,45 +380,64 @@ export async function executeRules(
           };
 
           if (input.mode === "dry_run") {
-            const needsEscalationState = rule.actions.some(
-              (action) => action.type === "escalate",
-            );
-            if (needsEscalationState && openEscalation === null) {
-              const open = await dataSource.escalations.list(scope, {
-                mentionId: mention.id,
-              });
-              openEscalation = open.some((row) => !isEscalationClosed(row.status));
-            }
+            const next = projectUnit(rule, mention.riskLevel, projected);
+            // The projection drives the next rule's preview; the *recorded*
+            // row drives the counters. They differ only when `recordProjection`
+            // replayed an earlier row for this analysis occurrence, and in that
+            // case the freshly computed one is the current preview while the
+            // stored one is what this sweep actually has to show for itself.
+            projected = next.state;
 
-            const projection = projectUnit(rule, mention, openEscalation ?? false);
-            await dataSource.automationRuleExecutions.recordProjection(scope, {
-              ...unit,
-              status: projection.status,
-              outcomes: projection.outcomes,
-            });
-            countOutcomes(counters, projection.outcomes);
+            const recorded = await dataSource.automationRuleExecutions.recordProjection(
+              scope,
+              { ...unit, status: next.projection.status, outcomes: next.projection.outcomes },
+            );
+            countOutcomes(counters, recorded.outcomes);
             // A projected validation failure is the preview of a terminal
             // apply-mode failure, and counted the same way so the two modes'
             // sweep rows can be read against each other.
-            if (projection.status === "would_fail_validation") {
+            if (recorded.status === "would_fail_validation") {
               counters.terminalFailures += 1;
             }
             continue;
           }
 
           const row = await dataSource.automationRuleExecutions.executeUnit(scope, unit);
-          countOutcomes(counters, row.outcomes);
-          if (row.status === "failed") {
-            if (row.errorClass === "retryable") counters.retryableFailures += 1;
-            else counters.terminalFailures += 1;
+
+          // A unit belongs to the sweep that opened it. `executeUnit` keeps the
+          // first sweep's id on the row through every replay and retry — the
+          // adapter is explicit that rewriting it would erase where the unit
+          // began — so a row bearing another sweep's id is not this sweep's
+          // work, and folding its outcomes in here would inflate the counters
+          // of every sweep a re-delivered analysis batch touches.
+          //
+          // Known consequence, and the reason this is a sweep-id test rather
+          // than a timestamp one: when a *retry* completes a unit an earlier
+          // sweep opened, the outcome is attributed to that earlier sweep too.
+          // The two cases are not distinguishable from the returned row alone
+          // (a successful retry is terminal, exactly like a replay), and clock
+          // comparison does not separate them either — sweeps claim inside the
+          // same millisecond. Counting by sweep id at least agrees with what
+          // the execution row itself says about where the unit lives.
+          const ranHere = row.sweepId === sweep.id;
+
+          if (ranHere) {
+            countOutcomes(counters, row.outcomes);
+            if (row.status === "failed") {
+              if (row.errorClass === "retryable") counters.retryableFailures += 1;
+              else counters.terminalFailures += 1;
+            }
           }
 
           // Rule activity is an apply-mode fact only (spec §9); a dry run that
-          // stamped it would make a preview look like a run.
+          // stamped it would make a preview look like a run. Evaluated and
+          // matched are true of a replay — the rule was considered and it did
+          // match — but applied is not: nothing was applied this sweep, and
+          // "last applied" must keep pointing at the sweep that applied it.
           await dataSource.automationRules.markActivity(scope, rule.id, {
             at: sweep.startedAt,
             matched: true,
-            applied: row.status === "applied" || row.status === "partial",
+            applied: ranHere && (row.status === "applied" || row.status === "partial"),
           });
         }
       } catch {

@@ -103,6 +103,21 @@ function ruleRow(ruleId: string): AutomationRule {
   return row;
 }
 
+/**
+ * Push a rule's activity stamps back to a clearly ancient instant.
+ *
+ * `markActivity` is monotonic and both sweeps in a replay test claim within the
+ * same millisecond or two, so "did not advance" is only a real assertion when
+ * the starting point is unmistakably older than anything a sweep could write.
+ */
+function backdateActivity(ruleId: string, at: string): void {
+  const rows = demoStore().automationRules;
+  const index = rows.findIndex((row) => row.id === ruleId);
+  const row = rows[index];
+  if (!row) throw new Error(`Rule ${ruleId} not found`);
+  rows[index] = { ...row, lastEvaluatedAt: at, lastMatchedAt: at, lastAppliedAt: at };
+}
+
 /** Rewrite a rule's `createdAt` directly: the demo clock is frozen. */
 function setCreatedAt(ruleId: string, createdAt: string): void {
   const rows = demoStore().automationRules;
@@ -437,6 +452,117 @@ describe("executeRules: apply", () => {
     expect(result.counters.mentionsEvaluated).toBe(1);
     expect(result.counters.actionsApplied).toBe(1);
     expect(sweeps()[0]!.status).toBe("completed");
+  });
+});
+
+/**
+ * The contract that makes a dry run worth running: what it projects is what the
+ * apply that follows it does. Each of these runs both modes over the same
+ * fixture and pairs the rows up, rather than asserting one mode in isolation.
+ */
+describe("executeRules: dry run previews the apply faithfully", () => {
+  it("dedupes on any escalation, resolved ones included, in both modes", async () => {
+    await activateRule({
+      name: "Escalate google reviews",
+      conditions: [{ field: "source_type", operator: "is", value: "google_review" }],
+      actions: [{ type: "escalate", assigneeUserId: null }],
+    });
+    const raised = await ds.escalations.create(scope, {
+      mentionId: mentionA,
+      category: "other",
+      severity: "medium",
+      title: "Handled already",
+      summary: null,
+      dueAt: null,
+    });
+    // Closed, not open: the adapter's `escalationFor` asks whether the mention
+    // has ever been escalated, so a resolved case still blocks a second one.
+    await ds.escalations.updateStatus(
+      scope,
+      raised.escalation.id,
+      "resolved",
+      "Spoke to the guest.",
+    );
+
+    await run("dry_run");
+    await run("apply");
+
+    const [projected, applied] = executions();
+    expect(projected!.mode).toBe("dry_run");
+    expect(projected!.status).toBe("would_no_op");
+    expect(projected!.outcomes).toEqual([
+      { index: 0, type: "escalate", outcome: "would_no_op", code: "escalation_exists" },
+    ]);
+    expect(applied!.mode).toBe("apply");
+    expect(applied!.status).toBe("no_op");
+    expect(applied!.outcomes).toEqual([
+      { index: 0, type: "escalate", outcome: "no_op", code: "escalation_exists" },
+    ]);
+    // Still exactly one escalation, and it is the resolved one.
+    expect(demoStore().escalations.filter((row) => row.mentionId === mentionA)).toHaveLength(1);
+  });
+
+  it("carries a rule's projected effect into the next rule's preview", async () => {
+    const first = await activateRule({
+      name: "Rule one",
+      priority: 10,
+      conditions: [{ field: "source_type", operator: "is", value: "google_review" }],
+      actions: [{ type: "set_status", status: "monitoring" }],
+    });
+    const second = await activateRule({
+      name: "Rule two",
+      priority: 20,
+      conditions: [{ field: "source_type", operator: "is", value: "google_review" }],
+      actions: [{ type: "set_status", status: "monitoring" }],
+    });
+
+    await run("dry_run");
+    await run("apply");
+
+    const rows = executions();
+    expect(rows.map((row) => [row.automationRuleId, row.mode, row.status])).toEqual([
+      [first.id, "dry_run", "would_apply"],
+      [second.id, "dry_run", "would_no_op"],
+      [first.id, "apply", "applied"],
+      // The second rule finds the mention already moved — exactly what the
+      // dry run said it would find.
+      [second.id, "apply", "no_op"],
+    ]);
+  });
+});
+
+describe("executeRules: replay", () => {
+  it("keeps a replayed unit out of the second sweep's counters and activity", async () => {
+    const rule = await activateRule({
+      name: "Move google reviews to monitoring",
+      conditions: [{ field: "source_type", operator: "is", value: "google_review" }],
+    });
+
+    const first = await run("apply");
+    expect(first.counters.actionsApplied).toBe(1);
+    expect(ruleRow(rule.id).lastAppliedAt).not.toBeNull();
+
+    // An unmistakably old floor, so "did not advance" cannot be an artifact of
+    // two sweeps claiming in the same millisecond.
+    backdateActivity(rule.id, "2020-01-01T00:00:00.000Z");
+
+    const second = await run("apply");
+
+    expect(second.counters).toEqual({
+      ...ZERO_COUNTERS,
+      mentionsEvaluated: 1,
+      rulesMatched: 1,
+    });
+    // No second execution row either: the unit was already terminal.
+    expect(executions()).toHaveLength(1);
+    expect(executions()[0]!.attemptCount).toBe(1);
+
+    const stamped = ruleRow(rule.id);
+    // Evaluated and matched are honest — the rule was considered and matched.
+    expect(stamped.lastEvaluatedAt! > "2020-01-01T00:00:00.000Z").toBe(true);
+    expect(stamped.lastMatchedAt! > "2020-01-01T00:00:00.000Z").toBe(true);
+    // Applied is not: nothing was applied in the second sweep.
+    expect(stamped.lastAppliedAt).toBe("2020-01-01T00:00:00.000Z");
   });
 });
 
