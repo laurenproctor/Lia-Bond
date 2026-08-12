@@ -6,7 +6,6 @@ import {
   BRAND_VOICE_AXIS_KEYS,
   canDecideOnDraft,
   canEditDraft,
-  createEscalationInputSchema,
   createLocationInputSchema,
   createMentionAnalysisInputSchema,
   createMentionInputSchema,
@@ -1721,7 +1720,16 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
             from("response_drafts", scope)
               .eq("mention_id", mentionId)
               .order("created_at", { ascending: false }),
-            from("escalations", scope).eq("mention_id", mentionId).maybeSingle(),
+            // The mention's current case, newest first. A mention carries at
+            // most one *open* case, but it may have carried several over its
+            // life — a resolved one, then a new occurrence raising another —
+            // so this is a bounded read of the latest, not a `maybeSingle()`
+            // that would error the moment a second case exists.
+            from("escalations", scope)
+              .eq("mention_id", mentionId)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle(),
             mention.locationId
               ? from("locations", scope).eq("id", mention.locationId).maybeSingle()
               : Promise.resolve({ data: null, error: null }),
@@ -2031,6 +2039,22 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       /**
+       * The occurrence entry points, not yet wired.
+       *
+       * `record_analysis_occurrence` and `apply_analysis_occurrence` exist in
+       * the database and are granted to the service role; routing the analysis
+       * pipeline through them is its own step, and claiming these work before
+       * that step lands would put a silent no-op where a transaction belongs.
+       */
+      async recordAnalysisOccurrence(): Promise<never> {
+        throw new DataError("unavailable", "Arrives with Task 10's entry-point wiring.");
+      },
+
+      async applyAnalysisOccurrence(): Promise<never> {
+        throw new DataError("unavailable", "Arrives with Task 10's entry-point wiring.");
+      },
+
+      /**
        * Write the four columns an analysis owns.
        *
        * The column list is the guarantee. `content`, `rating`, `author_name`,
@@ -2315,51 +2339,24 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return data ? toEscalation(data as Row) : null;
       },
 
-      async create(scope, input) {
-        const value = createEscalationInputSchema.parse(input);
-
-        // Confirmed under the caller's own scope, so an escalation cannot be
-        // attached to another organization's mention.
-        const { data: mention, error: mentionError } = await from("mentions", scope)
-          .eq("id", value.mentionId)
-          .maybeSingle();
-
-        if (mentionError) fail(mentionError, "raise the escalation");
-        if (!mention) throw notFound("Mention");
-
-        // One per mention. Two open cases for one review is a queue nobody
-        // trusts, and a re-run must not produce that.
-        const { data: existing, error: existingError } = await from(
-          "escalations",
-          scope,
-        )
-          .eq("mention_id", value.mentionId)
-          .maybeSingle();
-
-        if (existingError) fail(existingError, "raise the escalation");
-        if (existing) {
-          return { escalation: toEscalation(existing as Row), created: false };
-        }
-
-        const { data, error } = await client
-          .from("escalations")
-          .insert({
-            organization_id: scope.organizationId,
-            mention_id: value.mentionId,
-            category: value.category,
-            severity: value.severity,
-            status: "open",
-            title: value.title,
-            summary: value.summary,
-            // Unassigned on purpose — see the domain schema's note.
-            assigned_user_id: null,
-            due_at: value.dueAt,
-          })
-          .select("*")
-          .single();
-
-        if (error) fail(error, "raise the escalation");
-        return { escalation: toEscalation(data as Row), created: true };
+      /**
+       * Closed. Escalations have exactly two creators.
+       *
+       * `20260812000300_escalation_contract.sql` revokes INSERT on
+       * `escalations` from every role and makes `raise_escalation` executable
+       * by none, so this method could no longer do what its name says: a
+       * PostgREST insert here returns a permission error from the database,
+       * which is a confusing way to state a deliberate rule. It states it
+       * instead. The paths that do create escalations are
+       * `mentions.applyAnalysisOccurrence` and
+       * `automationRuleExecutions.executeUnit`, each of which reaches
+       * `raise_escalation` from inside a single transactional entry point.
+       */
+      async create() {
+        throw new DataError(
+          "unavailable",
+          "Escalations are created only through analysis application or rule execution.",
+        );
       },
 
       async updateStatus(scope, escalationId, status, resolutionNote) {

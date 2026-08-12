@@ -449,6 +449,13 @@ export type MentionAnalysis = z.infer<typeof mentionAnalysisSchema>;
  * `analyzedAt` is supplied rather than defaulted so every analysis in one run
  * carries that run's instant, and the demo store's fixed clock does not
  * disagree with Postgres.
+ *
+ * `analysisRunId` is required and non-null, unlike the entity's own field: the
+ * logical analysis event is (organization, run, mention), so a recording with
+ * no run id has no identity and cannot be deduplicated. Historical rows carry
+ * none, which is why the entity stays nullable; new work carries one, which is
+ * why `record_analysis_occurrence` refuses a null run id (22004) and this
+ * schema refuses it before the call is made.
  */
 export const createMentionAnalysisInputSchema = mentionAnalysisSchema
   .omit({
@@ -457,7 +464,7 @@ export const createMentionAnalysisInputSchema = mentionAnalysisSchema
     createdAt: true,
   })
   .extend({
-    analysisRunId: uuidSchema.nullable().default(null),
+    analysisRunId: uuidSchema,
     inputTokens: z.number().int().min(0).nullable().default(null),
     outputTokens: z.number().int().min(0).nullable().default(null),
     // Freshly recorded occurrences are pending until apply_analysis_occurrence

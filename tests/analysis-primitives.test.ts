@@ -25,6 +25,9 @@ import { SEED_DATASET } from "@/lib/seed/dataset";
  */
 
 const MENTION = SEED_DATASET.mentions[0]!;
+/** A run and an occurrence id: identity the contract now requires. */
+const RUN_ID = "3f1a6f6c-9a1e-4b5e-8f3a-1d2c3b4a5e6f";
+const OCCURRENCE_ID = "8c2d4e6a-7b1f-4c3d-9e5a-2b4c6d8e0f1a";
 
 function mention(overrides: Partial<Mention> = {}): Mention {
   return { ...MENTION, ...overrides };
@@ -119,7 +122,9 @@ describe("the rating heuristic", () => {
 describe("normalising an analysis", () => {
   const base = {
     mentionId: MENTION.id,
-    analysisRunId: null,
+    // Non-null since the escalation contract: the run id is half the identity
+    // of the analysis event, so a recording without one has none.
+    analysisRunId: RUN_ID,
     modelProvider: "anthropic",
     modelName: "claude-opus-5",
     inputTokens: 1200,
@@ -215,7 +220,7 @@ describe("deriving an escalation", () => {
     expect(requiresEscalation("medium")).toBe(false);
     expect(requiresEscalation("low")).toBe(false);
     expect(
-      toEscalationInput(output({ riskLevel: "medium" }), mention(), location),
+      toEscalationInput(output({ riskLevel: "medium" }), mention(), location, OCCURRENCE_ID),
     ).toBeNull();
   });
 
@@ -228,6 +233,7 @@ describe("deriving an escalation", () => {
       }),
       mention(),
       location,
+      OCCURRENCE_ID,
     );
 
     expect(result?.title).toBe("Allergic reaction after shellfish dish");
@@ -242,6 +248,7 @@ describe("deriving an escalation", () => {
       output({ riskLevel: "high", riskCategories: ["injury"] }),
       mention(),
       location,
+      OCCURRENCE_ID,
     );
 
     expect(result?.title).toContain("Injury risk");
@@ -253,6 +260,7 @@ describe("deriving an escalation", () => {
       output({ riskLevel: "critical", riskCategories: [] }),
       mention(),
       location,
+      OCCURRENCE_ID,
     );
 
     expect(result?.category).toBe("other");
@@ -266,9 +274,24 @@ describe("deriving an escalation", () => {
       output({ riskLevel: "critical" }),
       mention(),
       location,
+      OCCURRENCE_ID,
     );
 
     expect(result?.dueAt).toBeNull();
+  });
+
+  it("names the occurrence that authorized it", () => {
+    // The contract's idempotency evidence: a case says which reading of the
+    // mention raised it, so applying that reading again finds this case
+    // instead of raising a second one.
+    const result = toEscalationInput(
+      output({ riskLevel: "critical" }),
+      mention(),
+      location,
+      OCCURRENCE_ID,
+    );
+
+    expect(result?.triggerAnalysisId).toBe(OCCURRENCE_ID);
   });
 });
 

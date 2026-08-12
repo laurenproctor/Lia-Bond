@@ -75,7 +75,14 @@ function normalizeCategories(
 export interface NormalizeAnalysisInput {
   output: MentionAnalysisOutput;
   mentionId: string;
-  analysisRunId: string | null;
+  /**
+   * The run this recording belongs to.
+   *
+   * Non-null since the escalation contract: (organization, run, mention) is the
+   * identity of a logical analysis event, and a recording with no run id cannot
+   * be deduplicated against the recorder that arrives after it.
+   */
+  analysisRunId: string;
   modelProvider: string;
   modelName: string;
   inputTokens: number | null;
@@ -135,6 +142,12 @@ export function toEscalationInput(
   output: MentionAnalysisOutput,
   mention: Mention,
   location: Location | null,
+  /**
+   * The occurrence authorizing the escalation. Required by the contract: the
+   * case names the reading of the mention it came from, and that is what makes
+   * a repeated application find this case rather than raise a second one.
+   */
+  triggerAnalysisId: string,
 ): CreateEscalationInput | null {
   if (!requiresEscalation(output.riskLevel)) return null;
 
@@ -150,6 +163,7 @@ export function toEscalationInput(
     // No due date. Inventing an SLA the organization never agreed to would put
     // a deadline in the escalations centre that nobody set and nobody owns.
     dueAt: null,
+    triggerAnalysisId,
   };
 }
 

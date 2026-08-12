@@ -103,21 +103,24 @@ type ItemOutcome =
 /**
  * Classify and persist one mention.
  *
- * The write order is the important part and is load-bearing:
+ * The write order is:
  *
- *   escalation -> mention update -> analysis insert
+ *   analysis insert -> escalation -> mention update
  *
- * There is no transaction available (decision D17: the demo adapter has none
- * and PostgREST exposes none), so the ordering is what makes a partial failure
- * safe. Selection is "mentions with no analysis row", which makes the insert
- * the commit point — die before it and the mention is simply picked up again,
- * where the escalation dedupe and the idempotent mention update absorb the
- * repeat.
+ * and it is **interim**. The old order put the escalation first and made the
+ * analysis insert the commit point, because selection is "mentions with no
+ * analysis row" and there is no transaction to lean on (D17). The escalation
+ * contract ends that arrangement: a case now names the occurrence that
+ * authorized it, so the occurrence has to exist first.
  *
- * The reverse order is the tempting one and it is wrong: analysis-first means
- * a failure at the mention update leaves a record that *looks* analysed, never
- * receives its risk level, and is never selected again. That is the guardrail
- * failing silently, which is the exact outcome this workflow exists to prevent.
+ * That leaves this function with a real gap in the meantime — a failure between
+ * the insert and the mention update leaves a mention that looks analysed and is
+ * never re-selected. It is closed by the occurrence lifecycle, not by an
+ * ordering trick: a recorded occurrence is pending until `applyAnalysisOccurrence`
+ * stamps it, selection widens to include mentions whose latest occurrence is
+ * pending, and the escalation, the transition, and the completion stamp become
+ * one transaction. This whole function is replaced by that lifecycle in the
+ * step that rewires the service.
  */
 async function analyzeOne(
   context: AnalysisContext,
@@ -139,7 +142,31 @@ async function analyzeOne(
 
     const output = called ? called.analysis : analyzeByRating(mention);
 
-    const escalationInput = toEscalationInput(output, mention, location);
+    // Interim ordering, replaced by the occurrence lifecycle in the step that
+    // rewires this service: the escalation contract requires the occurrence id
+    // that authorizes the case, so the analysis row has to exist before the
+    // escalation rather than after it. That inverts the crash-safety ordering
+    // this comment block describes, and the inversion is what the lifecycle
+    // fixes properly — a recorded occurrence is pending until its outcome is
+    // applied, and a pending occurrence is re-picked rather than skipped.
+    const analysis = await context.dataSource.mentions.createAnalysis(
+      context.scope,
+      toAnalysisInput({
+        output,
+        mentionId: mention.id,
+        analysisRunId: runId,
+        modelProvider: called ? called.modelProvider : HEURISTIC_MODEL_PROVIDER,
+        modelName: called ? called.modelName : HEURISTIC_MODEL_NAME,
+        inputTokens: called?.inputTokens ?? null,
+        outputTokens: called?.outputTokens ?? null,
+        analyzedAt,
+        // The heuristic uses no prompt, so claiming a prompt version would put
+        // a fiction into the field a later comparison relies on.
+        promptVersion: heuristic ? null : ANALYSIS_PROMPT_VERSION,
+      }),
+    );
+
+    const escalationInput = toEscalationInput(output, mention, location, analysis.id);
     let escalated = false;
 
     if (escalationInput) {
@@ -149,7 +176,7 @@ async function analyzeOne(
       );
       escalated = created;
 
-      if (created) {
+      if (created && escalation) {
         await recordAuditEvent(context, {
           eventType: "escalation.created_from_analysis",
           entityType: "escalation",
@@ -178,23 +205,6 @@ async function analyzeOne(
         // routine triage.
         status: escalationInput ? "escalated" : "analyzed",
       },
-    );
-
-    const analysis = await context.dataSource.mentions.createAnalysis(
-      context.scope,
-      toAnalysisInput({
-        output,
-        mentionId: mention.id,
-        analysisRunId: runId,
-        modelProvider: called ? called.modelProvider : HEURISTIC_MODEL_PROVIDER,
-        modelName: called ? called.modelName : HEURISTIC_MODEL_NAME,
-        inputTokens: called?.inputTokens ?? null,
-        outputTokens: called?.outputTokens ?? null,
-        analyzedAt,
-        // The heuristic uses no prompt, so claiming a prompt version would put
-        // a fiction into the field a later comparison relies on.
-        promptVersion: heuristic ? null : ANALYSIS_PROMPT_VERSION,
-      }),
     );
 
     return heuristic

@@ -45,6 +45,9 @@ const ZERO_COUNTERS = {
 async function seedAnalysis(mentionId: string, analyzedAt: string): Promise<string> {
   const created = await ds.mentions.createAnalysis(scope, {
     mentionId,
+    // Its own analysis event, hence its own run id: the escalation contract
+    // identifies an occurrence by (organization, run, mention).
+    analysisRunId: crypto.randomUUID(),
     modelProvider: "lia",
     modelName: "rating-heuristic",
     promptVersion: "test-1",
@@ -330,9 +333,14 @@ describe("executeRules: dry run", () => {
 
   it("projects would_no_op when the mention already carries an open escalation", async () => {
     await activateRule({
-      name: "Escalate analysed mentions",
+      name: "Escalate google reviews",
+      conditions: [{ field: "source_type", operator: "is", value: "google_review" }],
       actions: [{ type: "escalate", assigneeUserId: null }],
     });
+    // Raising a case moves the mention to `escalated` — that transition is
+    // part of the creation, not a separate step a caller may skip — so the
+    // fixture re-triages afterwards to reach the state this test is about:
+    // eligible for escalation, and already carrying an open case.
     await ds.escalations.create(scope, {
       mentionId: mentionA,
       category: "other",
@@ -340,7 +348,9 @@ describe("executeRules: dry run", () => {
       title: "Already open",
       summary: null,
       dueAt: null,
+      triggerAnalysisId: analysisA,
     });
+    await ds.mentions.updateStatus(scope, mentionA, "monitoring");
     const before = businessSnapshot();
 
     await run("dry_run");
@@ -461,7 +471,7 @@ describe("executeRules: apply", () => {
  * fixture and pairs the rows up, rather than asserting one mode in isolation.
  */
 describe("executeRules: dry run previews the apply faithfully", () => {
-  it("dedupes on any escalation, resolved ones included, in both modes", async () => {
+  it("replays a resolved case for the same occurrence in both modes", async () => {
     await activateRule({
       name: "Escalate google reviews",
       conditions: [{ field: "source_type", operator: "is", value: "google_review" }],
@@ -474,15 +484,22 @@ describe("executeRules: dry run previews the apply faithfully", () => {
       title: "Handled already",
       summary: null,
       dueAt: null,
+      // The same occurrence the sweep runs on, which is what makes both modes
+      // treat this as a replay rather than as a fresh decision.
+      triggerAnalysisId: analysisA,
     });
-    // Closed, not open: the adapter's `escalationFor` asks whether the mention
-    // has ever been escalated, so a resolved case still blocks a second one.
+    // Closed, not open — and still decisive: the contract's replay arm returns
+    // the case this occurrence already produced whatever became of it, so
+    // running the same unit again reports history instead of raising a second
+    // case. Re-triaging afterwards is what makes the mention eligible again,
+    // so the refusal under test is the replay and not the matrix.
     await ds.escalations.updateStatus(
       scope,
-      raised.escalation.id,
+      raised.escalation!.id,
       "resolved",
       "Spoke to the guest.",
     );
+    await ds.mentions.updateStatus(scope, mentionA, "monitoring");
 
     await run("dry_run");
     await run("apply");

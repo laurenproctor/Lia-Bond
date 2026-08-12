@@ -346,10 +346,19 @@ export async function executeRules(
         // `executeUnit` re-reads the stored mention, so the next rule already
         // sees the last one's effect.
         //
-        // The seed is read with no status filter, matching the adapter's
-        // `escalationFor`: a mention that has ever been escalated is not
-        // escalated again, resolved or not. Filtering to open escalations here
-        // would have made dry run promise a case that apply then refuses.
+        // The seed is read with no status filter: a mention that has ever been
+        // escalated is not escalated again here, resolved or not.
+        //
+        // Since the escalation contract landed, apply mode is narrower than
+        // that — it refuses on an open case or on a replay of this unit's own
+        // occurrence, so a *closed* case raised by a *different* occurrence no
+        // longer blocks a re-triaged mention from being escalated again. This
+        // projection is therefore conservative in exactly one shape: it can
+        // preview `would_no_op` where apply would raise a second case. It is
+        // deliberately left conservative rather than half-narrowed here — the
+        // projector needs the contract's own answer, which arrives with the
+        // service rewiring, and a preview that under-promises is the safer of
+        // the two errors while it does.
         let projected: ProjectedMention = {
           status: mention.status,
           escalationExists: anyRuleEscalates

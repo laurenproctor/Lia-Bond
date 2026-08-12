@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { IngestMentionInput, Mention } from "@/domain";
+import type { Escalation, IngestMentionInput, Mention } from "@/domain";
 import type { AiProvider, AnalyzeMentionInput } from "@/ai/provider";
 import { aiError, type AiErrorCode } from "@/ai/errors";
 import { analyzeMentions, getAnalysisStatus } from "@/lib/analysis/analyze";
@@ -7,6 +7,7 @@ import type { MentionAnalysisOutput } from "@/lib/analysis/schema";
 import { can } from "@/lib/auth/permissions";
 import { DataError } from "@/lib/data/errors";
 import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
+import { demoStore } from "@/lib/data/demo/store";
 import { freshDataSource, harbor, ushg } from "./helpers/scope";
 
 /**
@@ -75,6 +76,40 @@ function fakeProvider(
 /** Mentions in this organization that carry no analysis. */
 async function unanalyzedCount(activeScope = scope): Promise<number> {
   return dataSource.mentions.countUnanalyzed(activeScope);
+}
+
+/**
+ * A case raised before the escalation contract existed.
+ *
+ * Written into the store directly because that is the only way such a row can
+ * exist: `escalations.create` now requires the analysis occurrence that
+ * authorized the case, and a mention still in the backlog has none. The
+ * database says the same thing — `trigger_analysis_id` is nullable only for
+ * rows that predate the contract — so this is a fixture of a real shape, not a
+ * shortcut around a rule.
+ */
+function seedHistoricalEscalation(mentionId: string): { escalation: Escalation } {
+  const timestamp = "2026-08-01T00:00:00.000Z";
+  const escalation: Escalation = {
+    id: crypto.randomUUID(),
+    organizationId: scope.organizationId,
+    mentionId,
+    category: "other",
+    severity: "high",
+    status: "open",
+    title: "Raised by a person",
+    summary: null,
+    assignedUserId: null,
+    dueAt: null,
+    resolvedAt: null,
+    resolutionNote: null,
+    triggerAnalysisId: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  demoStore().escalations.push(escalation);
+  return { escalation };
 }
 
 /**
@@ -444,7 +479,11 @@ describe("rating-only mentions", () => {
 
 describe("escalation", () => {
   it("raises an open, unassigned escalation for critical risk", async () => {
-    const [target] = await dataSource.mentions.listUnanalyzed(scope, 1);
+    // A freshly imported mention rather than the head of the seeded backlog:
+    // that one is `dismissed`, and the escalation contract refuses to raise a
+    // case on a dismissed mention — analysis does not reopen a decision a
+    // person made. Starting there would test the refusal, not the raise.
+    const target = await ingestFresh("fresh-for-critical-risk");
 
     const result = await analyzeMentions(
       { dataSource, scope },
@@ -463,12 +502,16 @@ describe("escalation", () => {
     expect(result.counts.escalated).toBe(1);
 
     const escalations = await dataSource.escalations.list(scope, {
-      mentionId: target!.id,
+      mentionId: target.id,
     });
     expect(escalations[0]?.status).toBe("open");
     // Unowned is the signal. A default owner would make it look handled.
     expect(escalations[0]?.assignedUserId).toBeNull();
     expect(escalations[0]?.severity).toBe("critical");
+    // The case names the occurrence that authorized it, which is what makes a
+    // repeated application find this row rather than raise a second one.
+    const analysis = await dataSource.mentions.latestAnalysis(scope, target.id);
+    expect(escalations[0]?.triggerAnalysisId).toBe(analysis?.id);
   });
 
   it("moves the mention to escalated rather than analyzed", async () => {
@@ -503,16 +546,17 @@ describe("escalation", () => {
 
   it("does not raise a second escalation for a mention that has one", async () => {
     // Two open cases for one review is a queue nobody trusts.
+    //
+    // The case is written straight into the store rather than raised through
+    // the repository, and it has to be: every escalation raised from here on
+    // names the analysis occurrence that authorized it, and this mention has
+    // no analysis yet — giving it one would take it out of the backlog this
+    // run is meant to pick it up from. A case with no occurrence is exactly
+    // what a row predating the contract looks like, which is what this fixture
+    // is, and the contract still has to dedupe against it.
     const [target] = await dataSource.mentions.listUnanalyzed(scope, 1);
 
-    const first = await dataSource.escalations.create(scope, {
-      mentionId: target!.id,
-      category: "other",
-      severity: "high",
-      title: "Raised by a person",
-      summary: null,
-      dueAt: null,
-    });
+    const first = seedHistoricalEscalation(target!.id);
 
     const result = await analyzeMentions(
       { dataSource, scope },

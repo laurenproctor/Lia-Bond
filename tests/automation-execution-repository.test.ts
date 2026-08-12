@@ -27,10 +27,17 @@ let analysisId: string;
 let newAnalysisId: string;
 let sweepId: string;
 
-/** An analysis row for the mention, so `triggerAnalysisId` names a real occurrence. */
+/**
+ * An analysis row for the mention, so `triggerAnalysisId` names a real
+ * occurrence — which the escalation contract requires: an escalate action
+ * whose occurrence is not an analysis of its own mention is refused.
+ *
+ * Each call is its own analysis event, hence its own run id.
+ */
 async function seedAnalysis(analyzedAt: string): Promise<string> {
   const created = await ds.mentions.createAnalysis(scope, {
     mentionId,
+    analysisRunId: crypto.randomUUID(),
     modelProvider: "lia",
     modelName: "rating-heuristic",
     promptVersion: "test-1",
@@ -405,9 +412,10 @@ describe("automationRuleExecutions.executeUnit", () => {
   });
 
   it("escalating a mention that already has a case dedupes to no_op", async () => {
-    // A person raised the case and later re-triaged the mention back to
-    // monitoring, so the matrix says escalation is eligible and only the
-    // dedupe stands between the rule and a second case for one mention.
+    // A case was raised off a different occurrence and later the mention was
+    // re-triaged back to monitoring, so the matrix says escalation is eligible
+    // and only the contract's open-case dedupe stands between the rule and a
+    // second case for one mention.
     await ds.escalations.create(scope, {
       mentionId,
       category: "other",
@@ -415,6 +423,7 @@ describe("automationRuleExecutions.executeUnit", () => {
       title: "Raised by a person",
       summary: null,
       dueAt: null,
+      triggerAnalysisId: newAnalysisId,
     });
     await ds.mentions.updateStatus(scope, mentionId, "monitoring");
     const escalationsBefore = demoStore().escalations.length;

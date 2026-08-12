@@ -54,6 +54,7 @@ import {
   type PlatformConnection,
   type PlatformProfile,
   type PlatformSyncRun,
+  type RaiseEscalationResult,
   type ResponseDraft,
   type UpdateBrandVoiceInput,
   type User,
@@ -352,39 +353,128 @@ export function createDemoDataSource(): LiaDataSource {
     orgRows(store().mentionAnalyses, scope);
 
   /**
-   * The escalation a mention already has, if any.
+   * The open case a mention is carrying, if any.
    *
-   * One function so the dedupe question has one answer: `escalations.create`
-   * and the automation execution unit must agree about what "already
-   * escalated" means, or automation would raise the second case the
-   * escalations centre exists to prevent.
+   * "Open" is the three live statuses the database's `escalations_one_open_per_mention`
+   * partial index covers. A resolved or dismissed case is history and does not
+   * stand in the way of a new one — what stands in the way is the mention still
+   * being `escalated`, which is the ladder's separate `awaiting_retriage` arm.
    */
-  const escalationFor = (
+  const openEscalationFor = (
     scope: OrganizationScope,
     mentionId: string,
   ): Escalation | null =>
-    orgRows(store().escalations, scope).find((row) => row.mentionId === mentionId) ??
-    null;
+    orgRows(store().escalations, scope).find(
+      (row) => row.mentionId === mentionId && !isEscalationClosed(row.status),
+    ) ?? null;
 
   /**
-   * Raise an escalation, or confirm the one already there.
+   * The case this occurrence already produced, whatever became of it.
    *
-   * Shared by `escalations.create` (which parses its input first) and the
-   * execution unit's `escalate` executor, so an automated escalation is the
-   * same record, with the same dedupe, as one raised by analysis.
+   * The idempotency evidence: one escalation per occurrence, enforced in the
+   * database by `escalations_one_per_occurrence`. A consumed occurrence reports
+   * its history rather than acting again.
+   */
+  const escalationForOccurrence = (
+    scope: OrganizationScope,
+    mentionId: string,
+    triggerAnalysisId: string,
+  ): Escalation | null =>
+    orgRows(store().escalations, scope).find(
+      (row) =>
+        row.mentionId === mentionId && row.triggerAnalysisId === triggerAnalysisId,
+    ) ?? null;
+
+  /**
+   * The ladder, read-only: what `raiseEscalation` would answer right now.
+   *
+   * Split out because the execution unit decides every action against a private
+   * view of the mention and commits at the end (that deferral is its rollback),
+   * so it needs the ladder's answer before it is allowed to write anything.
+   * `status` is therefore the caller's view of the mention rather than always
+   * the stored row: in SQL the execution function has already written each
+   * earlier action's transition by the time `raise_escalation` reads the row,
+   * and the twin has to reach the same answer without having written it.
+   *
+   * Provenance is checked first and raises, exactly as the SQL does: an
+   * occurrence belonging to another mention is a caller error, and answering it
+   * with a lookup would leak another record's existence.
+   */
+  function evaluateEscalation(
+    scope: OrganizationScope,
+    mentionId: string,
+    status: Mention["status"],
+    triggerAnalysisId: string,
+  ): RaiseEscalationResult {
+    const occurrence = analysesIn(scope).find(
+      (row) => row.id === triggerAnalysisId && row.mentionId === mentionId,
+    );
+    if (!occurrence) {
+      throw invalidInput(
+        "That analysis occurrence does not belong to this mention.",
+      );
+    }
+
+    // Replay first, and the order is load-bearing: a consumed occurrence
+    // reports its own case even when the mention has since been dismissed,
+    // and it never mutates anything on the way.
+    const replayed = escalationForOccurrence(scope, mentionId, triggerAnalysisId);
+    if (replayed) {
+      return { escalation: replayed, created: false, reason: "occurrence_replayed" };
+    }
+
+    if (status === "dismissed") {
+      return { escalation: null, created: false, reason: "mention_dismissed" };
+    }
+
+    const open = openEscalationFor(scope, mentionId);
+    if (open) {
+      return { escalation: open, created: false, reason: "escalation_exists" };
+    }
+
+    if (status === "escalated") {
+      // Every case is closed, but nobody has re-triaged the mention. Raising a
+      // second case here would re-open work a person deliberately finished.
+      return { escalation: null, created: false, reason: "awaiting_retriage" };
+    }
+
+    return { escalation: null, created: false, reason: null };
+  }
+
+  /**
+   * Raise an escalation, or say why not — the in-memory twin of `raise_escalation`.
+   *
+   * The database's sole creator of escalation rows, and the demo's too: only
+   * `mentions.applyAnalysisOccurrence` and the execution unit reach it (plus
+   * `escalations.create`, which exists so the demo's own tests can seed a case;
+   * see its contract note in `types.ts`).
+   *
+   * `auditEventType` mirrors the SQL parameter: the created-audit event is
+   * written with the creation so no failure can separate an escalation from its
+   * trail, and a null type means the caller's own audit record covers it.
    */
   function raiseEscalation(
     scope: OrganizationScope,
     value: CreateEscalationInput,
-  ): { escalation: Escalation; created: boolean } {
+    auditEventType: AuditEvent["eventType"] | null,
+  ): RaiseEscalationResult {
     const mention = mentionsIn(scope).find((row) => row.id === value.mentionId);
     if (!mention) throw notFound("Mention");
 
-    const existing = escalationFor(scope, value.mentionId);
-    if (existing) return { escalation: existing, created: false };
+    const decision = evaluateEscalation(
+      scope,
+      value.mentionId,
+      mention.status,
+      value.triggerAnalysisId,
+    );
+    if (decision.reason !== null) return decision;
 
+    const timestamp = nowIso();
     const created: Escalation = {
-      id: seedId(`escalation:runtime:${value.mentionId}`),
+      // Keyed by occurrence, not by mention: a mention may carry several cases
+      // over its life (one per occurrence that raised one), and the database's
+      // `escalations_one_per_occurrence` index is what caps it there.
+      id: seedId(`escalation:runtime:${value.mentionId}:${value.triggerAnalysisId}`),
       organizationId: scope.organizationId,
       mentionId: value.mentionId,
       category: value.category,
@@ -399,17 +489,47 @@ export function createDemoDataSource(): LiaDataSource {
       dueAt: value.dueAt,
       resolvedAt: null,
       resolutionNote: null,
-      // This demo path mirrors the pre-migration app-level create surface
-      // (`CreateEscalationInput` carries no occurrence id); the real
-      // database now requires one via `raise_escalation`, which this mock
-      // store does not model.
-      triggerAnalysisId: null,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
+      triggerAnalysisId: value.triggerAnalysisId,
+      createdAt: timestamp,
+      updatedAt: timestamp,
     };
 
     store().escalations.push(created);
-    return { escalation: created, created: true };
+
+    // The transition belongs to the creation: a case nobody can see from the
+    // queue is a case nobody works.
+    replaceRow(store().mentions, {
+      ...mention,
+      status: "escalated",
+      updatedAt: timestamp,
+    });
+
+    if (auditEventType) {
+      store().auditEvents.push(
+        auditEventSchema.parse({
+          id: seedId(
+            `audit:runtime:${scope.organizationId}:${created.id}:${auditEventType}:${store().auditEvents.length}`,
+          ),
+          organizationId: scope.organizationId,
+          actorUserId: null,
+          actorType: "ai",
+          eventType: auditEventType,
+          entityType: "escalation",
+          entityId: created.id,
+          previousState: null,
+          // Category and severity only. The title can quote the review, so it
+          // is deliberately not carried into the audit trail.
+          newState: { category: created.category, severity: created.severity },
+          metadata: {
+            mentionId: value.mentionId,
+            analysisId: value.triggerAnalysisId,
+          },
+          occurredAt: timestamp,
+        }),
+      );
+    }
+
+    return { escalation: created, created: true, reason: null };
   }
 
   /**
@@ -428,6 +548,7 @@ export function createDemoDataSource(): LiaDataSource {
     mention: Mention,
     rule: AutomationRule,
     analysis: MentionAnalysis | null,
+    triggerAnalysisId: string,
   ): CreateEscalationInput {
     const category = analysis?.riskCategories[0] ?? "other";
     const location =
@@ -449,6 +570,10 @@ export function createDemoDataSource(): LiaDataSource {
       title,
       summary: `Raised automatically by the rule "${rule.name}".`,
       dueAt: null,
+      // The unit's own trigger occurrence: the case says which reading of this
+      // mention authorized it, and replaying that unit finds this row rather
+      // than raising a second one.
+      triggerAnalysisId,
     };
   }
 
@@ -1711,9 +1836,12 @@ export function createDemoDataSource(): LiaDataSource {
           drafts: draftsIn(scope)
             .filter((row) => row.mentionId === mentionId)
             .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
+          // The mention's current case, newest first — a mention carries at
+          // most one open case but may have carried several over its life.
           escalation:
-            orgRows(store().escalations, scope).find((row) => row.mentionId === mentionId) ??
-            null,
+            orgRows(store().escalations, scope)
+              .filter((row) => row.mentionId === mentionId)
+              .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ?? null,
           location: mention.locationId
             ? (orgRows(store().locations, scope).find((row) => row.id === mention.locationId) ??
               null)
@@ -1926,6 +2054,153 @@ export function createDemoDataSource(): LiaDataSource {
 
         store().mentionAnalyses.push(created);
         return created;
+      },
+
+      async recordAnalysisOccurrence(scope, input) {
+        const value = createMentionAnalysisInputSchema.parse(input);
+
+        const mention = mentionsIn(scope).find(
+          (row) => row.id === value.mentionId,
+        );
+        // The scope filter is what stops an occurrence being attached to
+        // another organization's mention by supplying its id — the twin of the
+        // composite `mention_analyses_mention_same_org` foreign key.
+        if (!mention) throw notFound("Mention");
+
+        // The event key: (organization, run, mention). Unique regardless of
+        // lifecycle state, which is what makes this idempotent under every
+        // arrival order — including a recorder arriving after the event
+        // already completed. The late recorder's own output is discarded.
+        const sameEvent = analysesIn(scope).find(
+          (row) =>
+            row.analysisRunId === value.analysisRunId &&
+            row.mentionId === value.mentionId,
+        );
+        if (sameEvent) return { analysis: sameEvent, created: false };
+
+        // A different event is still pending for this mention. One pending
+        // occurrence per mention is a lifecycle invariant, not identity: it is
+        // what guarantees recovery has exactly one thing to finish. The caller
+        // completes the older event; this event records on a later sweep.
+        const pending = analysesIn(scope).find(
+          (row) =>
+            row.mentionId === value.mentionId && row.outcomeAppliedAt === null,
+        );
+        if (pending) return { analysis: pending, created: false };
+
+        const created: MentionAnalysis = {
+          ...value,
+          // Append-only, so the id differs per occurrence rather than per
+          // mention — a later run records beside the old row, never over it.
+          id: seedId(
+            `analysis:runtime:${value.mentionId}:${store().mentionAnalyses.length}`,
+          ),
+          organizationId: scope.organizationId,
+          // Pending until `applyAnalysisOccurrence` stamps it. Nothing that
+          // records an occurrence has the authority to claim it was applied.
+          outcomeAppliedAt: null,
+          createdAt: nowIso(),
+        };
+
+        store().mentionAnalyses.push(created);
+        return { analysis: created, created: true };
+      },
+
+      async applyAnalysisOccurrence(scope, input) {
+        const occurrence = analysesIn(scope).find(
+          (row) => row.id === input.analysisId && row.mentionId === input.mentionId,
+        );
+        // Not "analysis not found": an occurrence of another mention is not a
+        // record this call is entitled to act on, and it is refused rather than
+        // answered.
+        if (!occurrence) throw notFound("Analysis occurrence");
+
+        const mention = mentionsIn(scope).find((row) => row.id === input.mentionId);
+        if (!mention) throw notFound("Mention");
+
+        // Replay after success: zero effects, zero events. The status is
+        // simply what the mention says now, which may be something a person
+        // decided long after this occurrence was applied.
+        if (occurrence.outcomeAppliedAt !== null) {
+          return {
+            escalationId: null,
+            escalationCreated: false,
+            reason: null,
+            alreadyApplied: true,
+            finalStatus: mention.status,
+          };
+        }
+
+        let result: RaiseEscalationResult | null = null;
+        let status: Mention["status"];
+
+        if (input.shouldEscalate) {
+          result = raiseEscalation(
+            scope,
+            {
+              mentionId: input.mentionId,
+              category: input.category,
+              severity: input.severity,
+              title: input.title,
+              summary: input.summary,
+              dueAt: null,
+              triggerAnalysisId: input.analysisId,
+            },
+            "escalation.created_from_analysis",
+          );
+
+          // The final status is derived here, from the mention's state and the
+          // ladder's answer. There is no caller-supplied status, so a decision
+          // a person made between the recording and this application cannot be
+          // overwritten:
+          //   created / escalation_exists -> escalated
+          //   occurrence_replayed         -> whatever the mention says now
+          //   mention_dismissed           -> dismissed, preserved
+          //   awaiting_retriage           -> escalated, preserved
+          if (result.created || result.reason === "escalation_exists") {
+            status = "escalated";
+          } else if (result.reason === "occurrence_replayed") {
+            status = mention.status;
+          } else if (result.reason === "mention_dismissed") {
+            status = "dismissed";
+          } else {
+            status = "escalated";
+          }
+        } else {
+          // `analyzed` only from `new`. Every other current status is a
+          // decision — human or prior automation — this occurrence has no
+          // authority to change.
+          status = mention.status === "new" ? "analyzed" : mention.status;
+        }
+
+        // Re-read: raising a case has already moved the mention, and writing
+        // back the copy read before that would undo it.
+        const current =
+          mentionsIn(scope).find((row) => row.id === input.mentionId) ?? mention;
+
+        // Sentiment, risk, and relevance always land; they never authorize a
+        // transition beyond the derivation above.
+        replaceRow(store().mentions, {
+          ...current,
+          sentiment: input.sentiment,
+          riskLevel: input.riskLevel,
+          relevanceScore: input.relevanceScore,
+          status,
+          updatedAt: nowIso(),
+        });
+
+        replaceRow(store().mentionAnalyses, {
+          ...occurrence,
+          outcomeAppliedAt: nowIso(),
+        });
+
+        return {
+          escalationId: result?.escalation?.id ?? null,
+          escalationCreated: result?.created ?? false,
+          reason: result?.reason ?? null,
+          alreadyApplied: false,
+          finalStatus: status,
+        };
       },
 
       async applyAnalysisOutcome(scope, mentionId, outcome) {
@@ -2155,11 +2430,15 @@ export function createDemoDataSource(): LiaDataSource {
       },
 
       async create(scope, input) {
-        // One escalation per mention. Two open cases for one review is a queue
-        // nobody trusts, and re-running an analysis must not produce that —
-        // `raiseEscalation` holds that rule for every writer, this one and the
-        // automation execution unit alike.
-        return raiseEscalation(scope, createEscalationInputSchema.parse(input));
+        // Not a production path — see the contract note in `types.ts`. The
+        // Supabase adapter refuses this outright, matching a database in which
+        // nothing but the two entry points can create an escalation; the demo
+        // adapter has no privilege system to enforce that with, so it runs the
+        // ladder and lets its own tests seed a case through the same rules.
+        //
+        // No audit event type: this seam has no entry point behind it whose
+        // trail the event would belong to.
+        return raiseEscalation(scope, createEscalationInputSchema.parse(input), null);
       },
 
       async updateStatus(scope, escalationId, status, resolutionNote) {
@@ -2660,7 +2939,9 @@ export function createDemoDataSource(): LiaDataSource {
               return;
             }
 
-            if (pendingEscalation !== null || escalationFor(scope, mention.id)) {
+            if (pendingEscalation !== null) {
+              // This unit already decided to raise one; a second escalate
+              // action in the same rule finds the case its predecessor staged.
               outcomes.push({
                 index,
                 type: action.type,
@@ -2670,7 +2951,39 @@ export function createDemoDataSource(): LiaDataSource {
               return;
             }
 
-            pendingEscalation = automationEscalationInput(scope, mention, rule, analysis);
+            // The contract ladder, consulted read-only: the decision is made
+            // here and the write happens in the commit below, so an action
+            // after this one can still fail the whole unit.
+            const ladder = evaluateEscalation(
+              scope,
+              mention.id,
+              workingStatus,
+              input.triggerAnalysisId,
+            );
+            if (ladder.reason !== null) {
+              // Boundary mapping: the ladder's internal reasons stay internal.
+              // `mention_dismissed`/`awaiting_retriage` are unreachable behind
+              // the transition matrix above, and are mapped defensively rather
+              // than trusted to be impossible.
+              const replayed =
+                ladder.reason === "escalation_exists" ||
+                ladder.reason === "occurrence_replayed";
+              outcomes.push({
+                index,
+                type: action.type,
+                outcome: replayed ? "no_op" : "blocked",
+                code: replayed ? "escalation_exists" : "forbidden_transition",
+              });
+              return;
+            }
+
+            pendingEscalation = automationEscalationInput(
+              scope,
+              mention,
+              rule,
+              analysis,
+              input.triggerAnalysisId,
+            );
             workingStatus = "escalated";
             outcomes.push({ index, type: action.type, outcome: "applied", code: null });
           });
@@ -2680,13 +2993,22 @@ export function createDemoDataSource(): LiaDataSource {
           // only step that can fail, so it runs before any other row is
           // touched. Everything after it is an in-memory assignment that
           // cannot throw, so there is no state in which half the unit landed.
+          //
+          // No audit event type: this unit's own `executed` event is the trail
+          // the escalation belongs to, which is why `raise_escalation` takes
+          // the type from its caller rather than assuming one.
           if (pendingEscalation !== null) {
-            raiseEscalation(scope, pendingEscalation);
+            raiseEscalation(scope, pendingEscalation, null);
           }
 
           if (workingStatus !== mention.status) {
+            // Re-read: raising a case has already moved the mention to
+            // `escalated`, and writing back the copy read before that would
+            // undo the transition that came with the creation.
+            const current =
+              mentionsIn(scope).find((row) => row.id === mention.id) ?? mention;
             replaceRow(store().mentions, {
-              ...mention,
+              ...current,
               status: workingStatus,
               updatedAt: nowIso(),
             });

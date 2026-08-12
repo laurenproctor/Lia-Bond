@@ -18,6 +18,7 @@ import type {
   DryRunExecutionStatus,
   Escalation,
   EscalationFilter,
+  EscalationRefusalReason,
   ExecutionActionOutcome,
   FinishAnalysisRunInput,
   FinishSyncRunInput,
@@ -49,6 +50,7 @@ import type {
   PlatformConnection,
   PlatformProfile,
   PlatformSyncRun,
+  RaiseEscalationResult,
   RecordAuditEventInput,
   ResponseDraft,
   ResponseDraftFilter,
@@ -113,6 +115,53 @@ export interface MentionAnalysisOutcome {
   relevanceScore: number | null;
   /** Applied only when the mention is still `new`. */
   status: Extract<MentionStatus, "analyzed" | "escalated">;
+}
+
+/**
+ * What one analysis occurrence asks the contract to apply.
+ *
+ * The parameter list of `apply_analysis_occurrence`, field for field. Note
+ * what is absent: a status. The final status is derived inside the entry point
+ * from the mention's current state and the escalation result, so a decision a
+ * person made between the recording and the application cannot be overwritten
+ * by a caller passing the status it expected.
+ *
+ * The escalation fields are supplied whether or not `shouldEscalate` is set —
+ * as they are in SQL — and are simply unread when it is false.
+ */
+export interface ApplyAnalysisOccurrenceInput {
+  mentionId: string;
+  analysisId: string;
+  shouldEscalate: boolean;
+  category: Escalation["category"];
+  severity: Escalation["severity"];
+  title: string;
+  summary: string | null;
+  sentiment: Mention["sentiment"];
+  riskLevel: Mention["riskLevel"];
+  relevanceScore: number | null;
+}
+
+/**
+ * What the contract did with the occurrence.
+ *
+ * `alreadyApplied` is the replay-after-success answer: zero effects, zero
+ * events, and `finalStatus` is simply what the mention says now. `escalationId`
+ * is null on a hard refusal and on a replay of a non-escalating occurrence;
+ * `reason` names which arm of the ladder answered.
+ */
+export interface ApplyAnalysisOccurrenceResult {
+  escalationId: string | null;
+  escalationCreated: boolean;
+  reason: EscalationRefusalReason | null;
+  alreadyApplied: boolean;
+  finalStatus: MentionStatus;
+}
+
+/** Insert-or-load on the event key. `created: false` means "this already was". */
+export interface RecordAnalysisOccurrenceResult {
+  analysis: MentionAnalysis;
+  created: boolean;
 }
 
 /** Bundles a mention with everything the workspaces render alongside it. */
@@ -568,6 +617,43 @@ export interface MentionRepository {
     input: CreateMentionAnalysisInput,
   ): Promise<MentionAnalysis>;
   /**
+   * Record an analysis occurrence, or load the one already recorded.
+   *
+   * The mirror of `record_analysis_occurrence`. A logical analysis event is
+   * (organization, run, mention): every pipeline recording happens inside a
+   * run, so the run id is the identity every recorder of the same event
+   * carries. Recording is therefore idempotent under every arrival order,
+   * including a recorder arriving after the event already completed —
+   * `created: false` with the stored row, whose output the caller uses instead
+   * of its own.
+   *
+   * Separately, a mention may have only one *pending* occurrence (one whose
+   * outcome has not been applied), so recovery always has exactly one thing to
+   * finish. A later event arriving while one is pending is handed the pending
+   * row, and the caller completes that first.
+   */
+  recordAnalysisOccurrence(
+    scope: OrganizationScope,
+    input: CreateMentionAnalysisInput,
+  ): Promise<RecordAnalysisOccurrenceResult>;
+  /**
+   * Apply one occurrence's outcome: the atomic analysis entry point.
+   *
+   * The mirror of `apply_analysis_occurrence`. Eligibility, the escalation
+   * decision, the mention transition, the denormalised columns, the
+   * occurrence's completion stamp, and the escalation's audit event are one
+   * unit. Replaying a completed occurrence has zero effects.
+   *
+   * Together with `AutomationRuleExecutionRepository.executeUnit` this is one
+   * of the only two ways an escalation is created. In Postgres that is
+   * enforced by grant — `raise_escalation` is executable by neither the
+   * application role nor anything it can call directly.
+   */
+  applyAnalysisOccurrence(
+    scope: OrganizationScope,
+    input: ApplyAnalysisOccurrenceInput,
+  ): Promise<ApplyAnalysisOccurrenceResult>;
+  /**
    * Write the fields an analysis owns.
    *
    * Deliberately not `create`, and deliberately not a general update. An
@@ -646,18 +732,26 @@ export interface EscalationRepository {
   list(scope: OrganizationScope, filter?: EscalationFilter): Promise<Escalation[]>;
   get(scope: OrganizationScope, escalationId: string): Promise<Escalation | null>;
   /**
-   * Raise an escalation.
+   * The escalation ladder — **not a production path**.
    *
-   * Refuses when the mention already has one, rather than creating a second.
-   * A restaurant with two open cases for one review is a queue nobody trusts,
-   * and re-running an analysis must not produce that. Returns the existing
-   * escalation instead, so the caller can tell "already raised" from "raised
-   * now" by comparing ids.
+   * Escalations are created by exactly two entry points: `applyAnalysisOccurrence`
+   * (analysis) and `executeUnit` (automation). Both reach the ladder internally;
+   * nothing else may. The Supabase adapter enforces that by refusing this method
+   * outright (`unavailable`), which matches the database, where `raise_escalation`
+   * is executable by no application role and INSERT on `escalations` is revoked.
+   *
+   * The demo adapter keeps it working as the in-memory twin's seam — it has no
+   * privilege system to enforce anything with, and its tests need a way to seed
+   * a case — and it runs the exact ladder: provenance → occurrence replay →
+   * dismissed → open dedupe → awaiting re-triage → create.
+   *
+   * The result names which arm answered. `escalation` is null exactly on a hard
+   * refusal; a refusal never answers with somebody else's case.
    */
   create(
     scope: OrganizationScope,
     input: CreateEscalationInput,
-  ): Promise<{ escalation: Escalation; created: boolean }>;
+  ): Promise<RaiseEscalationResult>;
   updateStatus(
     scope: OrganizationScope,
     escalationId: string,
