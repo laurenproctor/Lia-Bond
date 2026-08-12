@@ -385,13 +385,20 @@ export async function executeRules(
             // row drives the counters. They differ only when `recordProjection`
             // replayed an earlier row for this analysis occurrence, and in that
             // case the freshly computed one is the current preview while the
-            // stored one is what this sweep actually has to show for itself.
+            // stored one belongs to the sweep that first recorded it.
             projected = next.state;
 
             const recorded = await dataSource.automationRuleExecutions.recordProjection(
               scope,
               { ...unit, status: next.projection.status, outcomes: next.projection.outcomes },
             );
+            // Same gate as the apply path below, for the same reason: a replay
+            // returns the row an earlier sweep recorded, and folding its
+            // outcomes in here would inflate this sweep's counters with work it
+            // did not do. Dry run has to be countable against apply, so the two
+            // modes cannot disagree about which sweep owns a replayed row.
+            if (recorded.sweepId !== sweep.id) continue;
+
             countOutcomes(counters, recorded.outcomes);
             // A projected validation failure is the preview of a terminal
             // apply-mode failure, and counted the same way so the two modes'

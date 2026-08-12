@@ -564,6 +564,30 @@ describe("executeRules: replay", () => {
     // Applied is not: nothing was applied in the second sweep.
     expect(stamped.lastAppliedAt).toBe("2020-01-01T00:00:00.000Z");
   });
+
+  it("keeps a replayed projection out of the second dry run's counters", async () => {
+    await activateRule({ name: "Move analysed to monitoring" });
+
+    const first = await run("dry_run");
+    expect(first.counters.actionsApplied).toBe(1);
+    expect(executions()).toHaveLength(1);
+    const projection = executions()[0]!;
+
+    const second = await run("dry_run");
+
+    // `recordProjection` returned the first sweep's row unchanged, so the
+    // second sweep has nothing of its own to count. Only evaluated and matched
+    // survive — the rule really was considered, and it really did match.
+    expect(second.counters).toEqual({
+      ...ZERO_COUNTERS,
+      mentionsEvaluated: 1,
+      rulesMatched: 1,
+    });
+    expect(executions()).toHaveLength(1);
+    expect(executions()[0]).toEqual(projection);
+    expect(executions()[0]!.sweepId).toBe(first.sweepId);
+    expect(second.sweepId).not.toBe(first.sweepId);
+  });
 });
 
 describe("executeRules: caps and budget", () => {
