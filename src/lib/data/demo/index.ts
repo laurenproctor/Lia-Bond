@@ -386,6 +386,35 @@ export function createDemoDataSource(): LiaDataSource {
     ) ?? null;
 
   /**
+   * The one case to show for a mention: open first, then most recent.
+   *
+   * Ordering, in full: open before closed, then newer before older, then by id.
+   * The last two are not decoration — the demo clock is frozen, so every case
+   * raised at runtime carries the same `createdAt` and a date comparison alone
+   * ties. A tie resolved by insertion order would put a resolved case on the
+   * detail panel of a mention that is currently escalated.
+   *
+   * The Supabase adapter's `getDetail` orders the same way (`status in (open,
+   * in_progress, pending_approval)` descending, then `created_at` descending,
+   * then `id`), so a screen does not change shape when a deployment gains a
+   * database.
+   */
+  const currentEscalationFor = (
+    scope: OrganizationScope,
+    mentionId: string,
+  ): Escalation | null =>
+    orgRows(store().escalations, scope)
+      .filter((row) => row.mentionId === mentionId)
+      .sort((a, b) => {
+        const openness =
+          Number(!isEscalationClosed(b.status)) - Number(!isEscalationClosed(a.status));
+        if (openness !== 0) return openness;
+        const recency = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+        if (recency !== 0) return recency;
+        return a.id.localeCompare(b.id);
+      })[0] ?? null;
+
+  /**
    * The ladder, read-only: what `raiseEscalation` would answer right now.
    *
    * Split out because the execution unit decides every action against a private
@@ -1836,12 +1865,17 @@ export function createDemoDataSource(): LiaDataSource {
           drafts: draftsIn(scope)
             .filter((row) => row.mentionId === mentionId)
             .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
-          // The mention's current case, newest first — a mention carries at
-          // most one open case but may have carried several over its life.
-          escalation:
-            orgRows(store().escalations, scope)
-              .filter((row) => row.mentionId === mentionId)
-              .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ?? null,
+          // The case a reader of this mention is looking for: the open one if
+          // there is one, otherwise the most recent piece of history. A mention
+          // carries at most one open case but may have carried several over its
+          // life, so "the escalation" is a choice and it is made here.
+          //
+          // Open-first rather than newest-first, and not only because it is
+          // what the detail panel wants: under the demo's frozen clock every
+          // runtime-raised case shares one `createdAt`, so a newest-first sort
+          // ties and returns whichever was inserted first — which would show a
+          // resolved case while an open one sat beside it.
+          escalation: currentEscalationFor(scope, mentionId),
           location: mention.locationId
             ? (orgRows(store().locations, scope).find((row) => row.id === mention.locationId) ??
               null)

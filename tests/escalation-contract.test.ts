@@ -347,6 +347,66 @@ describe("applyAnalysisOccurrence: the escalation ladder", () => {
     expect(await statusOf(subject)).toBe("dismissed");
   });
 
+  it("preserves a dismissal when a replayed occurrence is applied", async () => {
+    // The reachable route to the replay arm of `applyAnalysisOccurrence`:
+    // automation raises a case off an occurrence the pipeline has not applied
+    // yet, a person dismisses the mention, and only then does the pipeline get
+    // to that occurrence. The occurrence is not a replay of itself — it has
+    // never been applied — but its *escalation* already exists, and reporting
+    // that history must not undo the dismissal.
+    const o1 = await record(subject, crypto.randomUUID());
+    const unit = await executeEscalateUnit(subject, o1.analysis.id);
+    expect(unit.outcomes[0]).toMatchObject({ outcome: "applied" });
+    expect(await statusOf(subject)).toBe("escalated");
+
+    await ds.mentions.updateStatus(scope, subject, "dismissed");
+
+    const applied = await apply(subject, o1.analysis.id, true);
+
+    expect(applied).toMatchObject({
+      escalationCreated: false,
+      reason: "occurrence_replayed",
+      alreadyApplied: false,
+      // Preserved, not derived from the escalation result: a replay reports
+      // history and never mutates state.
+      finalStatus: "dismissed",
+    });
+    expect(applied.escalationId).toBe(escalationsFor(subject)[0]?.id);
+    expect(escalationsFor(subject)).toHaveLength(1);
+    expect(await statusOf(subject)).toBe("dismissed");
+
+    // The occurrence is still completed by the application: it has done all it
+    // will ever do, and leaving it pending would have recovery re-pick it.
+    const stored = await ds.mentions.latestAnalysis(scope, subject);
+    expect(stored?.outcomeAppliedAt).not.toBeNull();
+  });
+
+  it("shows the open case on the mention detail, not an older resolved one", async () => {
+    const o1 = await record(subject, crypto.randomUUID());
+    const first = await apply(subject, o1.analysis.id, true);
+    await ds.escalations.updateStatus(
+      scope,
+      first.escalationId!,
+      "resolved",
+      "Spoke to the guest.",
+    );
+    await ds.mentions.updateStatus(scope, subject, "monitoring");
+
+    const o2 = await record(subject, crypto.randomUUID());
+    const second = await apply(subject, o2.analysis.id, true);
+
+    const rows = escalationsFor(subject);
+    expect(rows).toHaveLength(2);
+    // The demo clock is frozen, so both cases carry the same `createdAt`:
+    // ordering by recency alone ties, and a tie broken by insertion order
+    // would put the resolved case on the panel of an escalated mention.
+    expect(rows[0]?.createdAt).toBe(rows[1]?.createdAt);
+
+    const detail = await ds.mentions.getDetail(scope, subject);
+    expect(detail?.escalation?.id).toBe(second.escalationId);
+    expect(detail?.escalation?.status).toBe("open");
+  });
+
   it("returns the open case for escalation_exists and nothing for a hard refusal", async () => {
     const o1 = await record(subject, crypto.randomUUID());
     const first = await apply(subject, o1.analysis.id, true);

@@ -519,6 +519,24 @@ describe("executeRules: dry run previews the apply faithfully", () => {
     expect(demoStore().escalations.filter((row) => row.mentionId === mentionA)).toHaveLength(1);
   });
 
+  /**
+   * The one shape in which the two modes currently disagree, left as a failing
+   * target rather than a comment somebody has to notice.
+   *
+   * A re-triaged mention whose only case is closed AND was raised by a
+   * *different* occurrence: the projector seeds `escalationExists` from any
+   * escalation the mention has ever had, so it previews `would_no_op`, while
+   * apply mode — which refuses only on an open case or on a replay of the
+   * unit's own occurrence — raises a second case. Dry run under-promises,
+   * which is the safer of the two errors, but it is still a disagreement.
+   *
+   * Closing it means making the projector open-only and occurrence-aware, so
+   * that it asks the contract's question rather than an older, broader one.
+   */
+  it.todo(
+    "dry run previews the second case apply raises for a re-triaged mention whose closed case came from another occurrence",
+  );
+
   it("carries a rule's projected effect into the next rule's preview", async () => {
     const first = await activateRule({
       name: "Rule one",

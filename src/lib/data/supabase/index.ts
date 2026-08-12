@@ -18,6 +18,7 @@ import {
   isSuccessfulSyncRun,
   isSyncRunStale,
   firstIncompleteStep,
+  OPEN_ESCALATION_STATUSES,
   recordAuditEventInputSchema,
   requiresResolutionNote,
   sourceFieldsChanged,
@@ -1714,38 +1715,59 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         const mention = await this.get(scope, mentionId);
         if (!mention) return null;
 
-        const [analysis, draftResult, escalationResult, locationResult, connectionResult] =
-          await Promise.all([
-            this.latestAnalysis(scope, mentionId),
-            from("response_drafts", scope)
-              .eq("mention_id", mentionId)
-              .order("created_at", { ascending: false }),
-            // The mention's current case, newest first. A mention carries at
-            // most one *open* case, but it may have carried several over its
-            // life — a resolved one, then a new occurrence raising another —
-            // so this is a bounded read of the latest, not a `maybeSingle()`
-            // that would error the moment a second case exists.
-            from("escalations", scope)
-              .eq("mention_id", mentionId)
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle(),
-            mention.locationId
-              ? from("locations", scope).eq("id", mention.locationId).maybeSingle()
-              : Promise.resolve({ data: null, error: null }),
-            from("platform_connections", scope)
-              .eq("id", mention.platformConnectionId)
-              .maybeSingle(),
-          ]);
+        const [
+          analysis,
+          draftResult,
+          openEscalationResult,
+          latestEscalationResult,
+          locationResult,
+          connectionResult,
+        ] = await Promise.all([
+          this.latestAnalysis(scope, mentionId),
+          from("response_drafts", scope)
+            .eq("mention_id", mentionId)
+            .order("created_at", { ascending: false }),
+          // The case a reader is looking for: the open one if there is one,
+          // otherwise the most recent piece of history. A mention carries at
+          // most one *open* case but may have carried several over its life
+          // — a resolved one, then a new occurrence raising another — so
+          // this is two bounded reads with an explicit preference between
+          // them, not a `maybeSingle()` that would error the moment a second
+          // case exists. They run in parallel, so the fallback costs no
+          // extra round trip. The demo adapter's `currentEscalationFor`
+          // orders the same way.
+          from("escalations", scope)
+            .eq("mention_id", mentionId)
+            .in("status", [...OPEN_ESCALATION_STATUSES])
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
+            .limit(1)
+            .maybeSingle(),
+          from("escalations", scope)
+            .eq("mention_id", mentionId)
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
+            .limit(1)
+            .maybeSingle(),
+          mention.locationId
+            ? from("locations", scope).eq("id", mention.locationId).maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+          from("platform_connections", scope)
+            .eq("id", mention.platformConnectionId)
+            .maybeSingle(),
+        ]);
 
         if (draftResult.error) fail(draftResult.error, "load responses");
+
+        const currentEscalation =
+          openEscalationResult.data ?? latestEscalationResult.data;
 
         return {
           mention,
           analysis,
           drafts: rows(draftResult.data).map(toResponseDraft),
-          escalation: escalationResult.data
-            ? toEscalation(escalationResult.data as Row)
+          escalation: currentEscalation
+            ? toEscalation(currentEscalation as Row)
             : null,
           location: locationResult.data ? toLocation(locationResult.data as Row) : null,
           connection: connectionResult.data

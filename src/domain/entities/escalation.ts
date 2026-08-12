@@ -143,6 +143,16 @@ export type AssignEscalationInput = z.infer<typeof assignEscalationInputSchema>;
 /** Statuses that mean the case is finished. */
 export const CLOSED_ESCALATION_STATUSES = ["resolved", "dismissed"] as const;
 
+/**
+ * Statuses that mean the case is still somebody's problem.
+ *
+ * The complement of `CLOSED_ESCALATION_STATUSES`, and the exact set the
+ * database's `escalations_one_open_per_mention` partial index covers — a
+ * mention may carry only one case in these statuses at a time. Named here so
+ * the adapters, the index, and the contract's dedupe cannot drift apart.
+ */
+export const OPEN_ESCALATION_STATUSES = ["open", "in_progress", "pending_approval"] as const;
+
 export function isEscalationClosed(status: Escalation["status"]): boolean {
   return (CLOSED_ESCALATION_STATUSES as readonly string[]).includes(status);
 }

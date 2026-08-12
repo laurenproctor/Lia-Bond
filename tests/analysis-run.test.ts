@@ -547,6 +547,13 @@ describe("escalation", () => {
   it("does not raise a second escalation for a mention that has one", async () => {
     // Two open cases for one review is a queue nobody trusts.
     //
+    // A freshly imported mention, deliberately: it is `new`, so it reaches the
+    // contract's open-case dedupe rather than being turned away earlier by the
+    // dismissed refusal — the head of the seeded backlog is dismissed, and a
+    // fixture built on it would pass with the dedupe entirely broken. Ingest
+    // also makes it the oldest mention in the backlog, so a `limit: 1` run
+    // picks exactly this one.
+    //
     // The case is written straight into the store rather than raised through
     // the repository, and it has to be: every escalation raised from here on
     // names the analysis occurrence that authorized it, and this mention has
@@ -554,9 +561,9 @@ describe("escalation", () => {
     // run is meant to pick it up from. A case with no occurrence is exactly
     // what a row predating the contract looks like, which is what this fixture
     // is, and the contract still has to dedupe against it.
-    const [target] = await dataSource.mentions.listUnanalyzed(scope, 1);
+    const target = await ingestFresh("fresh-for-existing-escalation");
 
-    const first = seedHistoricalEscalation(target!.id);
+    const first = seedHistoricalEscalation(target.id);
 
     const result = await analyzeMentions(
       { dataSource, scope },
@@ -569,13 +576,18 @@ describe("escalation", () => {
     );
 
     const escalations = await dataSource.escalations.list(scope, {
-      mentionId: target!.id,
+      mentionId: target.id,
     });
 
     expect(escalations).toHaveLength(1);
     expect(escalations[0]?.id).toBe(first.escalation.id);
     // Counted as not-escalated, because this run did not raise it.
     expect(result.counts.escalated).toBe(0);
+    // Which arm refused it matters: the open case is what stopped the second
+    // one, and the mention advancing to `escalated` is what proves it. A
+    // refusal for any other reason — a dismissed mention, say — would have
+    // left the status where it was and passed these counts just the same.
+    expect((await dataSource.mentions.get(scope, target.id))?.status).toBe("escalated");
   });
 });
 
