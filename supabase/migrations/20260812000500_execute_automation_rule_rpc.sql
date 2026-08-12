@@ -1,8 +1,9 @@
 -- The Phase 2 execution unit (spec §7): claim, validate, apply, record,
 -- audit — one transaction. The demo adapter's executeUnit is the pinned
--- reference twin; supabase/tests/execution-verification.sql proves the
--- semantics D148–D158 promise. Service-role only. Executes ONLY the stored
--- rule revision: callers name a unit, they never define one.
+-- reference twin; the database harness that proves the semantics D148–D158
+-- promise (supabase/tests/execution-verification.sql) lands with it.
+-- Service-role only. Executes ONLY the stored rule revision: callers name a
+-- unit, they never define one.
 create function public.execute_automation_rule(
   p_organization_id uuid,
   p_sweep_id uuid,       -- the ATTEMPT sweep; the row keeps its origin
@@ -31,6 +32,9 @@ declare
   v_valid boolean;
   v_esc record;
   v_row_status text;
+  v_category escalation_category;
+  v_location_name text;
+  v_subject text;
 begin
   ------------------------------------------------------------------
   -- CLAIM. Insert races on execs_idempotent; a concurrent caller blocks
@@ -105,6 +109,16 @@ begin
             or (jsonb_typeof(a->'voiceProfile') = 'string'
                 and length(a->>'voiceProfile') <= 80))
         when 'auto_publish' then true
+        -- The three uuid arms below are LAXER than the twin's. Zod's
+        -- `z.uuid()` demands an RFC-shaped uuid; `automation_is_uuid` is the
+        -- PostgreSQL parser, which also accepts braced, hyphenless, and
+        -- off-version/off-variant forms. A rule authored through the product
+        -- can never hold one — the writing path validates with Zod — so the
+        -- divergence is reachable only by editing the row in the database.
+        -- `automation_is_uuid` is deliberately NOT tightened: it is shared
+        -- with the merged escalation contract. Task 11's parity corpus must
+        -- therefore exclude non-RFC-shaped uuid strings, which are the only
+        -- inputs on which the two validators disagree.
         when 'require_approval' then
           a ? 'approverUserId' and (jsonb_typeof(a->'approverUserId') = 'null'
             or (jsonb_typeof(a->'approverUserId') = 'string'
@@ -181,11 +195,30 @@ begin
       elsif v_type = 'escalate' then
         v_decision := public.automation_escalate_decision(v_status);
         if v_decision = 'apply' then
+          -- The case a rule raises says the same three things the twin's
+          -- `automationEscalationInput` says, because they are the same case:
+          -- the category is ROUTING DATA (it decides who works the queue), so
+          -- it comes from the occurrence's own classification rather than a
+          -- hardcoded 'other'; the title is what a person reads in the list;
+          -- and the summary names the rule, because somebody opening the case
+          -- has to be able to tell why it exists. Both reads sit inside the
+          -- apply subtransaction and roll back with the unit.
+          --
+          -- `upper(left(...))||substr(...)`, deliberately not `initcap`:
+          -- sentence case throughout the interface — "Food safety risk", not
+          -- "Food Safety Risk".
+          select coalesce(ma.risk_categories[1], 'other') into v_category
+            from public.mention_analyses ma where ma.id = p_analysis_id;
+          select l.name into v_location_name from public.locations l
+           where l.id = v_mention.location_id;
+          v_subject := replace(v_category::text, '_', ' ');
           -- Null audit type: this unit's own executed event is the trail.
           select * into v_esc from public.raise_escalation(
-            p_organization_id, p_mention_id, 'other',
-            v_mention.risk_level, 'Escalated by rule: ' || v_rule.name,
-            null, null, p_analysis_id, null);
+            p_organization_id, p_mention_id, v_category, v_mention.risk_level,
+            upper(left(v_subject, 1)) || substr(v_subject, 2) || ' risk'
+              || coalesce(' at ' || v_location_name, ''),
+            'Raised automatically by the rule "' || v_rule.name || '".',
+            null, p_analysis_id, null);
           if v_esc.created then
             v_status := 'escalated';
             v_applied := v_applied + 1;
@@ -264,9 +297,12 @@ begin
     values (p_organization_id, null, 'system',
             'automation_rule.execution_failed', 'automation_rule',
             p_rule_id, null, null,
+            -- `errorCode`, not `sqlstate`: the metadata KEY set is the pinned
+            -- vocabulary both adapters write, and the demo twin has no
+            -- SQLSTATE to offer. The value is still this failure's sqlstate.
             jsonb_build_object('originSweepId', v_exec.sweep_id,
               'attemptSweepId', p_sweep_id, 'mentionId', p_mention_id,
-              'analysisId', p_analysis_id, 'sqlstate', sqlstate));
+              'analysisId', p_analysis_id, 'errorCode', sqlstate));
     return v_exec;
   end;
 end $$;

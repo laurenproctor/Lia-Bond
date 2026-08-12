@@ -363,17 +363,29 @@ export async function executeRules(
         // *different* occurrence is history and refuses nothing, which is
         // precisely the shape where the older, broader seed used to preview a
         // no-op against an apply that raises a second case.
-        const cases = anyRuleEscalates
-          ? await dataSource.escalations.list(scope, { mentionId: mention.id })
-          : [];
+        //
+        // Built for dry run and nobody else: apply mode re-reads the stored
+        // mention inside every unit, so a projected view would be dead weight
+        // and the read behind it dead cost. The gate is spelled out here as
+        // well as inside `anyRuleEscalates` so neither can drift into paying
+        // for the other's work.
         let projected: ProjectedMention = {
           status: mention.status,
-          escalationExists: cases.some(
-            (row) =>
-              !isEscalationClosed(row.status) ||
-              row.triggerAnalysisId === pair.analysisId,
-          ),
+          escalationExists: false,
         };
+        if (input.mode === "dry_run") {
+          const cases = anyRuleEscalates
+            ? await dataSource.escalations.list(scope, { mentionId: mention.id })
+            : [];
+          projected = {
+            status: mention.status,
+            escalationExists: cases.some(
+              (row) =>
+                !isEscalationClosed(row.status) ||
+                row.triggerAnalysisId === pair.analysisId,
+            ),
+          };
+        }
 
         for (const rule of rules) {
           if (!matchesRule(subject, rule.conditions)) continue;

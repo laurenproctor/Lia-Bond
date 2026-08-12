@@ -9,6 +9,7 @@ import {
   type AuditEvent,
   type AutomationRule,
   type AutomationSweep,
+  type MentionAnalysis,
   type SweepCounters,
 } from "@/domain";
 
@@ -37,7 +38,10 @@ let sweepId: string;
  *
  * Each call is its own analysis event, hence its own run id.
  */
-async function seedAnalysis(analyzedAt: string): Promise<string> {
+async function seedAnalysis(
+  analyzedAt: string,
+  riskCategories: MentionAnalysis["riskCategories"] = [],
+): Promise<string> {
   const created = await ds.mentions.createAnalysis(scope, {
     mentionId,
     analysisRunId: crypto.randomUUID(),
@@ -49,7 +53,7 @@ async function seedAnalysis(analyzedAt: string): Promise<string> {
     sentiment: "mixed",
     sentimentScore: 0,
     riskLevel: "low",
-    riskCategories: [],
+    riskCategories,
     riskExplanation: null,
     topics: [],
     factsNeedingVerification: [],
@@ -620,6 +624,79 @@ describe("automationRuleExecutions.executeUnit", () => {
       expect(row.lastErrorCode).toBeNull();
       expect((await ds.mentions.get(scope, mentionId))!.status).toBe("analyzed");
       expect(demoStore().escalations.length).toBe(escalationsBefore);
+    });
+  });
+
+  /**
+   * What a case raised by a rule says about itself.
+   *
+   * Three fields, and none of them decorative. The **category** is routing
+   * data — it decides which queue and which severity filter a person finds
+   * this in — so it comes from the occurrence's own classification, never a
+   * hardcoded default. The **title** is what a reader sees in the list, in
+   * sentence case, naming the location when there is one. The **summary**
+   * names the rule, because somebody opening a case Lia raised has to be able
+   * to tell why it exists without guessing. The G1 RPC builds the same three
+   * from the same sources; pinning them here is what the SQL is held to.
+   */
+  describe("the case a rule raises", () => {
+    it("carries the occurrence's category, a located title, and the rule's name", async () => {
+      const occurrence = await seedAnalysis("2026-08-01T14:00:00.000Z", [
+        "food_safety",
+      ]);
+      const mention = (await ds.mentions.get(scope, mentionId))!;
+      const location = (await ds.locations.list(scope)).find(
+        (row) => row.id === mention.locationId,
+      );
+      if (!location) throw new Error("Expected the fixture mention to be located");
+
+      const row = await ds.automationRuleExecutions.executeUnit(
+        scope,
+        unit({ triggerAnalysisId: occurrence }),
+      );
+      expect(row.status).toBe("applied");
+
+      const raised = demoStore().escalations.find(
+        (escalation) => escalation.triggerAnalysisId === occurrence,
+      );
+      expect(raised).toBeDefined();
+      // Not `other`: the classification that authorized the rule is the one
+      // that routes the case.
+      expect(raised!.category).toBe("food_safety");
+      expect(raised!.severity).toBe(mention.riskLevel);
+      // Sentence case, and the underscore spelled out as a space.
+      expect(raised!.title).toBe(`Food safety risk at ${location.name}`);
+      expect(raised!.summary).toBe(
+        'Raised automatically by the rule "Execution unit fixture".',
+      );
+    });
+
+    it("drops the location clause when the mention has none", async () => {
+      const occurrence = await seedAnalysis("2026-08-01T15:00:00.000Z", [
+        "food_safety",
+      ]);
+      relocateMention(null);
+
+      await ds.automationRuleExecutions.executeUnit(
+        scope,
+        unit({ triggerAnalysisId: occurrence }),
+      );
+
+      const raised = demoStore().escalations.find(
+        (escalation) => escalation.triggerAnalysisId === occurrence,
+      );
+      expect(raised!.title).toBe("Food safety risk");
+    });
+
+    it("falls back to `other` when the occurrence classified no risk category", async () => {
+      const row = await ds.automationRuleExecutions.executeUnit(scope, unit());
+      expect(row.status).toBe("applied");
+
+      const raised = demoStore().escalations.find(
+        (escalation) => escalation.triggerAnalysisId === analysisId,
+      );
+      expect(raised!.category).toBe("other");
+      expect(raised!.title).toMatch(/^Other risk/);
     });
   });
 
