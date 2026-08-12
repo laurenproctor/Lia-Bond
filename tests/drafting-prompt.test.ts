@@ -4,6 +4,7 @@ import {
   DRAFTING_OUTPUT_SCHEMA_VERSION,
   DRAFTING_PROMPT_VERSION,
   DRAFTING_SYSTEM_PROMPT,
+  DRAFTING_TEMPLATE_CONSTANTS,
   UNTRUSTED_CONTENT_CLOSE,
   UNTRUSTED_CONTENT_OPEN,
   draftingOutputSchema,
@@ -11,6 +12,31 @@ import {
   renderDraftingPrompt,
   type DraftingPromptContext,
 } from "@/ai/anthropic/drafting-prompt";
+
+/**
+ * Every block of untrusted content in a rendered user message, in order.
+ *
+ * Used instead of `indexOf`/`lastIndexOf` arithmetic so delimiter-position
+ * assertions do not depend on field ordering inside `renderDraftingUser` —
+ * this walks the actual open/close pairs the renderer produced, whatever
+ * order they came in.
+ */
+function delimitedBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  let from = 0;
+
+  for (;;) {
+    const openIndex = text.indexOf(UNTRUSTED_CONTENT_OPEN, from);
+    if (openIndex === -1) break;
+    const contentStart = openIndex + UNTRUSTED_CONTENT_OPEN.length;
+    const closeIndex = text.indexOf(UNTRUSTED_CONTENT_CLOSE, contentStart);
+    if (closeIndex === -1) break;
+    blocks.push(text.slice(contentStart, closeIndex));
+    from = closeIndex + UNTRUSTED_CONTENT_CLOSE.length;
+  }
+
+  return blocks;
+}
 
 /**
  * The drafting prompt.
@@ -84,27 +110,28 @@ describe("renderDraftingPrompt", () => {
     expect(system).toBe(DRAFTING_SYSTEM_PROMPT);
   });
 
-  it("keeps the review text inside the untrusted-content delimiters", () => {
+  it("keeps the review text inside exactly one untrusted-content block, and nowhere outside any block", () => {
     const { user } = renderDraftingPrompt(CONTEXT);
+    const blocks = delimitedBlocks(user);
 
-    const openIndex = user.indexOf(UNTRUSTED_CONTENT_OPEN, user.indexOf(CONTEXT.review.text) - 200);
-    const textIndex = user.indexOf(CONTEXT.review.text);
-    const closeIndex = user.indexOf(UNTRUSTED_CONTENT_CLOSE, textIndex);
+    const matching = blocks.filter((block) => block.includes(CONTEXT.review.text));
+    expect(matching).toHaveLength(1);
 
-    expect(openIndex).toBeGreaterThanOrEqual(0);
-    expect(textIndex).toBeGreaterThan(openIndex);
-    expect(closeIndex).toBeGreaterThan(textIndex);
+    // Strip every delimited block's content out of the message; the review
+    // text must not survive anywhere outside of them.
+    const outsideBlocks = blocks.reduce((text, block) => text.split(block).join(""), user);
+    expect(outsideBlocks).not.toContain(CONTEXT.review.text);
   });
 
-  it("keeps the reviewer name inside the untrusted-content delimiters", () => {
+  it("keeps the reviewer name inside exactly one untrusted-content block, and nowhere outside any block", () => {
     const { user } = renderDraftingPrompt(CONTEXT);
+    const blocks = delimitedBlocks(user);
 
-    const nameIndex = user.indexOf(CONTEXT.review.authorName!);
-    const openIndex = user.lastIndexOf(UNTRUSTED_CONTENT_OPEN, nameIndex);
-    const closeIndex = user.indexOf(UNTRUSTED_CONTENT_CLOSE, nameIndex);
+    const matching = blocks.filter((block) => block.includes(CONTEXT.review.authorName!));
+    expect(matching).toHaveLength(1);
 
-    expect(openIndex).toBeGreaterThanOrEqual(0);
-    expect(closeIndex).toBeGreaterThan(nameIndex);
+    const outsideBlocks = blocks.reduce((text, block) => text.split(block).join(""), user);
+    expect(outsideBlocks).not.toContain(CONTEXT.review.authorName!);
   });
 
   it("places an injection-shaped review only inside the user message's delimited block, never in the system message", () => {
@@ -117,12 +144,12 @@ describe("renderDraftingPrompt", () => {
 
     expect(system).not.toContain(INJECTION_PROBE);
 
-    const openIndex = user.indexOf(UNTRUSTED_CONTENT_OPEN);
-    const probeIndex = user.indexOf(INJECTION_PROBE);
-    const closeIndex = user.indexOf(UNTRUSTED_CONTENT_CLOSE, probeIndex);
+    const blocks = delimitedBlocks(user);
+    const matching = blocks.filter((block) => block.includes(INJECTION_PROBE));
+    expect(matching).toHaveLength(1);
 
-    expect(probeIndex).toBeGreaterThan(openIndex);
-    expect(closeIndex).toBeGreaterThan(probeIndex);
+    const outsideBlocks = blocks.reduce((text, block) => text.split(block).join(""), user);
+    expect(outsideBlocks).not.toContain(INJECTION_PROBE);
   });
 
   it("states the language rule and the sign-off rule in the system message", () => {
@@ -201,27 +228,26 @@ describe("version identifiers", () => {
 /**
  * The pin.
  *
- * `DRAFTING_SYSTEM_PROMPT` and the untrusted-content delimiters are the words
- * an operator never types and a customer never sees, but their exact wording
- * is safety-load-bearing: it is what tells the model the review is quoted
- * material rather than a command. Hashing `DRAFTING_PROMPT_VERSION` together
- * with the templates means EITHER an unbumped wording edit OR a version bump
- * with no real change fails this test — the two are meant to always move
- * together. To intentionally change the template: edit it, bump
- * `DRAFTING_PROMPT_VERSION`, run this test, copy the "actual hash" it prints,
- * and paste it in as the new `RECORDED_TEMPLATE_HASH`.
+ * `DRAFTING_TEMPLATE_CONSTANTS` (the system prompt, the untrusted-content
+ * delimiters, and every static label `renderDraftingUser` writes — see
+ * `DRAFTING_USER_LABELS` in the source) are the words an operator never
+ * types and a customer never sees, but their exact wording is
+ * safety-load-bearing: it is what tells the model the review is quoted
+ * material rather than a command, and several of the labels are themselves
+ * instructions ("never use these phrases", "close naturally as the
+ * business"). Hashing `DRAFTING_PROMPT_VERSION` together with every one of
+ * those constants means EITHER an unbumped wording edit to any of them OR a
+ * version bump with no real change fails this test — the two are meant to
+ * always move together. To intentionally change the template: edit it, bump
+ * `DRAFTING_PROMPT_VERSION`, run this test, copy the "actual hash" it
+ * prints, and paste it in as the new `RECORDED_TEMPLATE_HASH`.
  */
 describe("template pin", () => {
   const RECORDED_TEMPLATE_HASH =
-    "e7cd1b78581403ca2d9afa9be2dd0fdf60d1fe3b0401d5f03dd09eddbe283956";
+    "43aa33fcb882088e0fd25f159208dccedf60a068ff0ba07d454f6115b4d3a377";
 
   it("matches the recorded hash of the version-pinned template constants", () => {
-    const actual = hashRendered(
-      DRAFTING_PROMPT_VERSION +
-        DRAFTING_SYSTEM_PROMPT +
-        UNTRUSTED_CONTENT_OPEN +
-        UNTRUSTED_CONTENT_CLOSE,
-    );
+    const actual = hashRendered(DRAFTING_PROMPT_VERSION + DRAFTING_TEMPLATE_CONSTANTS.join(""));
 
     console.log("drafting prompt template hash:", actual);
 
