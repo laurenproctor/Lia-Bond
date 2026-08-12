@@ -264,6 +264,87 @@ describe("what a run writes", () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Processed pairs for rule execution                                          */
+/* -------------------------------------------------------------------------- */
+
+describe("processed pairs for rule execution", () => {
+  it("reports one mention/analysis pair per analysis row written this run", async () => {
+    // A rating-only mention alongside the model-analysed seed backlog, so the
+    // run exercises both the heuristic and the model outcome — both are
+    // required to write an analysis row and so both must appear.
+    await dataSource.mentions.ingest(scope, {
+      locationId: null,
+      platformConnectionId: (await dataSource.mentions.listUnanalyzed(scope, 1))[0]!
+        .platformConnectionId,
+      platformProfileId: null,
+      sourceType: "google_review",
+      externalId: "processed-pairs-heuristic",
+      externalParentId: null,
+      sourceUrl: null,
+      title: null,
+      content: "",
+      authorName: null,
+      authorExternalId: null,
+      rating: 5,
+      language: null,
+      publishedAt: "2026-01-01T00:00:00.000Z",
+      rawPayload: {},
+      externalResourceName: null,
+      authorAvatarUrl: null,
+      authorIsAnonymous: false,
+      sourceUpdatedAt: null,
+      sourceReplyText: null,
+      sourceReplyUpdatedAt: null,
+      sourceMetadata: {},
+      syncedAt: "2026-08-04T00:00:00.000Z",
+      publisherName: null,
+      publisherDomain: null,
+      monitoringQueryId: null,
+    });
+
+    const result = await analyzeMentions(
+      { dataSource, scope },
+      { provider: fakeProvider(), limit: 500 },
+    );
+
+    expect(result.counts.analyzed).toBeGreaterThan(0);
+    expect(result.counts.heuristic).toBeGreaterThan(0);
+    expect(result.processed.length).toBe(
+      result.counts.analyzed + result.counts.heuristic,
+    );
+
+    // Every mention in the pair list is unique — one analysis row each.
+    const mentionIds = result.processed.map((pair) => pair.mentionId);
+    expect(new Set(mentionIds).size).toBe(mentionIds.length);
+
+    // Each pair's analysisId resolves to a real analysis row belonging to
+    // its mentionId. `latestAnalysis` is the only per-mention analysis read
+    // the repository exposes, and since this run is the only writer for
+    // these previously-unanalysed mentions, the latest row is the one this
+    // run wrote.
+    for (const pair of result.processed) {
+      const analysis = await dataSource.mentions.latestAnalysis(scope, pair.mentionId);
+      expect(analysis).not.toBeNull();
+      expect(analysis?.id).toBe(pair.analysisId);
+      expect(analysis?.mentionId).toBe(pair.mentionId);
+    }
+  });
+
+  it("excludes a mention that failed to analyse", async () => {
+    const result = await analyzeMentions(
+      { dataSource, scope },
+      { provider: fakeProvider({ failWith: "refused", failCall: 1 }), limit: 3 },
+    );
+
+    expect(result.counts.failed).toBe(1);
+    expect(result.processed.length).toBe(
+      result.counts.analyzed + result.counts.heuristic,
+    );
+    expect(result.processed.length).toBeLessThan(3);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* Rating-only mentions                                                        */
 /* -------------------------------------------------------------------------- */
 

@@ -80,6 +80,15 @@ export interface AnalyzeMentionsResult {
   /** Null on success; a sentence a person can act on otherwise. */
   errorMessage: string | null;
   errorCode: string | null;
+  /**
+   * One entry per mention whose analysis row was written this run — both the
+   * `analyzed` (model) and `heuristic` outcomes create one; `failed` mentions
+   * do not appear, since no row was written for them.
+   *
+   * The rule engine's input: each pair is a (mention, trigger occurrence) a
+   * rule run can evaluate against.
+   */
+  processed: { mentionId: string; analysisId: string }[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -87,8 +96,8 @@ export interface AnalyzeMentionsResult {
 /* -------------------------------------------------------------------------- */
 
 type ItemOutcome =
-  | { kind: "analyzed"; escalated: boolean }
-  | { kind: "heuristic" }
+  | { kind: "analyzed"; escalated: boolean; mentionId: string; analysisId: string }
+  | { kind: "heuristic"; mentionId: string; analysisId: string }
   | { kind: "failed"; code: string; message: string; fatal: boolean };
 
 /**
@@ -171,7 +180,7 @@ async function analyzeOne(
       },
     );
 
-    await context.dataSource.mentions.createAnalysis(
+    const analysis = await context.dataSource.mentions.createAnalysis(
       context.scope,
       toAnalysisInput({
         output,
@@ -188,7 +197,9 @@ async function analyzeOne(
       }),
     );
 
-    return heuristic ? { kind: "heuristic" } : { kind: "analyzed", escalated };
+    return heuristic
+      ? { kind: "heuristic", mentionId: mention.id, analysisId: analysis.id }
+      : { kind: "analyzed", escalated, mentionId: mention.id, analysisId: analysis.id };
   } catch (error) {
     return {
       kind: "failed",
@@ -244,6 +255,7 @@ export async function analyzeMentions(
   let errorCode: string | null = null;
   let errorMessage: string | null = null;
   let usedModel = false;
+  const processed: AnalyzeMentionsResult["processed"] = [];
 
   try {
     const [pending, backlog, locations] = await Promise.all([
@@ -263,12 +275,14 @@ export async function analyzeMentions(
     const apply = (outcome: ItemOutcome): void => {
       if (outcome.kind === "heuristic") {
         counts.heuristic += 1;
+        processed.push({ mentionId: outcome.mentionId, analysisId: outcome.analysisId });
         return;
       }
       if (outcome.kind === "analyzed") {
         counts.analyzed += 1;
         usedModel = true;
         if (outcome.escalated) counts.escalated += 1;
+        processed.push({ mentionId: outcome.mentionId, analysisId: outcome.analysisId });
         return;
       }
 
@@ -396,6 +410,7 @@ export async function analyzeMentions(
     counts,
     errorMessage: finished.errorMessage,
     errorCode: finished.errorCode,
+    processed,
   };
 }
 
