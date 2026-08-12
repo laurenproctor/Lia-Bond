@@ -7,6 +7,7 @@ import {
   automationSweepSchema,
   brandVoiceProfileSchema,
   escalationSchema,
+  generationAttemptSchema,
   invitationSchema,
   locationSchema,
   membershipSchema,
@@ -31,6 +32,7 @@ import {
   type AutomationSweep,
   type BrandVoiceProfile,
   type Escalation,
+  type GenerationAttempt,
   type Invitation,
   type Location,
   type Membership,
@@ -531,6 +533,46 @@ export function toResponseDraft(row: Row): ResponseDraft {
       updatedAt: iso(row.updated_at),
     },
     "response draft",
+  );
+}
+
+/**
+ * A generation attempt, from `generation_attempts`.
+ *
+ * Deliberately never reads `row.claim_token`: the column is excluded from
+ * `authenticated`'s grant (see the migration's comment on
+ * `generation_attempts_select`), and the domain schema has no field for it
+ * either (`GenerationAttempt`'s doc comment) — issued once, by `claim`,
+ * never read back.
+ */
+export function toGenerationAttempt(row: Row): GenerationAttempt {
+  return parseOrThrow(
+    generationAttemptSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      mentionId: row.mention_id,
+      status: row.status,
+      failureCategory: row.failure_category ?? null,
+      claimedByUserId: row.claimed_by_user_id,
+      claimedAt: iso(row.claimed_at),
+      expiresAt: iso(row.expires_at),
+      finishedAt: isoOrNull(row.finished_at),
+      responseDraftId: row.response_draft_id ?? null,
+      promptVersion: row.prompt_version,
+      brandVoiceSource: row.brand_voice_source,
+      brandVoiceVersion: row.brand_voice_version ?? null,
+      analysisIncluded: row.analysis_included,
+      dedupHits: row.dedup_hits,
+      modelProvider: row.model_provider ?? null,
+      modelName: row.model_name ?? null,
+      inputTokens: row.input_tokens ?? null,
+      outputTokens: row.output_tokens ?? null,
+      latencyMs: row.latency_ms ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "generation attempt",
   );
 }
 

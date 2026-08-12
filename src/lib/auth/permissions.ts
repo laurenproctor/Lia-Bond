@@ -16,6 +16,7 @@ export const PERMISSIONS = [
   "response.assign",
   "response.decide",
   "response.edit",
+  "response.generate",
   "escalation.assign",
   "escalation.update_status",
   "automation_rule.toggle",
@@ -70,6 +71,14 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // decision (D107) — must not need a ticket to fix a typo. Location
   // managers are absent because drafts carry no location to scope them to.
   "response.edit": ["owner", "admin", "communications_lead", "approver"],
+  // Manual generation (response-generation plan, Task 9). Restated inside
+  // `claim_generation_attempt` (`has_organization_role(..., array['owner',
+  // 'admin', 'communications_lead'])`) — the same onboarding-style precedent
+  // as `onboarding.manage`: a check in application code protects the one
+  // path that runs it, but the database enforces the same list itself.
+  // Location managers are absent for the same reason they are absent from
+  // `response.edit`: a draft carries no location to scope them to.
+  "response.generate": ["owner", "admin", "communications_lead"],
   "escalation.assign": ["owner", "admin", "communications_lead"],
   "escalation.update_status": [
     "owner",
