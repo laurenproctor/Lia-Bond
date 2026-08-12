@@ -1162,6 +1162,14 @@ post-push gate, run before enabling anything.
    a green PR as sufficient evidence the harness ran — an optional check that
    nobody looks at is not a gate.
 
+   **Deferred, 2026-08-12, deliberately:** branch protection on a private
+   repository requires GitHub Pro, and the owner chose to hold off. Both CI
+   jobs still run on every PR and push to `master`; what is missing is only
+   enforcement. Until the repo upgrades or goes public, the gate is
+   procedural — nothing merges on red checks — and every merge to date has
+   gone through reviewed, verified gates. Revisit if a second contributor
+   ever joins, where procedural discipline stops being a guarantee.
+
 ### Turning `apply` on, internal organization only
 
 1. Set `RULES_EXECUTION_MODE=dry_run` first, `RULES_EXECUTION_ORG_ALLOWLIST`
