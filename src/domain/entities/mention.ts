@@ -426,6 +426,13 @@ export const mentionAnalysisSchema = z
     /** Null on a heuristic analysis, which spends no tokens. */
     inputTokens: z.number().int().min(0).nullable(),
     outputTokens: z.number().int().min(0).nullable(),
+    /**
+     * When this occurrence's effects (escalation decision + mention
+     * outcome) were applied, set only by `apply_analysis_occurrence`. Null
+     * marks a pending occurrence — recovery re-picks it rather than
+     * re-analysing.
+     */
+    outcomeAppliedAt: timestampSchema.nullable(),
     createdAt: timestampSchema,
   })
   .extend(organizationOwnedSchema.shape);
@@ -453,6 +460,10 @@ export const createMentionAnalysisInputSchema = mentionAnalysisSchema
     analysisRunId: uuidSchema.nullable().default(null),
     inputTokens: z.number().int().min(0).nullable().default(null),
     outputTokens: z.number().int().min(0).nullable().default(null),
+    // Freshly recorded occurrences are pending until apply_analysis_occurrence
+    // applies their outcome; nothing that creates an analysis through this
+    // input has authority to claim it was already applied.
+    outcomeAppliedAt: timestampSchema.nullable().default(null),
   });
 
 export type CreateMentionAnalysisInput = z.input<

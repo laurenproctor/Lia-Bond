@@ -29,6 +29,13 @@ export const escalationSchema = z
     dueAt: timestampSchema.nullable(),
     resolvedAt: timestampSchema.nullable(),
     resolutionNote: z.string().max(2000).nullable(),
+    /**
+     * The analysis occurrence that authorized this escalation. Required
+     * non-null for every escalation raised by `raise_escalation` from the
+     * escalation contract migration onward; null only on historical rows
+     * that predate it.
+     */
+    triggerAnalysisId: uuidSchema.nullable(),
   })
   .extend(organizationOwnedSchema.shape)
   .extend(timestampsSchema.shape);

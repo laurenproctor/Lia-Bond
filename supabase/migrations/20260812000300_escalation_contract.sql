@@ -43,6 +43,17 @@ alter table public.mention_analyses
     foreign key (analysis_run_id) references public.analysis_runs (id)
     on delete restrict;
 
+-- Without this, record_analysis_occurrence accepts org A recording an
+-- occurrence against org B's mention_id: a readable cross-tenant row, plus
+-- a durable denial-of-service on the victim mention's one-pending slot
+-- (mention_analyses_one_pending is keyed on mention_id alone, so org A's
+-- bogus pending row blocks org B's real recorder). The composite unique
+-- target (mentions_id_org) was added by 20260811000100.
+alter table public.mention_analyses
+  add constraint mention_analyses_mention_same_org
+    foreign key (mention_id, organization_id)
+    references public.mentions (id, organization_id);
+
 ------------------------------------------------------------------
 -- Escalation provenance
 ------------------------------------------------------------------
@@ -343,11 +354,17 @@ begin
       'escalation.created_from_analysis');
     -- Database-owned final status:
     --   created / escalation_exists -> escalated
+    --   occurrence_replayed         -> preserve current status (replay never
+    --                                  mutates — a human decision made
+    --                                  between recording and this replayed
+    --                                  application, e.g. dismissing the
+    --                                  mention, must not be overwritten)
     --   mention_dismissed           -> preserve dismissed
     --   awaiting_retriage           -> preserve escalated
-    if v_esc.created or v_esc.reason = 'escalation_exists'
-       or v_esc.reason = 'occurrence_replayed' then
+    if v_esc.created or v_esc.reason = 'escalation_exists' then
       v_status := 'escalated';
+    elsif v_esc.reason = 'occurrence_replayed' then
+      v_status := v_mention.status;
     elsif v_esc.reason = 'mention_dismissed' then
       v_status := 'dismissed';
     else  -- awaiting_retriage

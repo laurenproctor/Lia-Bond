@@ -495,6 +495,7 @@ export function toMentionAnalysis(row: Row): MentionAnalysis {
         row.output_tokens === null || row.output_tokens === undefined
           ? null
           : Number(row.output_tokens),
+      outcomeAppliedAt: isoOrNull(row.outcome_applied_at),
       createdAt: iso(row.created_at),
     },
     "mention analysis",
@@ -566,6 +567,7 @@ export function toEscalation(row: Row): Escalation {
       dueAt: isoOrNull(row.due_at),
       resolvedAt: isoOrNull(row.resolved_at),
       resolutionNote: row.resolution_note ?? null,
+      triggerAnalysisId: row.trigger_analysis_id ?? null,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
     },

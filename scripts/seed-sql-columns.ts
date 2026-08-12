@@ -90,6 +90,12 @@ export const SEED_TABLE_COLUMNS = {
     // real, non-defaulted-to-anything-but-null columns, and the day a fixture
     // wants to claim a real run, this is what makes that value reach the SQL.
     "analysisRunId", "inputTokens", "outputTokens",
+    // Occurrence lifecycle (the escalation contract migration). Written
+    // rather than excluded: the seed dataset's `analysis()` factory sets a
+    // real, non-null value (mirroring the migration's own backfill posture
+    // for historical rows) so seeded occurrences are not permanently
+    // pending — see the comment there.
+    "outcomeAppliedAt",
     "createdAt",
   ],
   response_drafts: [
@@ -107,7 +113,14 @@ export const SEED_TABLE_COLUMNS = {
   escalations: [
     "id", "organizationId", "mentionId", "category", "severity", "status",
     "title", "summary", "assignedUserId", "dueAt", "resolvedAt",
-    "resolutionNote", "createdAt", "updatedAt",
+    "resolutionNote",
+    // Occurrence provenance (the escalation contract migration). Written as
+    // null, following this file's own precedent for nullable provenance
+    // columns (e.g. mention_analyses' analysisRunId above): seeded
+    // escalations are hand-written fixtures with no real analysis
+    // occurrence behind them, so null is the honest value, not an omission.
+    "triggerAnalysisId",
+    "createdAt", "updatedAt",
   ],
   automation_rules: [
     "id", "organizationId", "name", "description", "status", "priority",
@@ -184,32 +197,11 @@ export function conflictTarget(table: string): string {
  * against a real database the moment `mentions` had more than zero rows.
  */
 export const SEED_COLUMN_EXCLUSIONS: Record<string, readonly string[]> = {
-  mention_analyses: [
-    // Occurrence lifecycle (the escalation contract migration). The
-    // migration's own backfill — `update ... set outcome_applied_at =
-    // created_at where outcome_applied_at is null` — only reaches rows that
-    // already exist when the migration runs, and migrations run before
-    // `supabase/seed.sql`, so a seeded row would land at the plain column
-    // default (null, i.e. "pending forever") rather than the "already
-    // applied" state real historical rows get. Excluded rather than written
-    // as a fabricated non-null value until the seed dataset has a real
-    // reason to model the occurrence lifecycle.
-    "outcomeAppliedAt",
-  ],
   users: [
     // STORED GENERATED from first_name and last_name (see the user_name_parts
     // migration). Postgres refuses an INSERT that names a generated column,
     // so the seed must not write it — it exists the moment the parts do.
     "fullName",
-  ],
-  escalations: [
-    // Occurrence provenance (the escalation contract migration). Seeded
-    // escalations are hand-written fixtures with no analysis occurrence
-    // behind them — inventing one would fabricate a row in
-    // `mention_analyses` purely to satisfy this column's FK, which is a
-    // bigger lie than leaving it null. Excluded until the seed dataset has
-    // a real reason to model an analysis-triggered escalation.
-    "triggerAnalysisId",
   ],
   mentions: [
     // Source-owned sync-history fields (workflow 03). Every seeded mention

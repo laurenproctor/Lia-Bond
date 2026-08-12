@@ -399,6 +399,11 @@ export function createDemoDataSource(): LiaDataSource {
       dueAt: value.dueAt,
       resolvedAt: null,
       resolutionNote: null,
+      // This demo path mirrors the pre-migration app-level create surface
+      // (`CreateEscalationInput` carries no occurrence id); the real
+      // database now requires one via `raise_escalation`, which this mock
+      // store does not model.
+      triggerAnalysisId: null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
