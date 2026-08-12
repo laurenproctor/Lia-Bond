@@ -18,6 +18,7 @@
  */
 
 import {
+  isEscalationClosed,
   ruleActionSchema,
   zeroSweepCounters,
   type AutomationExecutionMode,
@@ -118,9 +119,15 @@ interface Projection {
 interface ProjectedMention {
   status: MentionStatus;
   /**
-   * Any escalation on the mention, open or closed — the same question
-   * `escalationFor` asks in the adapter, not an open-only one. Automation
-   * refuses to raise a second case for a mention that has ever had one.
+   * Whether the escalation contract would refuse a case for this mention —
+   * the contract's own question, asked the way the contract asks it: an
+   * **open** case (`escalation_exists`), or a case this unit's **occurrence**
+   * already produced (`occurrence_replayed`), whatever became of it.
+   *
+   * Deliberately not "has ever had a case": a closed case raised by a
+   * different occurrence does not stand in the way of a re-triaged mention
+   * being escalated again, and a preview that said otherwise would report a
+   * no-op where the apply that follows raises a second case.
    */
   escalationExists: boolean;
 }
@@ -346,25 +353,26 @@ export async function executeRules(
         // `executeUnit` re-reads the stored mention, so the next rule already
         // sees the last one's effect.
         //
-        // The seed is read with no status filter: a mention that has ever been
-        // escalated is not escalated again here, resolved or not.
-        //
-        // Since the escalation contract landed, apply mode is narrower than
-        // that — it refuses on an open case or on a replay of this unit's own
-        // occurrence, so a *closed* case raised by a *different* occurrence no
-        // longer blocks a re-triaged mention from being escalated again. This
-        // projection is therefore conservative in exactly one shape: it can
-        // preview `would_no_op` where apply would raise a second case. It is
-        // deliberately left conservative rather than half-narrowed here — the
-        // projector needs the contract's own answer, which arrives with the
-        // service rewiring, and a preview that under-promises is the safer of
-        // the two errors while it does.
+        // The seed asks the escalation contract's two refusal questions, and
+        // only those: is there an **open** case (`escalation_exists`), or did
+        // **this occurrence** already produce one (`occurrence_replayed`)?
+        // Both are answered from a single read of the mention's cases — the
+        // open set is the complement of `CLOSED_ESCALATION_STATUSES`, which is
+        // what `isEscalationClosed` and `OPEN_ESCALATION_STATUSES` pin between
+        // the adapters and the database's partial index. A closed case from a
+        // *different* occurrence is history and refuses nothing, which is
+        // precisely the shape where the older, broader seed used to preview a
+        // no-op against an apply that raises a second case.
+        const cases = anyRuleEscalates
+          ? await dataSource.escalations.list(scope, { mentionId: mention.id })
+          : [];
         let projected: ProjectedMention = {
           status: mention.status,
-          escalationExists: anyRuleEscalates
-            ? (await dataSource.escalations.list(scope, { mentionId: mention.id }))
-                .length > 0
-            : false,
+          escalationExists: cases.some(
+            (row) =>
+              !isEscalationClosed(row.status) ||
+              row.triggerAnalysisId === pair.analysisId,
+          ),
         };
 
         for (const rule of rules) {
@@ -379,13 +387,14 @@ export async function executeRules(
           counters.rulesMatched += 1;
           matchedRuleIds.add(rule.id);
 
+          // Five identifiers and no actions: the unit names the stored
+          // revision, and `executeUnit` runs whatever that revision holds.
           const unit = {
             sweepId: sweep.id,
             automationRuleId: rule.id,
             ruleRevision: rule.revision,
             mentionId: mention.id,
             triggerAnalysisId: pair.analysisId,
-            actions: rule.actions,
           };
 
           if (input.mode === "dry_run") {

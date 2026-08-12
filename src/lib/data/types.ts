@@ -55,7 +55,6 @@ import type {
   ResponseDraft,
   ResponseDraftFilter,
   RiskLevel,
-  RuleAction,
   Sentiment,
   StartAnalysisRunInput,
   StartSyncRunInput,
@@ -782,16 +781,31 @@ export interface FinalizeSweepInput {
   errorCode?: string | null;
 }
 
+/**
+ * A unit of execution: which rule, at which revision, against which mention,
+ * on the authority of which analysis occurrence.
+ *
+ * Five identifiers and no actions. What runs is whatever the *stored* revision
+ * says — the caller names a unit, it never defines one — so a sweep cannot
+ * execute a list of actions the rule does not currently hold, and a snapshot
+ * that has gone stale fails the unit (`rule_changed`) instead of quietly
+ * applying yesterday's configuration.
+ */
 export interface ExecuteUnitInput {
+  /**
+   * The sweep making this attempt — the **attemptSweepId**. The row keeps the
+   * sweep that first claimed the unit (its **originSweepId**), so a retry from
+   * a later sweep leaves the two different, and both are recorded in the audit
+   * trail.
+   */
   sweepId: string;
   automationRuleId: string;
   ruleRevision: number;
   mentionId: string;
   triggerAnalysisId: string;
-  /** The revision snapshot's actions, in order. */
-  actions: RuleAction[];
 }
 
+/** The same unit key, plus what the dry run projected for it. */
 export interface RecordProjectionInput extends ExecuteUnitInput {
   status: DryRunExecutionStatus;
   outcomes: ExecutionActionOutcome[];

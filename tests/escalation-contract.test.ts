@@ -124,7 +124,6 @@ async function executeEscalateUnit(mentionId: string, analysisId: string) {
     ruleRevision: rule.revision,
     mentionId,
     triggerAnalysisId: analysisId,
-    actions: [{ type: "escalate", assigneeUserId: null }],
   });
 }
 

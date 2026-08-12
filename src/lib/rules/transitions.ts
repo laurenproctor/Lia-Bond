@@ -10,7 +10,7 @@
  * target it (`escalation_reserved`), and only `decideEscalate` says when
  * escalation is eligible. Automation never reopens a dismissed mention.
  */
-import type { MentionStatus, RiskLevel } from "@/domain";
+import type { EscalationRefusalReason, MentionStatus, RiskLevel } from "@/domain";
 import { RISK_RANK } from "./evaluate";
 
 export type TransitionDecision =
@@ -52,4 +52,35 @@ export function decideEscalate(current: MentionStatus): TransitionDecision {
     return { kind: "apply" };
   }
   return { kind: "blocked", code: "forbidden_transition" };
+}
+
+/**
+ * What an execution row says when the escalation contract refuses (D163).
+ *
+ * The contract answers in its own vocabulary — it is describing the *ladder*,
+ * not an automation outcome — and those reasons stay internal to it. This is
+ * the one place they cross into the outcome vocabulary the execution row and
+ * the rules screen speak, so both adapters and the SQL restate one mapping
+ * rather than three:
+ *
+ * - `occurrence_replayed` and `escalation_exists` both mean "there is already a
+ *   case answering for this" — normal operation, so `no_op`, reported under the
+ *   single code a reader can act on. Which of the two arms answered is a fact
+ *   about the contract's bookkeeping, not about what happened to the mention.
+ * - `mention_dismissed` and `awaiting_retriage` are hard refusals. Both are
+ *   unreachable behind the transition matrix, which blocks `dismissed` and
+ *   no-ops `escalated` before the ladder is consulted; they are mapped
+ *   defensively into the pinned code set rather than trusted to be impossible.
+ */
+export type EscalationRefusalOutcome =
+  | { outcome: "no_op"; code: "escalation_exists" }
+  | { outcome: "blocked"; code: "forbidden_transition" };
+
+export function mapEscalationRefusal(
+  reason: EscalationRefusalReason,
+): EscalationRefusalOutcome {
+  if (reason === "occurrence_replayed" || reason === "escalation_exists") {
+    return { outcome: "no_op", code: "escalation_exists" };
+  }
+  return { outcome: "blocked", code: "forbidden_transition" };
 }

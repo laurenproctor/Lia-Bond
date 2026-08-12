@@ -520,22 +520,97 @@ describe("executeRules: dry run previews the apply faithfully", () => {
   });
 
   /**
-   * The one shape in which the two modes currently disagree, left as a failing
-   * target rather than a comment somebody has to notice.
+   * The shape that used to be the two modes' one disagreement.
    *
    * A re-triaged mention whose only case is closed AND was raised by a
-   * *different* occurrence: the projector seeds `escalationExists` from any
-   * escalation the mention has ever had, so it previews `would_no_op`, while
-   * apply mode — which refuses only on an open case or on a replay of the
-   * unit's own occurrence — raises a second case. Dry run under-promises,
-   * which is the safer of the two errors, but it is still a disagreement.
-   *
-   * Closing it means making the projector open-only and occurrence-aware, so
-   * that it asks the contract's question rather than an older, broader one.
+   * *different* occurrence. The contract refuses only on an open case or on a
+   * replay of the unit's own occurrence, so apply raises a second case here —
+   * and the projector now asks that same question instead of the older, broader
+   * "has this mention ever had a case", so the preview says so too.
    */
-  it.todo(
-    "dry run previews the second case apply raises for a re-triaged mention whose closed case came from another occurrence",
-  );
+  it("dry run previews the second case apply raises for a re-triaged mention whose closed case came from another occurrence", async () => {
+    await activateRule({
+      name: "Escalate google reviews",
+      conditions: [{ field: "source_type", operator: "is", value: "google_review" }],
+      actions: [{ type: "escalate", assigneeUserId: null }],
+    });
+    // A case belonging to an *earlier* reading of this mention — not the
+    // occurrence the sweep runs on, which is what keeps the contract's replay
+    // arm out of this and leaves only the open-case dedupe, which is satisfied.
+    const earlier = await seedAnalysis(mentionA, "2026-07-31T12:00:00.000Z");
+    const raised = await ds.escalations.create(scope, {
+      mentionId: mentionA,
+      category: "other",
+      severity: "medium",
+      title: "Handled on an earlier reading",
+      summary: null,
+      dueAt: null,
+      triggerAnalysisId: earlier,
+    });
+    await ds.escalations.updateStatus(
+      scope,
+      raised.escalation!.id,
+      "resolved",
+      "Spoke to the guest.",
+    );
+    // Re-triaged by a person: the mention is eligible again, and nothing open
+    // stands in the way.
+    await ds.mentions.updateStatus(scope, mentionA, "monitoring");
+
+    await run("dry_run");
+    await run("apply");
+
+    const [projected, applied] = executions();
+    expect(projected!.mode).toBe("dry_run");
+    expect(projected!.status).toBe("would_apply");
+    expect(projected!.outcomes).toEqual([
+      { index: 0, type: "escalate", outcome: "would_apply", code: null },
+    ]);
+    expect(applied!.mode).toBe("apply");
+    expect(applied!.status).toBe("applied");
+    expect(applied!.outcomes).toEqual([
+      { index: 0, type: "escalate", outcome: "applied", code: null },
+    ]);
+    // The preview promised a second case, and the apply raised one.
+    expect(demoStore().escalations.filter((row) => row.mentionId === mentionA)).toHaveLength(2);
+    expect((await ds.mentions.get(scope, mentionA))!.status).toBe("escalated");
+  });
+
+  it("previews a no-op for an open case, and raises nothing", async () => {
+    // The other side of the same seed: an OPEN case refuses in both modes, so
+    // narrowing the projector to the contract's question did not turn the
+    // dedupe off.
+    await activateRule({
+      name: "Escalate google reviews",
+      conditions: [{ field: "source_type", operator: "is", value: "google_review" }],
+      actions: [{ type: "escalate", assigneeUserId: null }],
+    });
+    const earlier = await seedAnalysis(mentionA, "2026-07-31T12:00:00.000Z");
+    await ds.escalations.create(scope, {
+      mentionId: mentionA,
+      category: "other",
+      severity: "medium",
+      title: "Still open",
+      summary: null,
+      dueAt: null,
+      triggerAnalysisId: earlier,
+    });
+    await ds.mentions.updateStatus(scope, mentionA, "monitoring");
+
+    await run("dry_run");
+    await run("apply");
+
+    const [projected, applied] = executions();
+    expect(projected!.status).toBe("would_no_op");
+    expect(projected!.outcomes).toEqual([
+      { index: 0, type: "escalate", outcome: "would_no_op", code: "escalation_exists" },
+    ]);
+    expect(applied!.status).toBe("no_op");
+    expect(applied!.outcomes).toEqual([
+      { index: 0, type: "escalate", outcome: "no_op", code: "escalation_exists" },
+    ]);
+    expect(demoStore().escalations.filter((row) => row.mentionId === mentionA)).toHaveLength(1);
+  });
 
   it("carries a rule's projected effect into the next rule's preview", async () => {
     const first = await activateRule({

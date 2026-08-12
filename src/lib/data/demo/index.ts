@@ -44,6 +44,7 @@ import {
   type Escalation,
   type ExecutionActionOutcome,
   type Invitation,
+  type JsonObject,
   type Location,
   type Membership,
   type Mention,
@@ -56,6 +57,7 @@ import {
   type PlatformSyncRun,
   type RaiseEscalationResult,
   type ResponseDraft,
+  type RuleAction,
   type UpdateBrandVoiceInput,
   type User,
 } from "@/domain";
@@ -73,6 +75,7 @@ import { createMonitoringRepositories } from "@/lib/data/demo/monitoring";
 import {
   AnalysisRunInProgressError,
   SyncRunInProgressError,
+  type ExecuteUnitInput,
   type LiaDataSource,
   type MentionDetail,
   type OrganizationScope,
@@ -80,7 +83,11 @@ import {
 } from "@/lib/data/types";
 import { ACTION_CAPABILITIES } from "@/lib/rules/capabilities";
 import { activationProblems } from "@/lib/rules/readiness";
-import { decideEscalate, decideSetStatus } from "@/lib/rules/transitions";
+import {
+  decideEscalate,
+  decideSetStatus,
+  mapEscalationRefusal,
+} from "@/lib/rules/transitions";
 import { REFERENCE_NOW } from "@/lib/seed/clock";
 import { seedId } from "@/lib/seed/ids";
 
@@ -631,6 +638,56 @@ export function createDemoDataSource(): LiaDataSource {
       // than raising a second one.
       triggerAnalysisId,
     };
+  }
+
+  /**
+   * The execution unit's own audit event.
+   *
+   * Two names for two different sweeps, and the distinction is the point: the
+   * row's `sweepId` is where the unit *began* (`originSweepId`) and the caller's
+   * is the sweep making this attempt (`attemptSweepId`). A retry that crosses a
+   * sweep boundary is exactly the case in which they differ, and a trail
+   * carrying only one of them cannot answer both "where did this unit come
+   * from" and "who ran it".
+   *
+   * Identifiers, outcome counts, and operational status only (D162): a rule's
+   * effect on a mention batch is auditable without any of the mention's text.
+   */
+  function auditExecution(
+    scope: OrganizationScope,
+    input: ExecuteUnitInput,
+    row: AutomationRuleExecution,
+    eventType: AuditEvent["eventType"],
+    detail: JsonObject,
+  ): void {
+    // Constructed and typed rather than parsed: this runs in the unit's commit
+    // phase, where the pinned invariant is that nothing after the escalation
+    // insert can throw. The compiler checks the shape; a runtime parse here
+    // would be a second way for a committed unit to fail.
+    const event: AuditEvent = {
+      id: seedId(
+        `audit:runtime:${scope.organizationId}:${row.id}:${eventType}:${store().auditEvents.length}`,
+      ),
+      organizationId: scope.organizationId,
+      actorUserId: null,
+      // Not `ai`: nothing was inferred here. A rule the organization wrote ran
+      // on a schedule, which is the system acting.
+      actorType: "system",
+      eventType,
+      entityType: "automation_rule",
+      entityId: input.automationRuleId,
+      previousState: null,
+      newState: null,
+      metadata: {
+        originSweepId: row.sweepId,
+        attemptSweepId: input.sweepId,
+        mentionId: input.mentionId,
+        analysisId: input.triggerAnalysisId,
+        ...detail,
+      },
+      occurredAt: realNowIso(),
+    };
+    store().auditEvents.push(event);
   }
 
   return {
@@ -2901,8 +2958,28 @@ export function createDemoDataSource(): LiaDataSource {
           });
         }
 
-        const parsed = ruleActionSchema.array().safeParse(input.actions);
-        if (!parsed.success) {
+        // The STORED revision's actions, never the caller's: a sweep names a
+        // unit, it does not define one. Validated element by element (the SQL
+        // validator walks `jsonb_array_elements` the same way), and a column
+        // that is not an array at all — null, an object, a past schema — is
+        // itself invalid rather than "no actions".
+        const stored: unknown = rule.actions;
+        const actions: RuleAction[] = [];
+        let malformed = !Array.isArray(stored);
+        if (Array.isArray(stored)) {
+          for (const element of stored) {
+            const parsed = ruleActionSchema.safeParse(element);
+            if (!parsed.success) {
+              malformed = true;
+              break;
+            }
+            actions.push(parsed.data);
+          }
+        }
+        if (malformed) {
+          // Terminal, and decided for the whole list: a list that cannot be
+          // understood cannot be partially obeyed either, so the executable
+          // actions ahead of a malformed one do not run.
           return record({
             status: "failed",
             outcomes: [],
@@ -2934,7 +3011,7 @@ export function createDemoDataSource(): LiaDataSource {
           let workingStatus = mention.status;
           let pendingEscalation: CreateEscalationInput | null = null;
 
-          parsed.data.forEach((action, index) => {
+          actions.forEach((action, index) => {
             if (!ACTION_CAPABILITIES[action.type].executable) {
               // Authorable but not wired to an effect. Blocked, never silently
               // treated as done: `activationProblems` stops these reaching an
@@ -3001,17 +3078,13 @@ export function createDemoDataSource(): LiaDataSource {
             );
             if (ladder.reason !== null) {
               // Boundary mapping: the ladder's internal reasons stay internal.
-              // `mention_dismissed`/`awaiting_retriage` are unreachable behind
-              // the transition matrix above, and are mapped defensively rather
-              // than trusted to be impossible.
-              const replayed =
-                ladder.reason === "escalation_exists" ||
-                ladder.reason === "occurrence_replayed";
+              // One shared statement of it (`mapEscalationRefusal`) so the two
+              // adapters and the SQL cannot drift apart on what a refusal is
+              // called in an execution row.
               outcomes.push({
                 index,
                 type: action.type,
-                outcome: replayed ? "no_op" : "blocked",
-                code: replayed ? "escalation_exists" : "forbidden_transition",
+                ...mapEscalationRefusal(ladder.reason),
               });
               return;
             }
@@ -3053,23 +3126,43 @@ export function createDemoDataSource(): LiaDataSource {
             });
           }
 
-          return record({
+          const executed = record({
             status: deriveApplyStatus(outcomes),
             outcomes,
             errorClass: null,
             lastErrorCode: null,
           });
+
+          // The trail, written with the effects — in SQL both are inside the
+          // apply subtransaction, so a rolled-back unit leaves no `executed`
+          // event claiming work that did not happen. Counts and identifiers
+          // only: what a rule did to a mention batch, never what the guest
+          // wrote (D162).
+          auditExecution(scope, input, executed, "automation_rule.executed", {
+            status: executed.status,
+            applied: outcomes.filter((row) => row.outcome === "applied").length,
+            blocked: outcomes.filter((row) => row.outcome === "blocked").length,
+            noOp: outcomes.filter((row) => row.outcome === "no_op").length,
+          });
+          return executed;
         } catch (error) {
           // The copies are discarded by leaving this scope — that is the
           // rollback. The attempt record survives it, which is the point:
           // a failure nobody can see is a failure nobody fixes. Outcomes are
           // empty because the effects they would describe do not exist.
-          return record({
+          const failed = record({
             status: "failed",
             outcomes: [],
             errorClass: "retryable",
             lastErrorCode: failureCode(error),
           });
+          // The failure's own event, outside the rolled-back work. `errorCode`
+          // is this adapter's equivalent of the SQL function's `sqlstate`: the
+          // machine-readable reason, with no driver message attached.
+          auditExecution(scope, input, failed, "automation_rule.execution_failed", {
+            errorCode: failed.lastErrorCode,
+          });
+          return failed;
         }
       },
 
