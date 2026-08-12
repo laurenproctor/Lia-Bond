@@ -2235,6 +2235,44 @@ export function createDemoDataSource(): LiaDataSource {
         };
         return replaceRow(store().automationRules, updated);
       },
+
+      async listActiveForExecution(scope) {
+        return orgRows(store().automationRules, scope)
+          .filter((rule) => rule.status === "active" && rule.archivedAt === null)
+          .sort(
+            (a, b) =>
+              a.priority - b.priority ||
+              Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
+              a.id.localeCompare(b.id),
+          );
+      },
+
+      async markActivity() {
+        // Real implementation arrives in Task 7, alongside the sweep and
+        // execution repositories it stamps activity for.
+        throw new DataError("unavailable", "Not implemented until task 7.");
+      },
+    },
+
+    automationSweeps: {
+      async claim() {
+        throw new DataError("unavailable", "Not implemented until task 7.");
+      },
+      async finalize() {
+        throw new DataError("unavailable", "Not implemented until task 7.");
+      },
+    },
+
+    automationRuleExecutions: {
+      async executeUnit() {
+        throw new DataError("unavailable", "Not implemented until task 7.");
+      },
+      async recordProjection() {
+        throw new DataError("unavailable", "Not implemented until task 7.");
+      },
+      async listForRule() {
+        throw new DataError("unavailable", "Not implemented until task 7.");
+      },
     },
 
     brandVoice: {

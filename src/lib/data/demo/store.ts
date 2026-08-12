@@ -1,5 +1,7 @@
 import type {
   AnalysisRun,
+  AutomationRuleExecution,
+  AutomationSweep,
   Invitation,
   NewsPollRun,
   NewsRejectedCandidate,
@@ -96,6 +98,15 @@ interface RuntimeStore {
   newsPollRunSequence: number;
   newsRejectedCandidates: NewsRejectedCandidate[];
   newsRejectedCandidateSequence: number;
+  /**
+   * Sweep and rule-execution history.
+   *
+   * Runtime-only for the same reason sync, analysis, and poll runs are: a
+   * seeded sweep would claim the demo tenant had already run automation it
+   * never ran. Empty until Task 7 makes the demo adapter write to them.
+   */
+  automationSweeps: AutomationSweep[];
+  automationRuleExecutions: AutomationRuleExecution[];
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -114,6 +125,8 @@ function freshRuntimeStore(): RuntimeStore {
     newsPollRunSequence: 0,
     newsRejectedCandidates: [],
     newsRejectedCandidateSequence: 0,
+    automationSweeps: [],
+    automationRuleExecutions: [],
   };
 }
 

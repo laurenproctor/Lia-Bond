@@ -3,17 +3,22 @@ import type {
   Approval,
   AuditEvent,
   AuditEventFilter,
+  AutomationExecutionMode,
   AutomationRule,
   AutomationRuleConfig,
+  AutomationRuleExecution,
   AutomationRuleFilter,
+  AutomationSweep,
   BrandVoiceProfile,
   ConnectionHealthUpdate,
   CreateEscalationInput,
   CreateLocationInput,
   CreateMentionAnalysisInput,
   CreateMentionInput,
+  DryRunExecutionStatus,
   Escalation,
   EscalationFilter,
+  ExecutionActionOutcome,
   FinishAnalysisRunInput,
   FinishSyncRunInput,
   IngestMentionInput,
@@ -48,9 +53,11 @@ import type {
   ResponseDraft,
   ResponseDraftFilter,
   RiskLevel,
+  RuleAction,
   Sentiment,
   StartAnalysisRunInput,
   StartSyncRunInput,
+  SweepCounters,
   SyncResource,
   Timestamp,
   UpdateBrandVoiceInput,
@@ -664,6 +671,74 @@ export interface EscalationRepository {
   ): Promise<Escalation>;
 }
 
+export interface ClaimSweepResult {
+  sweep: AutomationSweep;
+  claimed: boolean;
+}
+
+export interface FinalizeSweepInput {
+  status: "completed" | "failed";
+  counters: SweepCounters;
+  errorCode?: string | null;
+}
+
+export interface ExecuteUnitInput {
+  sweepId: string;
+  automationRuleId: string;
+  ruleRevision: number;
+  mentionId: string;
+  triggerAnalysisId: string;
+  /** The revision snapshot's actions, in order. */
+  actions: RuleAction[];
+}
+
+export interface RecordProjectionInput extends ExecuteUnitInput {
+  status: DryRunExecutionStatus;
+  outcomes: ExecutionActionOutcome[];
+}
+
+export interface AutomationSweepRepository {
+  /**
+   * Claim the organization's sweep. `claimed: false` returns the already
+   * running sweep untouched (the caller skips the organization). A running
+   * sweep older than 30 minutes is expired: marked failed
+   * (`lease_expired`) and replaced by the new claim.
+   */
+  claim(
+    scope: OrganizationScope,
+    input: { mode: AutomationExecutionMode },
+  ): Promise<ClaimSweepResult>;
+  finalize(
+    scope: OrganizationScope,
+    sweepId: string,
+    input: FinalizeSweepInput,
+  ): Promise<AutomationSweep>;
+}
+
+export interface AutomationRuleExecutionRepository {
+  /**
+   * The transactional unit of apply mode (spec §7): claim, validate,
+   * apply via the transition matrix, record, audit — atomically. Replays
+   * (same idempotency key, terminal row) return the row with zero
+   * effects. In G0 only the demo adapter implements this; the Supabase
+   * adapter throws DataError("unavailable") until the G1 RPC lands.
+   */
+  executeUnit(
+    scope: OrganizationScope,
+    input: ExecuteUnitInput,
+  ): Promise<AutomationRuleExecution>;
+  /** Dry run: insert a projection row; no business mutation of any kind. */
+  recordProjection(
+    scope: OrganizationScope,
+    input: RecordProjectionInput,
+  ): Promise<AutomationRuleExecution>;
+  listForRule(
+    scope: OrganizationScope,
+    ruleId: string,
+    limit: number,
+  ): Promise<AutomationRuleExecution[]>;
+}
+
 export interface AutomationRuleRepository {
   list(scope: OrganizationScope, filter?: AutomationRuleFilter): Promise<AutomationRule[]>;
   get(scope: OrganizationScope, ruleId: string): Promise<AutomationRule | null>;
@@ -692,6 +767,15 @@ export interface AutomationRuleRepository {
     ruleId: string,
     enabled: boolean,
   ): Promise<AutomationRule>;
+  /** Active, unarchived, ordered priority asc, createdAt asc, id asc. */
+  listActiveForExecution(scope: OrganizationScope): Promise<AutomationRule[]>;
+  /**
+   * Apply-mode activity stamps, monotonic (greatest of existing and new).
+   * evaluatedAt always advances; matched/applied only when their flag is set.
+   */
+  markActivity(scope: OrganizationScope, ruleId: string, input: {
+    at: string; matched: boolean; applied: boolean;
+  }): Promise<void>;
 }
 
 /**
@@ -1005,6 +1089,10 @@ export interface LiaDataSource {
   responseDrafts: ResponseDraftRepository;
   escalations: EscalationRepository;
   automationRules: AutomationRuleRepository;
+  /** One pass of the automation engine over pending mentions, per organization. */
+  automationSweeps: AutomationSweepRepository;
+  /** Per-(rule, mention) decisions a sweep produced. */
+  automationRuleExecutions: AutomationRuleExecutionRepository;
   /** How Lia is configured to sound. One row per organization. */
   brandVoice: BrandVoiceRepository;
   auditEvents: AuditEventRepository;
