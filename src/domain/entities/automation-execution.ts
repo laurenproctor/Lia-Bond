@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { RULE_ACTION_TYPES } from "./automation";
-import { organizationOwnedSchema, uuidSchema, timestampSchema } from "../primitives";
+import { RULE_ACTION_TYPES } from "@/domain/entities/automation";
+import { organizationOwnedSchema, uuidSchema, timestampSchema } from "@/domain/primitives";
 
 /**
  * Sweep and rule-execution vocabulary.
