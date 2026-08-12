@@ -3,7 +3,11 @@ import { freshDataSource, ushg } from "./helpers/scope";
 import { demoRuntimeStore, demoStore } from "@/lib/data/demo/store";
 import { DataError } from "@/lib/data/errors";
 import type { ExecuteUnitInput, LiaDataSource, OrganizationScope } from "@/lib/data/types";
-import { isEscalationClosed, type AutomationSweep } from "@/domain";
+import {
+  isEscalationClosed,
+  type AutomationSweep,
+  type SweepCounters,
+} from "@/domain";
 
 /**
  * The demo adapter's execution unit (spec §7).
@@ -95,6 +99,28 @@ function injectEscalationFailure(): void {
     }
     return original(...items);
   }) as typeof rows.push;
+}
+
+/** Move the mention to another of the organization's locations. */
+function relocateMention(locationId: string | null): void {
+  const rows = demoStore().mentions;
+  const index = rows.findIndex((row) => row.id === mentionId);
+  const mention = rows[index];
+  if (!mention) throw new Error("Fixture mention not found");
+  rows[index] = { ...mention, locationId };
+}
+
+function zeroCounters(): SweepCounters {
+  return {
+    mentionsEvaluated: 0,
+    rulesMatched: 0,
+    actionsApplied: 0,
+    actionsBlocked: 0,
+    actionsSkipped: 0,
+    actionsFailed: 0,
+    retryableFailures: 0,
+    terminalFailures: 0,
+  };
 }
 
 function countExecutionRows(): number {
@@ -335,6 +361,67 @@ describe("automationRuleExecutions.executeUnit", () => {
     expect(retried.attemptCount).toBe(2);
     expect(countExecutionRows()).toBe(1);
     expect((await ds.mentions.get(scope, mentionId))!.status).toBe("escalated");
+  });
+
+  it("a retry keeps the sweep and the location the unit began with", async () => {
+    injectEscalationFailure();
+    const escalate = unit({ actions: [{ type: "escalate", assigneeUserId: null }] });
+    const failed = await ds.automationRuleExecutions.executeUnit(scope, escalate);
+    expect(failed.status).toBe("failed");
+    expect(failed.locationId).not.toBeNull();
+
+    // A later sweep picks the unit up, and the mention has moved location in
+    // the meantime — neither may rewrite where and when this unit began.
+    await ds.automationSweeps.finalize(scope, sweepId, {
+      status: "completed",
+      counters: zeroCounters(),
+    });
+    const later = await ds.automationSweeps.claim(scope, { mode: "apply" });
+    const elsewhere = (await ds.locations.list(scope)).find(
+      (row) => row.id !== failed.locationId,
+    );
+    if (!elsewhere) throw new Error("Expected a second seeded location");
+    relocateMention(elsewhere.id);
+
+    const retried = await ds.automationRuleExecutions.executeUnit(scope, {
+      ...escalate,
+      sweepId: later.sweep.id,
+    });
+
+    expect(retried.attemptCount).toBe(2);
+    expect(retried.sweepId).toBe(sweepId);
+    expect(retried.locationId).toBe(failed.locationId);
+    expect(countExecutionRows()).toBe(1);
+  });
+
+  it("escalating a mention that already has a case dedupes to no_op", async () => {
+    // A person raised the case and later re-triaged the mention back to
+    // monitoring, so the matrix says escalation is eligible and only the
+    // dedupe stands between the rule and a second case for one mention.
+    await ds.escalations.create(scope, {
+      mentionId,
+      category: "other",
+      severity: "medium",
+      title: "Raised by a person",
+      summary: null,
+      dueAt: null,
+    });
+    await ds.mentions.updateStatus(scope, mentionId, "monitoring");
+    const escalationsBefore = demoStore().escalations.length;
+
+    const row = await ds.automationRuleExecutions.executeUnit(
+      scope,
+      unit({ actions: [{ type: "escalate", assigneeUserId: null }] }),
+    );
+
+    expect(row.status).toBe("no_op");
+    expect(row.outcomes[0]).toMatchObject({
+      type: "escalate",
+      outcome: "no_op",
+      code: "escalation_exists",
+    });
+    expect((await ds.mentions.get(scope, mentionId))!.status).toBe("monitoring");
+    expect(demoStore().escalations.length).toBe(escalationsBefore);
   });
 
   it("stops retrying at the attempt cap", async () => {

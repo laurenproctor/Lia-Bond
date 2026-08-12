@@ -2536,14 +2536,20 @@ export function createDemoDataSource(): LiaDataSource {
         const claim = {
           id: existing?.id ?? crypto.randomUUID(),
           organizationId: scope.organizationId,
-          sweepId: input.sweepId,
+          // The sweep that first claimed this unit, even when a later sweep is
+          // the one retrying it. The SQL twin gets this from `on conflict do
+          // nothing` — the row is inserted once and the retrying caller's
+          // sweep id is discarded — and the history has to agree: this unit
+          // began in that sweep, and rewriting it would erase where it began.
+          sweepId: existing?.sweepId ?? input.sweepId,
           automationRuleId: input.automationRuleId,
           ruleRevision: input.ruleRevision,
           mentionId: input.mentionId,
           triggerAnalysisId: input.triggerAnalysisId,
-          // Denormalized from the mention as it is now, so a later move
-          // between locations cannot rewrite where this ran.
-          locationId: mention?.locationId ?? null,
+          // Denormalized from the mention as it was when the unit began, so a
+          // later move between locations cannot rewrite where this ran — on
+          // the first attempt and on every retry of it alike.
+          locationId: existing ? existing.locationId : mention?.locationId ?? null,
           mode: "apply" as const,
           outcomeSchemaVersion: OUTCOME_SCHEMA_VERSION,
           // A retryable failure under the cap means this call is attempt n+1.
