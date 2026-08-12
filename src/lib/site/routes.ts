@@ -66,6 +66,7 @@ export const SITE_ROUTES: readonly SiteRoute[] = [
   { path: "/for/restaurants", priority: 0.7, lastModified: LAUNCH },
   { path: "/for/salons-and-barbershops", priority: 0.7, lastModified: LAUNCH },
   { path: "/for/med-spas", priority: 0.7, lastModified: LAUNCH },
+  { path: "/about", priority: 0.6, lastModified: "2026-08-12" },
   { path: "/contact", priority: 0.5, lastModified: LAUNCH },
   { path: "/privacy", priority: 0.3, lastModified: LAUNCH },
   { path: "/terms", priority: 0.3, lastModified: LAUNCH },
@@ -103,6 +104,7 @@ export const SITE_FOOTER: readonly SiteFooterColumn[] = [
   {
     heading: "Company",
     links: [
+      { label: "About", href: "/about" },
       { label: "Contact", href: "/contact" },
       { label: "Sign in", href: "/sign-in" },
       { label: "Privacy", href: "/privacy" },

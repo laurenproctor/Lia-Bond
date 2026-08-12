@@ -143,6 +143,14 @@ describe("navigation", () => {
       expect(paths.has(`/for/${industry.slug}`), industry.slug).toBe(true);
     }
   });
+
+  it("links the about page from the company column", () => {
+    const company = SITE_FOOTER.find(
+      (column) => column.heading === "Company",
+    );
+    expect(company?.links[0]).toEqual({ label: "About", href: "/about" });
+    expect(SITE_ROUTES.some((route) => route.path === "/about")).toBe(true);
+  });
 });
 
 describe("sitemap metadata", () => {
