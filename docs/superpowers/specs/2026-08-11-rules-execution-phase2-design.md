@@ -352,10 +352,18 @@ end;
 -- SUCCESS: becomes terminal in the same transaction as its effects.
 update automation_rule_executions set
     status = derive(outcomes),   -- applied | partial | blocked | no_op
-    outcomes = …, attempt_count = attempt, completed_at = now()
+    outcomes = …, attempt_count = attempt, completed_at = now(),
+    error_class = null, last_error_code = null
   where id = v_exec.id;
 return …;                                        -- COMMIT
 ```
+
+Parity note: the SUCCESS update **also clears `error_class` and
+`last_error_code`** — a retry that succeeds must not leave the previous
+attempt's diagnosis on the row, or the history reads as a failure that
+happens to carry outcomes. The TypeScript twin does this
+(`executeUnit`'s success `record(...)` passes both as null) and the RPC
+must match it.
 
 Why this shape holds the required properties:
 
