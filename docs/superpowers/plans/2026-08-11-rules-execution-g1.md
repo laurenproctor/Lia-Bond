@@ -2,23 +2,59 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build everything the spec's G1 gate requires — the transactional execution RPC with its database parity suite, the real Supabase adapter, audit hardening, the two location-scoping action fixes, and D158's open-only escalation dedupe — so `apply` can be enabled for the internal organization via allowlist.
+Plan, v2. Revised after design review before any implementation; v1 is in git
+history. Implementation stays paused until this revision is approved.
 
-**Architecture:** The PostgreSQL RPC `execute_automation_rule` implements spec §7's claim/validate/apply/record transaction with the transition matrix factored into its own SQL function; the TypeScript matrix stays the source of truth via a generated parity file the database harness executes. The Supabase adapter's G0 stubs become real (`executeUnit` → RPC call; claim/finalize/recordProjection/markActivity as service-role writes). D158 flips escalation dedupe to open-only in one seam (`raiseEscalation`/`escalationFor`) plus a partial unique index, applied to analysis and rules alike.
+**Goal:** Build everything the spec's G1 gate requires — a shared database-backed escalation contract enforcing D158's open-only semantics for analysis and rules alike, the transactional execution RPC with its parity suite, atomic sweep claiming, audit hardening, location-scoping fixes, and a CI gate that runs the database harness — so `apply` can be enabled for the internal organization.
 
-**Tech Stack:** plpgsql migrations (validated by `npm run db:validate`, exercised by the Docker harness), Supabase JS service-role client, TypeScript strict, Vitest, psql-based database tests.
+**Architecture:** One plpgsql function, `raise_escalation`, is the single escalation authority: mention eligibility, open-only dedupe, occurrence idempotency, creation, and the mention transition happen atomically inside it, and both the analysis path (`escalations.create`) and the execution RPC call it. `execute_automation_rule` loads actions from the stored rule revision (never trusting caller payloads) and applies them under the SQL transition matrix, which stays parity-locked to TypeScript via a generated assertion file that CI runs against migrated Postgres. Sweep claiming becomes its own atomic RPC. The demo adapter mirrors every contract in TypeScript through the existing `raiseEscalation` seam.
 
-**Spec:** `docs/superpowers/specs/2026-08-11-rules-execution-phase2-design.md` (§5 schema, §6 audit, §7 transaction, §11 tests). Decisions D148–D158 in `docs/architecture/current-state.md` bind the parity surface.
+**Tech Stack:** plpgsql migrations, Supabase JS service-role client, TypeScript strict, Vitest, psql-based database tests, GitHub Actions (new — the repo has no CI today).
+
+**Spec:** `docs/superpowers/specs/2026-08-11-rules-execution-phase2-design.md`; decisions D148–D158. The governing product principle for every escalation decision below: **Lia must recognize genuinely new risk without turning retries, concurrent workers, or stale configuration into duplicate actions — history informs future judgment, it never permanently suppresses it.**
 
 ## Global Constraints
 
-- The RPC must match the demo twin's pinned semantics exactly (D148–D157): five-part idempotency key with `mode`; terminal replay returns the row unchanged with zero effects; retry cap `attempt_count >= 3`; whole-unit rollback with a surviving `failed` row; policy refusals are outcomes (`blocked`/`no_op`), never errors; success clears `error_class`/`last_error_code`; outcome code strings exactly `escalation_reserved`, `high_risk_guardrail`, `forbidden_transition`, `escalation_exists`, `action_not_executable`, `rule_changed`, `invalid_action`; executable set derived from the capability registry (`set_status`, `escalate` today); `assigneeUserId` on escalate is dropped; `sweep_id`/`started_at` keep first-attempt values on retry; `location_id` follows the mention (schema cascade); all caught technical failures classify `retryable` (matching the twin — refinement is future work).
-- D158: only an **open** escalation (`status in ('open','in_progress','pending_approval')`) blocks creation, for BOTH the analysis path and rule execution; enforced by a partial unique index; mention-level `dismissed` stays the permanent refusal (matrix, unchanged); no resolved-vs-dismissed semantic at the escalation level; re-escalation only from a new analysis occurrence (already structural: `execs_idempotent` carries `trigger_analysis_id`).
-- Audit: **no authenticated inserts at all** (spec §6). The policy drop and the adapter's switch to the service-role client land in the same task. Execution audit events carry counts only, `actor_type` `'system'`, `actor_user_id` null; never mention content.
-- RPC security: `security definer`, `set search_path = public, pg_temp`, `revoke execute … from public, anon, authenticated` — service role is the only caller (the `consume_oauth_state` posture at `20260807000600`).
-- Migrations use versions `20260812000100`–`20260812000600`; nothing is applied to the hosted project by this plan (`npm run db:validate` + the local Docker harness are the gates; the hosted push is a post-merge operator step).
-- Every commit leaves `npm run verify` green. TypeScript strict; sentence case in any UI copy.
-- Worktree note (from project memory): copy `next-env.d.ts` from the main checkout, and export `SUPABASE_DB_URL` from `supabase status` before `db:verify-rls`-style scripts; node scripts resolve only `@/`-alias imports.
+- **The shared escalation contract** (§Task 4) is the only code path that creates an escalation. It enforces, atomically: (1) mention eligibility — `dismissed` is permanently refused; `escalated` never creates (open case → dedupe result; closed case → refused pending human re-triage); (2) at most one open escalation per mention (`status in ('open','in_progress','pending_approval')`), backed by a partial unique index; (3) occurrence idempotency — a non-null `trigger_analysis_id` that already produced an escalation can never produce another, backed by a partial unique index; (4) creation and the mention's transition to `escalated` commit together. Verified inventory: `escalations` has **no** existing unique constraint on `mention_id` (checked 2026-08-11 against `20260801000100_initial_schema.sql:504-527`), so the partial indexes add the invariants and nothing needs replacing.
+- The RPC must match the demo twin's pinned semantics (D148–D157): five-part idempotency key with `mode`; terminal replay returns the row unchanged with zero effects; retry cap `attempt_count >= 3`; whole-unit rollback with a surviving `failed` row; policy refusals are outcomes, never errors; success clears `error_class`/`last_error_code`; outcome codes exactly `escalation_reserved`, `high_risk_guardrail`, `forbidden_transition`, `escalation_exists`, `action_not_executable`, `rule_changed`, `invalid_action`; executable set from the capability registry; `assigneeUserId` dropped; `sweep_id`/`started_at` keep first-attempt values on retry; `location_id` follows the mention; all caught technical failures classify `retryable`. **Malformed configuration (unknown action type, missing required field, invalid enum target, null or non-array actions) is terminal `invalid_action`, validated before the apply subtransaction — never `retryable`.** An empty actions array is valid and yields a `no_op` row with empty outcomes (the G0 twin's behavior).
+- **The RPC takes no action payload.** Actions load from the stored rule inside the transaction, after the revision check; a caller can name a unit, never define one.
+- **Audit contract (revised):** execution audit events may contain identifiers, outcomes, operational status, SQLSTATE, and aggregate counts — never mention content or other sensitive source text. `actor_type` `'system'`, `actor_user_id` null. No authenticated audit inserts anywhere (spec §6).
+- RPC/function security: `security definer`, `set search_path = public, pg_temp`, `revoke execute … from public, anon, authenticated`, `grant … to service_role` — for every function this plan creates.
+- Migrations: `20260812000100`–`20260812000600`, listed in §Migration sequence; a migration is never amended after its task's commit — later additions get later versions. Nothing is applied to the hosted project by this plan.
+- Fail closed on referenced records: load the mention explicitly and refuse (`notFound`) when absent — never `mention?.locationId ?? null` where the optional chain could hide a missing record.
+- Every commit leaves `npm run verify` green. TypeScript strict; sentence case in UI copy.
+- Worktree notes (project memory): copy `next-env.d.ts` from the main checkout; `export SUPABASE_DB_URL` from `supabase status` before harness scripts; node scripts resolve only `@/`-alias imports.
+
+## Migration sequence (complete, in order)
+
+| Version | Name | Contents |
+| --- | --- | --- |
+| 20260812000100 | `execution_audit_vocabulary` | Three audit event types (Task 1) |
+| 20260812000200 | `audit_events_no_client_inserts` | Policy drop + revoke (Task 2) |
+| 20260812000300 | `escalation_contract` | `trigger_analysis_id` column, both partial unique indexes, `raise_escalation` (Task 4) |
+| 20260812000400 | `automation_transition_functions` | Matrix decision functions (Task 6) |
+| 20260812000500 | `execute_automation_rule_rpc` | The execution RPC (Task 7) |
+| 20260812000600 | `automation_execution_support` | `claim_automation_sweep`, `automation_mark_activity` (Task 8) |
+
+All six appear in the operator runbook (Task 12) as one ordered push.
+
+## Semantic guarantee → test map
+
+| Guarantee | Test(s) |
+| --- | --- |
+| Dismissed mention permanently refused (both paths) | Task 4 scenario D; harness §5; matrix cell tests (G0, standing) |
+| Resolved escalation + mention still `escalated` → refused | Task 4 scenario A; harness §5 |
+| Re-triaged + same occurrence replayed → no new escalation | Task 4 scenario B; harness §5 (occurrence index) |
+| Re-triaged + genuinely new occurrence → new escalation | Task 4 scenario C; harness §5; Task 7's RPC path via harness §5 |
+| At most one open escalation per mention, under concurrency | Harness §2 (index), race script session test (Task 10) |
+| Same unit executed concurrently → one row, one escalation, one transition, one audit event | Race script `execute_automation_rule` test (Task 10) |
+| Replay of a terminal unit → zero effects | Harness §5, §7; G0 twin tests (standing) |
+| Whole-unit rollback with surviving failure record | Harness §6/§7 |
+| Caller cannot supply actions; stale revision refused | RPC signature (no payload) + harness §5 (`rule_changed`) |
+| Analysis pipeline respects the contract end to end | Task 5's pipeline tests |
+| SQL matrix ≡ TypeScript matrix | Generated parity file (harness §9) + drift-guard vitest + CI job |
+| Location manager blocked from null-location and cross-location records | Task 3 tests; harness §4 |
+| No authenticated audit inserts; definer/service paths write | Harness §1 (explicit identities) |
 
 ---
 
@@ -26,15 +62,15 @@
 
 **Files:**
 - Create: `supabase/migrations/20260812000100_execution_audit_vocabulary.sql`
+- Modify: the domain audit event-type list (find with `grep -rn "response.edited" src/domain`)
 
 **Interfaces:**
-- Consumes: the vocabulary-migration pattern (`20260807000700_audit_vocabulary_merge.sql`, `20260808000700_response_edited_audit_event.sql` — read one for the exact constraint-swap idiom).
-- Produces: `audit_events_known_event_type` accepts `automation_rule.executed`, `automation_rule.execution_failed`, `automation_sweep.completed`. Also add the three literals to the TypeScript audit vocabulary — find it with `grep -rn "response.edited" src/domain` and extend the same list, so `AuditEventType` accepts them (Task 6's RPC inserts and Task 8's engine call depend on this).
+- Produces: `audit_events_known_event_type` and `AuditEventType` accept `automation_rule.executed`, `automation_rule.execution_failed`, `automation_sweep.completed`.
 
-- [ ] **Step 1: Write the migration** — follow the existing idiom exactly (drop the check constraint, re-add with the union of the previous list plus the three new literals, with a comment naming which feature adds them and that nothing writes them until the G1 RPC and sweep integration land).
-- [ ] **Step 2: Extend the domain vocabulary** — add the three literals to the audit event-type list in `src/domain` (same file the grep finds); run `npx tsc --noEmit`.
-- [ ] **Step 3: Validate** — `npm run db:validate` PASS; full suite green.
-- [ ] **Step 4: Commit** — `git commit -m "feat(db): execution audit event vocabulary"`
+- [ ] **Step 1:** Write the migration following the constraint-swap idiom of `20260807000700_audit_vocabulary_merge.sql` (drop check, re-add with the union), comment naming the feature and that nothing writes these until the RPC lands.
+- [ ] **Step 2:** Add the three literals to the domain vocabulary; `npx tsc --noEmit`.
+- [ ] **Step 3:** `npm run db:validate` + full suite green.
+- [ ] **Step 4:** `git commit -m "feat(db): execution audit event vocabulary"`
 
 ---
 
@@ -42,106 +78,105 @@
 
 **Files:**
 - Create: `supabase/migrations/20260812000200_audit_events_no_client_inserts.sql`
-- Modify: `src/lib/data/supabase/index.ts` (the `auditEvents.record` method, ~line 2750)
-- Test: extend the supabase-adapter test file that covers `auditEvents` (locate with `grep -rln "audit_events" tests/`), plus harness coverage in Task 9
+- Modify: `src/lib/data/supabase/index.ts` (`auditEvents.record`, ~line 2750)
+- Test: extend the supabase adapter test covering `auditEvents` (`grep -rln "audit_events" tests/`)
 
-**Interfaces:**
-- Consumes: `serviceClient()` (`src/lib/data/supabase/index.ts:298`) — already constructed for `listDue`/`consume_oauth_state`; F16 established this is a one-point change.
-- Produces: every audit write goes through the service-role client; PostgREST with a user JWT can no longer insert trail rows.
-
-- [ ] **Step 1: Write the migration**
+- [ ] **Step 1:** Migration:
 
 ```sql
--- Audit hardening (spec §6, closes F3).
---
--- The original audit_events_insert policy let any organization member append
--- any event type with actor_user_id null — i.e. forge events attributed to
--- system/AI actors. Requiring actor_user_id = auth.uid() would only stop
--- impersonation, not fabrication, so authenticated inserts are removed
--- entirely: audit rows are written exclusively by trusted server-side paths
--- (the service-role adapter method, and the execution RPC which runs as
--- security definer). Lands in the same change as the adapter switch — the
--- two are one behavior.
+-- Audit hardening (spec §6, closes F3). The original audit_events_insert
+-- policy let any organization member append any event type with
+-- actor_user_id null — forgeable system/AI attribution. Requiring
+-- actor_user_id = auth.uid() would stop impersonation but not fabrication,
+-- so authenticated inserts are removed entirely: audit rows are written
+-- only by trusted server-side paths — the service-role adapter method and
+-- the security-definer execution functions. Lands with the adapter switch;
+-- the two are one behavior.
 drop policy audit_events_insert on public.audit_events;
 revoke insert on public.audit_events from authenticated;
 ```
 
-- [ ] **Step 2: Switch the adapter** — in `auditEvents.record`, replace the request-scoped `client` with `serviceClient()` for the insert only (reads keep the user client and RLS). Add the load-bearing comment: the scope in hand has already passed `getOrganizationContext()`, this module is `server-only`, and the RLS change this pairs with removes the client-credentialed path entirely.
-- [ ] **Step 3: Update/extend the adapter test** to pin that `record` uses the service client (the existing supabase adapter tests stub fetch/clients — follow their pattern for asserting which client received the insert).
-- [ ] **Step 4: Validate** — `npm run db:validate`, full suite, tsc. All green.
-- [ ] **Step 5: Commit** — `git commit -m "feat(auth): audit events are written only by trusted server-side paths"`
+- [ ] **Step 2:** Switch `auditEvents.record`'s insert to `serviceClient()` (reads keep the user client). Comment: scope already passed `getOrganizationContext()`; module is `server-only`; the paired RLS change removes the client-credentialed path.
+- [ ] **Step 3:** Adapter test pins which client received the insert (follow the file's existing client-stub pattern). Validate + suite + tsc.
+- [ ] **Step 4:** `git commit -m "feat(auth): audit events are written only by trusted server-side paths"`
 
 ---
 
-### Task 3: Location-scoping fixes (P0-4)
+### Task 3: Location-scoping fixes (P0-4), fail-closed
 
 **Files:**
-- Modify: `src/app/actions/escalations.ts` (`updateEscalationStatusAction`, ~line 20; `assignEscalationAction` is org-wide by permission matrix — only owner/admin/comms lead hold `escalation.assign` — leave it)
-- Modify: `src/app/actions/responses.ts` (`assignResponseDraftAction`, ~line 20)
-- Test: `tests/escalation-actions.test.ts`, `tests/response-actions.test.ts` (locate the existing files with `grep -rln "updateEscalationStatusAction\|assignResponseDraftAction" tests/` and extend)
+- Modify: `src/app/actions/escalations.ts` (`updateEscalationStatusAction`), `src/app/actions/responses.ts` (`assignResponseDraftAction`)
+- Test: the existing action test files (`grep -rln "updateEscalationStatusAction\|assignResponseDraftAction" tests/`)
 
 **Interfaces:**
-- Consumes: `assertPermissionForLocation(context, permission, locationId)` from `src/lib/actions/guard.ts:58` — the exact pattern `updateMentionStatusAction` uses (`src/app/actions/mentions.ts:30`). The record's location comes from its mention: `escalation → mention.locationId`, `responseDraft → mention.locationId` (both records carry `mentionId`).
-- Produces: a `location_manager` can act only on records whose mention belongs to a location they manage; org-wide records (null location) are refused to them, per `canForLocation`'s documented contract.
+- Consumes: `assertPermissionForLocation` (`src/lib/actions/guard.ts:58`), the `updateMentionStatusAction` pattern (`src/app/actions/mentions.ts:30`).
 
-- [ ] **Step 1: Write the failing tests** — for each action: a location manager of location A (seeded scope; follow the existing test file's context/fixture setup) is REFUSED (`forbidden`) on a record whose mention belongs to location B, and succeeds on their own location's record; an owner remains unrestricted. Use the same seeding approach the mention-status tests use for their cross-location case (find with `grep -n "location" tests/mention-actions.test.ts` or the file covering `updateMentionStatusAction`).
-- [ ] **Step 2: RED** — run the two test files; the new cases fail (actions currently use plain `authorize`).
-- [ ] **Step 3: Implement** — in each action, after loading the record: load its mention (`context.dataSource.mentions.get(context.scope, existing.mentionId)`), then replace `authorize(permission)` with `mutationContext()` + `assertPermissionForLocation(context, permission, mention?.locationId ?? null)` — mirroring `updateMentionStatusAction`'s structure exactly, including the not-found handling order (record first, then permission).
-- [ ] **Step 4: GREEN** — both files, then full suite + tsc.
-- [ ] **Step 5: Commit** — `git commit -m "fix(auth): location managers act only on their own locations' escalations and drafts"`
+- [ ] **Step 1: Failing tests**, four per action:
+  1. Location manager of A refused (`forbidden`) on a record whose mention belongs to location B.
+  2. Location manager succeeds on their own location's record.
+  3. **Location manager refused when the record's mention has `locationId: null`** (org-wide record; `canForLocation` refuses scoped roles with no location — pin it at the action level).
+  4. **Referenced mention missing** (delete it from the store after creating the record, or seed a dangling reference the way the store allows) → explicit `notFound("Mention")`, not a silent org-wide fallback. Owner remains unrestricted (one shared case).
+- [ ] **Step 2:** RED. **Step 3:** Implement: load the record, then `const mention = await context.dataSource.mentions.get(context.scope, existing.mentionId); if (!mention) throw notFound("Mention");` then `assertPermissionForLocation(context, permission, mention.locationId)`. No optional chaining on the mention.
+- [ ] **Step 4:** GREEN + full suite + tsc. **Step 5:** `git commit -m "fix(auth): location managers act only on their own locations' records, failing closed"`
 
 ---
 
-### Task 4: D158 in TypeScript — open-only dedupe, both paths
+### Task 4: The shared escalation contract
 
 **Files:**
-- Modify: `src/lib/data/demo/index.ts` (`escalationFor` ~line 362 — the single seam `raiseEscalation` and the execution unit share)
-- Modify: `src/lib/rules/execute.ts` (dry-run `escalationExists` seeding, ~line 353 — currently `length > 0` over all escalations)
-- Test: `tests/automation-execution-repository.test.ts` (the pinned `escalation_exists` tests), `tests/rules-execute.test.ts` (the resolved-escalation pairing test), the analysis test file covering escalation dedupe (locate with `grep -rln "created: false\|dedupe" tests/analysis*.test.ts tests/repositories.test.ts`)
+- Create: `supabase/migrations/20260812000300_escalation_contract.sql`
+- Modify: `src/domain/entities/escalation.ts` (add `triggerAnalysisId` to the entity + `CreateEscalationInput`), `src/lib/data/supabase/mappers.ts`
+- Modify: `src/lib/data/demo/index.ts` (`raiseEscalation`/`escalationFor` — the existing shared seam becomes the TypeScript mirror of the contract)
+- Modify: `src/lib/data/types.ts` (`EscalationRepository.create` return gains `reason`)
+- Modify: `src/lib/data/supabase/index.ts` (`escalations.create` calls the function via `.rpc`)
+- Modify: `src/lib/analysis/analyze.ts` (handle the `created:false, escalation:null` refusal shapes)
+- Test: `tests/escalation-contract.test.ts` (new), plus deliberate updates to the G0-pinned dedupe tests named in v1
 
 **Interfaces:**
-- Consumes: `isEscalationClosed` from `@/domain` (`CLOSED_ESCALATION_STATUSES = ["resolved","dismissed"]`).
-- Produces: `escalationFor` returns only a mention's **open** escalation; `raiseEscalation` therefore creates a new escalation when every prior one is closed — for `escalations.create` (analysis path) and `executeUnit` (rules path) alike, and the dry-run projection matches.
+- Produces, in SQL:
 
-- [ ] **Step 1: Write the failing tests (deliberate updates + new coverage)**
+```sql
+public.raise_escalation(
+  p_organization_id uuid, p_mention_id uuid,
+  p_category escalation_category, p_severity risk_level,
+  p_title text, p_summary text, p_due_at timestamptz,
+  p_trigger_analysis_id uuid   -- null on the analysis path (see below)
+) returns table (escalation_id uuid, created boolean, reason text)
+```
 
-1. **Rule-driven re-escalation:** escalate a mention via `executeUnit`; resolve the escalation (`escalations.updateStatus` → `resolved` with a note); re-triage the mention to `monitoring` (`mentions.updateStatus`); call `executeUnit` with a **new** `triggerAnalysisId` and an escalate action → `applied`, a SECOND escalation row exists (total 2, one open), mention back to `escalated`.
-2. **Same occurrence stays idempotent:** repeat the final call with the SAME `triggerAnalysisId` → replay, zero new effects (this already passes via the key; keep it beside the new test to state the safeguard).
-3. **Open still blocks:** the existing `escalation_exists` test (mention at `monitoring` with an OPEN escalation) still pins `no_op`/`escalation_exists` — unchanged.
-4. **Closed no longer blocks (the deliberate flip):** copy test 3's arrangement but resolve the escalation first → now `applied`, not `no_op`. This is the G0 pin being updated on purpose; say so in a comment referencing D158.
-5. **Analysis-driven re-escalation:** through `escalations.create` directly (the analysis path's entry): create → `{created: true}`; create again → `{created: false}` (open blocks); resolve it; create again → `{created: true}` and a comment noting the crash-retry story survives because a just-created escalation is open.
-6. **Dry-run fidelity:** in `tests/rules-execute.test.ts`, the "resolved ones included" pairing test flips meaning: a mention with only a RESOLVED escalation now projects `would_apply` and applies `applied` — update the test name and assertions to pin agreement in the new direction.
-
-- [ ] **Step 2: RED** — the flipped cases fail against any-escalation dedupe.
-- [ ] **Step 3: Implement** — `escalationFor` filters with `!isEscalationClosed(row.status)` (update its doc comment: D158, open-only, the partial index is the database statement of the same invariant); `execute.ts`'s seeding becomes `.some((row) => !isEscalationClosed(row.status))` (import from `@/domain`); no other code changes — the seam design from G0 means both paths flip together.
-- [ ] **Step 4: GREEN** — all named files, then full suite + tsc.
-- [ ] **Step 5: Commit** — `git commit -m "feat(escalations): open-only dedupe — a resolved case no longer blocks re-escalation (D158)"`
-
----
-
-### Task 5: D158 in Postgres — partial unique index + Supabase predicate
-
-**Files:**
-- Create: `supabase/migrations/20260812000300_escalations_open_only_dedupe.sql`
-- Modify: `src/lib/data/supabase/index.ts` (`escalations.create` — find its dedupe read with `grep -n "escalations" src/lib/data/supabase/index.ts` and read the method)
-
-**Interfaces:**
-- Consumes: `CLOSED_ESCALATION_STATUSES` (the SQL restates the complement: open statuses `'open','in_progress','pending_approval'`).
-- Produces: the schema guarantees at most one open escalation per mention; `escalations_one_open_per_mention` is the ON CONFLICT target Task 6's RPC uses.
+  `reason` is null on creation, else one of `escalation_exists`, `awaiting_retriage`, `mention_dismissed`, `occurrence_replayed`.
+- Produces, in TypeScript: `escalations.create(scope, input) → { escalation: Escalation | null, created: boolean, reason: EscalationRefusalReason | null }` — `escalation` is the existing open one for `escalation_exists`/`occurrence_replayed`, null for the two hard refusals. Both adapters implement identically; the demo's `raiseEscalation` is the mirror and stays the seam `executeUnit` shares.
+- **Occurrence identity:** `escalations.trigger_analysis_id uuid null` — the analysis row that authorized the escalation. Rules path always passes it (the unit's `trigger_analysis_id`). The analysis path passes null today because its load-bearing write order (escalation → mention update → analysis insert; the analysis row is the crash-recovery commit point and does not exist yet at escalation time) — its retry safety is the open-escalation dedupe: the escalation a crashed run just created is open and absorbs the re-run. When a re-analysis pipeline exists and analyzes with a known occurrence, it passes the id and gains structural idempotency. Recorded in the migration comment and the decision ledger (Task 12).
 
 - [ ] **Step 1: Write the migration**
 
 ```sql
--- D158: escalation dedupe is open-only, and the invariant lives in the
--- schema. At most one OPEN escalation per mention; resolved/dismissed rows
--- do not block a new one. The open-status list is the complement of
--- CLOSED_ESCALATION_STATUSES in src/domain/entities/escalation.ts — if a
--- status is ever added to either vocabulary, both statements must move
--- together.
+-- D158's shared escalation contract. This function is the ONLY creator of
+-- escalation rows: analysis (escalations.create) and rule execution
+-- (execute_automation_rule) both call it, so eligibility, open-only
+-- dedupe, occurrence idempotency, creation, and the mention's transition
+-- to 'escalated' are one atomic decision with one owner.
 --
--- Pre-flight: the index cannot build if any mention already carries two
--- open escalations. Today's application dedupe makes that impossible, but
--- assert rather than assume.
+-- Eligibility ladder (mention locked FOR UPDATE):
+--   dismissed              -> refused, 'mention_dismissed' (permanent; the
+--                             matrix states the same for rules)
+--   escalated, open case   -> dedupe, 'escalation_exists'
+--   escalated, no open one -> refused, 'awaiting_retriage' (a human must
+--                             re-triage before anything re-escalates)
+--   anything else          -> eligible. 'new' is deliberately legal: the
+--                             analysis path escalates before applying its
+--                             outcome. The rules path layers the stricter
+--                             transition matrix on top BEFORE calling.
+
+alter table public.escalations
+  add column trigger_analysis_id uuid
+    references public.mention_analyses (id) on delete set null;
+comment on column public.escalations.trigger_analysis_id is
+  'The analysis occurrence that authorized this escalation. Null on the analysis path (the analysis row does not exist yet at escalation time; its retry safety is the open-escalation dedupe). Non-null and unique for rule-driven escalations: the same occurrence can never escalate twice.';
+
+-- Pre-flight: the one-open index cannot build if any mention already
+-- carries two open escalations. Application dedupe should make this
+-- impossible; assert rather than assume.
 do $$
 declare violating integer;
 begin
@@ -151,467 +186,345 @@ begin
     group by mention_id having count(*) > 1
   ) dupes;
   if violating > 0 then
-    raise exception
-      'escalations_one_open_per_mention pre-flight: % mentions carry multiple open escalations', violating;
+    raise exception 'escalations_one_open_per_mention pre-flight: % mentions carry multiple open escalations', violating;
   end if;
 end $$;
 
 create unique index escalations_one_open_per_mention
   on public.escalations (mention_id)
   where status in ('open', 'in_progress', 'pending_approval');
-```
 
-- [ ] **Step 2: Update the Supabase adapter's `escalations.create`** — its dedupe read (currently any escalation for the mention) filters to open statuses: `.in("status", ["open", "in_progress", "pending_approval"])`, with a D158 comment. Keep the `{escalation, created}` contract identical.
-- [ ] **Step 3: Validate** — `npm run db:validate`; full suite (demo behavior already flipped in Task 4, so nothing else moves); tsc.
-- [ ] **Step 4: Commit** — `git commit -m "feat(db): at most one open escalation per mention, enforced by partial unique index (D158)"`
+create unique index escalations_one_per_occurrence
+  on public.escalations (trigger_analysis_id)
+  where trigger_analysis_id is not null;
 
----
-
-### Task 6: The transition matrix in SQL + generated parity file
-
-**Files:**
-- Create: `supabase/migrations/20260812000400_automation_transition_functions.sql`
-- Create: `scripts/generate-matrix-parity-sql.ts`
-- Create: `supabase/tests/matrix-parity.generated.sql` (generated, committed)
-- Modify: `package.json` (script `matrix:parity:generate`)
-- Test: `tests/matrix-parity-generated.test.ts`
-
-**Interfaces:**
-- Consumes: `decideSetStatus`/`decideEscalate` from `src/lib/rules/transitions.ts`; `MENTION_STATUSES`, `RISK_LEVELS` from `@/domain`.
-- Produces: SQL functions the RPC calls — `automation_set_status_decision(p_current mention_status, p_target mention_status, p_risk risk_level) returns text` and `automation_escalate_decision(p_current mention_status) returns text`, each returning `'apply'`, `'no_op'`, or a blocked code (`'escalation_reserved'` / `'high_risk_guardrail'` / `'forbidden_transition'`) — collapsing decision kind and code into one text value keeps the SQL trivial and the parity file one assertion per cell. Plus the generated parity SQL the harness runs.
-
-- [ ] **Step 1: Write the migration** — both functions `language sql immutable`, restating `transitions.ts` exactly:
-
-```sql
--- The Phase 2 transition matrix, restated in SQL for the execution RPC.
--- src/lib/rules/transitions.ts is the source of truth; the generated file
--- supabase/tests/matrix-parity.generated.sql asserts every cell agrees.
-create function public.automation_set_status_decision(
-  p_current mention_status, p_target mention_status, p_risk risk_level
-) returns text language sql immutable as $$
-  select case
-    when p_target = 'escalated' then 'escalation_reserved'
-    when p_current = p_target then 'no_op'
-    when p_current not in ('analyzed', 'monitoring') then 'forbidden_transition'
-    when p_current = 'analyzed' and p_target = 'monitoring' then 'apply'
-    when p_target in ('no_action_recommended', 'dismissed') then
-      case when p_risk in ('high', 'critical')
-        then 'high_risk_guardrail' else 'apply' end
-    else 'forbidden_transition'
-  end
-$$;
-
-create function public.automation_escalate_decision(
-  p_current mention_status
-) returns text language sql immutable as $$
-  select case
-    when p_current = 'escalated' then 'no_op'
-    when p_current in ('analyzed', 'monitoring', 'no_action_recommended') then 'apply'
-    else 'forbidden_transition'
-  end
-$$;
-
-revoke execute on function public.automation_set_status_decision(mention_status, mention_status, risk_level) from public, anon, authenticated;
-revoke execute on function public.automation_escalate_decision(mention_status) from public, anon, authenticated;
-grant execute on function public.automation_set_status_decision(mention_status, mention_status, risk_level) to service_role;
-grant execute on function public.automation_escalate_decision(mention_status) to service_role;
-```
-
-- [ ] **Step 2: Write the generator** (`scripts/generate-matrix-parity-sql.ts`, run via the same `node --experimental-strip-types --import ./scripts/tsconfig-paths-hook.mjs` harness as the seed generator; `@/` imports only, per project memory):
-
-```ts
-import { writeFileSync } from "node:fs";
-import { MENTION_STATUSES, RISK_LEVELS } from "@/domain";
-import { decideSetStatus, decideEscalate } from "@/lib/rules/transitions";
-
-function verdict(d: ReturnType<typeof decideSetStatus>): string {
-  return d.kind === "blocked" ? d.code : d.kind === "apply" ? "apply" : "no_op";
-}
-
-const lines: string[] = [
-  "-- GENERATED by scripts/generate-matrix-parity-sql.ts — do not edit.",
-  "-- Asserts the SQL matrix functions agree with src/lib/rules/transitions.ts",
-  "-- on every (from, to, risk) cell and every escalate source.",
-  "begin;",
-];
-for (const from of MENTION_STATUSES)
-  for (const to of MENTION_STATUSES)
-    for (const risk of RISK_LEVELS) {
-      const expected = verdict(decideSetStatus(from, to, risk));
-      lines.push(
-        `select pg_temp.check('set_status ${from}->${to}@${risk}', ` +
-        `public.automation_set_status_decision('${from}','${to}','${risk}') = '${expected}');`,
-      );
-    }
-for (const from of MENTION_STATUSES) {
-  const expected = verdict(decideEscalate(from));
-  lines.push(
-    `select pg_temp.check('escalate from ${from}', ` +
-    `public.automation_escalate_decision('${from}') = '${expected}');`,
-  );
-}
-lines.push("rollback;", "");
-writeFileSync("supabase/tests/matrix-parity.generated.sql", lines.join("\n"));
-console.log(`wrote ${MENTION_STATUSES.length ** 2 * RISK_LEVELS.length + MENTION_STATUSES.length} checks`);
-```
-
-(The `pg_temp.check` helper is defined by the harness file that includes this one — Task 9 — mirroring `rls-verification.sql`'s helper. If that file defines it inside its own transaction, Task 9 hoists the helper definition before both files' inclusion; resolve there, not here.)
-
-- [ ] **Step 3: Wire and generate** — add `"matrix:parity:generate": "node --experimental-strip-types --no-warnings --import ./scripts/tsconfig-paths-hook.mjs scripts/generate-matrix-parity-sql.ts"` to package.json; run it; commit the generated file.
-- [ ] **Step 4: Drift guard test** (`tests/matrix-parity-generated.test.ts`): regenerate the expected content in-memory using the same functions and assert the committed file equals it byte-for-byte — so editing `transitions.ts` without regenerating fails CI:
-
-```ts
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
-// Recompute what the generator would emit (same loops, same format) and
-// compare to the committed artifact.
-```
-
-Write the test by importing the generator's building blocks — extract the line-building into an exported `buildMatrixParityLines(): string[]` in the script file so the test and the CLI share one implementation (no duplicated loop).
-
-- [ ] **Step 5: Validate** — `npm run db:validate`, focused test, full suite, tsc. Commit — `git commit -m "feat(db): transition matrix in SQL with generated parity assertions"`
-
----
-
-### Task 7: The execution RPC
-
-**Files:**
-- Create: `supabase/migrations/20260812000500_execute_automation_rule_rpc.sql`
-
-**Interfaces:**
-- Consumes: Task 6's decision functions; Task 5's `escalations_one_open_per_mention` index; Task 1's audit vocabulary; the G0 tables/constraints (`execs_idempotent`, composite FKs).
-- Produces: `public.execute_automation_rule(p_organization_id uuid, p_sweep_id uuid, p_rule_id uuid, p_revision integer, p_mention_id uuid, p_analysis_id uuid, p_actions jsonb) returns public.automation_rule_executions` — Task 8's adapter calls it via `.rpc(...)`.
-
-- [ ] **Step 1: Write the migration.** The complete function (transcribe; comments are part of the deliverable):
-
-```sql
--- The Phase 2 execution unit (spec §7): claim, validate, apply, record,
--- audit — one transaction. The demo adapter's executeUnit
--- (src/lib/data/demo/index.ts) is the pinned reference; the harness in
--- supabase/tests/execution-verification.sql asserts the semantics D148-D158
--- promise. Service-role only.
-create function public.execute_automation_rule(
-  p_organization_id uuid,
-  p_sweep_id uuid,
-  p_rule_id uuid,
-  p_revision integer,
-  p_mention_id uuid,
-  p_analysis_id uuid,
-  p_actions jsonb
-) returns public.automation_rule_executions
-language plpgsql
-security definer
-set search_path = public, pg_temp
+create function public.raise_escalation(
+  p_organization_id uuid, p_mention_id uuid,
+  p_category escalation_category, p_severity risk_level,
+  p_title text, p_summary text, p_due_at timestamptz,
+  p_trigger_analysis_id uuid
+) returns table (escalation_id uuid, created boolean, reason text)
+language plpgsql security definer set search_path = public, pg_temp
 as $$
 declare
-  v_exec public.automation_rule_executions;
-  v_attempt integer;
-  v_rule public.automation_rules;
   v_mention public.mentions;
-  v_outcomes jsonb := '[]'::jsonb;
-  v_applied integer := 0;
-  v_blocked integer := 0;
-  v_noop integer := 0;
-  v_action jsonb;
-  v_index integer := 0;
-  v_type text;
-  v_decision text;
-  v_target mention_status;
-  v_status mention_status;
-  v_escalation_id uuid;
-  v_row_status text;
+  v_open uuid;
+  v_replayed uuid;
+  v_new uuid;
 begin
-  -- CLAIM. The insert races on execs_idempotent; the loser of a concurrent
-  -- claim blocks on the row lock below until the winner commits, then
-  -- replays. location_id copies the mention's current location (the
-  -- execs_location_is_mentions cascade keeps it following the mention).
-  insert into public.automation_rule_executions
-      (organization_id, sweep_id, automation_rule_id, rule_revision,
-       mention_id, trigger_analysis_id, location_id, mode, status,
-       error_class, last_error_code)
-  select p_organization_id, p_sweep_id, p_rule_id, p_revision,
-         p_mention_id, p_analysis_id, m.location_id, 'apply', 'failed',
-         'retryable', 'claim_only'
-    from public.mentions m
-   where m.id = p_mention_id and m.organization_id = p_organization_id
-  on conflict on constraint execs_idempotent do nothing;
-
-  select * into v_exec from public.automation_rule_executions
-   where automation_rule_id = p_rule_id and rule_revision = p_revision
-     and mention_id = p_mention_id and trigger_analysis_id = p_analysis_id
-     and mode = 'apply'
+  select * into v_mention from public.mentions
+   where id = p_mention_id and organization_id = p_organization_id
    for update;
-
-  if v_exec is null then
-    -- The mention did not exist in this organization: nothing was claimed.
+  if v_mention is null then
     raise exception 'mention % not found in organization %',
       p_mention_id, p_organization_id using errcode = 'P0002';
   end if;
 
-  -- REPLAY / RETRY GATE. Terminal rows return unchanged with zero effects.
-  if v_exec.last_error_code is distinct from 'claim_only'
-     or v_exec.completed_at is not null then
-    if v_exec.status in ('applied', 'partial', 'blocked', 'no_op')
-       or (v_exec.status = 'failed' and v_exec.error_class = 'terminal')
-       or (v_exec.status = 'failed' and v_exec.attempt_count >= 3) then
-      return v_exec;
+  if v_mention.status = 'dismissed' then
+    return query select null::uuid, false, 'mention_dismissed'; return;
+  end if;
+
+  if p_trigger_analysis_id is not null then
+    select id into v_replayed from public.escalations
+     where trigger_analysis_id = p_trigger_analysis_id;
+    if v_replayed is not null then
+      return query select v_replayed, false, 'occurrence_replayed'; return;
     end if;
-    v_attempt := v_exec.attempt_count + 1;   -- retryable failure under cap
-  else
-    v_attempt := 1;                          -- fresh claim
   end if;
 
-  -- VALIDATE, before any business write.
-  select * into v_rule from public.automation_rules
-   where id = p_rule_id and organization_id = p_organization_id
-   for share;
-  if v_rule is null or v_rule.status <> 'active'
-     or v_rule.archived_at is not null or v_rule.revision <> p_revision then
-    update public.automation_rule_executions
-       set status = 'failed', error_class = 'terminal',
-           last_error_code = 'rule_changed', attempt_count = v_attempt,
-           completed_at = now()
-     where id = v_exec.id
-     returning * into v_exec;
-    return v_exec;
+  select id into v_open from public.escalations
+   where mention_id = p_mention_id
+     and status in ('open', 'in_progress', 'pending_approval');
+  if v_open is not null then
+    return query select v_open, false, 'escalation_exists'; return;
   end if;
 
-  if jsonb_typeof(p_actions) is distinct from 'array' or (
-    select bool_or(coalesce(a->>'type', '') not in
-      ('generate_draft','auto_publish','require_approval','assign',
-       'escalate','notify','tag','set_status'))
-    from jsonb_array_elements(p_actions) a) then
-    update public.automation_rule_executions
-       set status = 'failed', error_class = 'terminal',
-           last_error_code = 'invalid_action', attempt_count = v_attempt,
-           completed_at = now()
-     where id = v_exec.id
-     returning * into v_exec;
-    return v_exec;
+  if v_mention.status = 'escalated' then
+    -- Closed case, mention never re-triaged: history informs judgment,
+    -- a human decision reopens the door.
+    return query select null::uuid, false, 'awaiting_retriage'; return;
   end if;
 
-  select * into v_mention from public.mentions
-   where id = p_mention_id and organization_id = p_organization_id
-   for update;
-  v_status := v_mention.status;
+  insert into public.escalations
+      (organization_id, mention_id, category, severity, status,
+       title, summary, due_at, trigger_analysis_id)
+  values (p_organization_id, p_mention_id, p_category, p_severity, 'open',
+          p_title, p_summary, p_due_at, p_trigger_analysis_id)
+  on conflict (mention_id)
+    where status in ('open', 'in_progress', 'pending_approval')
+    do nothing
+  returning id into v_new;
 
-  -- APPLY, inside a subtransaction: any technical failure rolls back every
-  -- business write while the claim row survives to record the failure.
-  begin
-    for v_action in select * from jsonb_array_elements(p_actions) loop
-      v_type := v_action->>'type';
+  if v_new is null then
+    -- A concurrent caller won the partial-index race after our read;
+    -- their row is the dedupe result, not an error.
+    select id into v_open from public.escalations
+     where mention_id = p_mention_id
+       and status in ('open', 'in_progress', 'pending_approval');
+    return query select v_open, false, 'escalation_exists'; return;
+  end if;
 
-      if v_type = 'set_status' then
-        v_target := (v_action->>'status')::mention_status;
-        v_decision := public.automation_set_status_decision(
-          v_status, v_target, v_mention.risk_level);
-        if v_decision = 'apply' then
-          update public.mentions set status = v_target, updated_at = now()
-           where id = p_mention_id;
-          v_status := v_target; v_applied := v_applied + 1;
-          v_outcomes := v_outcomes || jsonb_build_object(
-            'index', v_index, 'type', v_type, 'outcome', 'applied',
-            'code', null);
-        elsif v_decision = 'no_op' then
-          v_noop := v_noop + 1;
-          v_outcomes := v_outcomes || jsonb_build_object(
-            'index', v_index, 'type', v_type, 'outcome', 'no_op',
-            'code', null);
-        else
-          v_blocked := v_blocked + 1;
-          v_outcomes := v_outcomes || jsonb_build_object(
-            'index', v_index, 'type', v_type, 'outcome', 'blocked',
-            'code', v_decision);
-        end if;
-
-      elsif v_type = 'escalate' then
-        -- Eligibility first (matrix), then D158's open-only dedupe via the
-        -- partial unique index, then the status write — all or nothing
-        -- with the rest of the unit. assigneeUserId is dropped (D157).
-        v_decision := public.automation_escalate_decision(v_status);
-        if v_decision = 'apply' then
-          insert into public.escalations
-              (organization_id, mention_id, category, severity, status,
-               title, summary, due_at)
-          values (p_organization_id, p_mention_id, 'other',
-                  v_mention.risk_level, 'open',
-                  'Escalated by rule: ' || v_rule.name, null, null)
-          on conflict (mention_id)
-            where status in ('open', 'in_progress', 'pending_approval')
-            do nothing
-          returning id into v_escalation_id;
-          if v_escalation_id is null then
-            v_noop := v_noop + 1;
-            v_outcomes := v_outcomes || jsonb_build_object(
-              'index', v_index, 'type', v_type, 'outcome', 'no_op',
-              'code', 'escalation_exists');
-          else
-            update public.mentions set status = 'escalated', updated_at = now()
-             where id = p_mention_id;
-            v_status := 'escalated'; v_applied := v_applied + 1;
-            v_outcomes := v_outcomes || jsonb_build_object(
-              'index', v_index, 'type', v_type, 'outcome', 'applied',
-              'code', null);
-          end if;
-        elsif v_decision = 'no_op' then
-          v_noop := v_noop + 1;
-          v_outcomes := v_outcomes || jsonb_build_object(
-            'index', v_index, 'type', v_type, 'outcome', 'no_op',
-            'code', null);
-        else
-          v_blocked := v_blocked + 1;
-          v_outcomes := v_outcomes || jsonb_build_object(
-            'index', v_index, 'type', v_type, 'outcome', 'blocked',
-            'code', v_decision);
-        end if;
-
-      else
-        -- Authorable but not executable (D156): a configuration fact, not
-        -- an error. Executable set = ACTION_CAPABILITIES' executable
-        -- entries; if an action becomes executable there, this branch and
-        -- that registry must move together.
-        v_blocked := v_blocked + 1;
-        v_outcomes := v_outcomes || jsonb_build_object(
-          'index', v_index, 'type', v_type, 'outcome', 'blocked',
-          'code', 'action_not_executable');
-      end if;
-
-      v_index := v_index + 1;
-    end loop;
-
-    -- RECORD + AUDIT, committing with the effects. Success clears the
-    -- error fields (pinned parity with the demo twin).
-    v_row_status := case
-      when v_applied > 0 and v_blocked = 0 then 'applied'
-      when v_applied > 0 then 'partial'
-      when v_blocked > 0 then 'blocked'
-      else 'no_op' end;
-
-    update public.automation_rule_executions
-       set status = v_row_status, outcomes = v_outcomes,
-           attempt_count = v_attempt, error_class = null,
-           last_error_code = null, completed_at = now()
-     where id = v_exec.id
-     returning * into v_exec;
-
-    insert into public.audit_events
-        (organization_id, actor_user_id, actor_type, event_type,
-         entity_type, entity_id, previous_state, new_state, metadata)
-    values (p_organization_id, null, 'system', 'automation_rule.executed',
-            'automation_rule', p_rule_id, null, null,
-            jsonb_build_object('sweepId', p_sweep_id,
-              'mentionId', p_mention_id, 'status', v_row_status,
-              'applied', v_applied, 'blocked', v_blocked, 'noOp', v_noop));
-    return v_exec;
-
-  exception when others then
-    -- Whole-unit rollback: the subtransaction discards every business
-    -- write above; the claim row survives to say the attempt failed. All
-    -- caught failures classify retryable, matching the demo twin; the
-    -- attempt cap bounds the retries.
-    update public.automation_rule_executions
-       set status = 'failed', error_class = 'retryable',
-           last_error_code = left(coalesce(sqlstate, 'unknown'), 40),
-           attempt_count = v_attempt, completed_at = now()
-     where id = v_exec.id
-     returning * into v_exec;
-
-    insert into public.audit_events
-        (organization_id, actor_user_id, actor_type, event_type,
-         entity_type, entity_id, previous_state, new_state, metadata)
-    values (p_organization_id, null, 'system',
-            'automation_rule.execution_failed', 'automation_rule',
-            p_rule_id, null, null,
-            jsonb_build_object('sweepId', p_sweep_id,
-              'mentionId', p_mention_id, 'sqlstate', sqlstate));
-    return v_exec;
-  end;
+  update public.mentions set status = 'escalated', updated_at = now()
+   where id = p_mention_id;
+  return query select v_new, true, null::text;
 end $$;
 
-revoke execute on function public.execute_automation_rule(uuid, uuid, uuid, integer, uuid, uuid, jsonb) from public, anon, authenticated;
-grant execute on function public.execute_automation_rule(uuid, uuid, uuid, integer, uuid, uuid, jsonb) to service_role;
+revoke execute on function public.raise_escalation(uuid, uuid, escalation_category, risk_level, text, text, timestamptz, uuid) from public, anon, authenticated;
+grant execute on function public.raise_escalation(uuid, uuid, escalation_category, risk_level, text, text, timestamptz, uuid) to service_role;
 ```
 
-Check the `escalations` table's actual column list before finalizing the insert (`grep -n -A20 "create table public.escalations" supabase/migrations/20260801000100_initial_schema.sql`) — match required columns exactly; if `title`/`summary` names differ, follow the schema. Same for `mention_status`/`risk_level` enum type names.
+(Check `escalations`' exact column names — `title`/`summary`/`due_at` — against `20260801000100_initial_schema.sql:504-527` and match; check the enum type names `escalation_category`/`risk_level` the same way. The FOR UPDATE mention lock serializes racing callers: the loser blocks, re-reads, and takes the dedupe path — the ON CONFLICT arm is the backstop for the index race, and both arms return `created:false` normally, never a 23505 to the caller.)
 
-- [ ] **Step 2: Validate** — `npm run db:validate` PASS.
-- [ ] **Step 3: Commit** — `git commit -m "feat(db): execute_automation_rule — the transactional execution unit in plpgsql"`
+- [ ] **Step 2: Failing TypeScript tests** (`tests/escalation-contract.test.ts`, demo adapter — the TS mirror), the review's exact scenario matrix plus the standing cases:
+  - **A.** Escalate; resolve the escalation; mention still `escalated` → `create` again returns `{created: false, reason: "awaiting_retriage", escalation: null}`; row count unchanged.
+  - **B.** Resolve; re-triage mention to `monitoring`; call with the SAME `triggerAnalysisId` that produced the first escalation → `{created: false, reason: "occurrence_replayed"}`; row count unchanged.
+  - **C.** Resolve; re-triage; NEW `triggerAnalysisId` → `{created: true}`; two rows total, exactly one open; mention `escalated` again.
+  - **D.** Dismiss the mention → `{created: false, reason: "mention_dismissed"}` forever, regardless of occurrence.
+  - Open blocks (`escalation_exists` with the open row returned); analysis-shaped call (`triggerAnalysisId: null`) still dedupes on open and refuses on `escalated`-closed and `dismissed`.
+  - Deliberate G0 pin updates from v1's Task 4 carry over: the closed-no-longer-blocks flip in `executeUnit`'s tests and the dry-run pairing test — but note `executeUnit`'s escalate arm now flows through this contract, so `awaiting_retriage` surfaces there as `no_op` with code `awaiting_retriage`? No — the matrix already no-ops `escalated` before the contract is consulted, and refuses `dismissed`; the contract's two hard refusals are unreachable from the rules path. Assert that unreachability in one test (rules path on an `escalated` mention with a closed escalation → matrix `no_op`, no contract call recorded).
+- [ ] **Step 3:** RED. **Step 4: Implement the TypeScript mirror** — `raiseEscalation` in the demo adapter becomes the ladder above (same order, same reason strings); `escalationFor` filters open (from v1); `CreateEscalationInput` gains `triggerAnalysisId: uuidSchema.nullable()` (analysis callers pass null); `EscalationRepository.create` returns the new shape; supabase `escalations.create` becomes a `.rpc("raise_escalation", …)` call mapping the returned `(escalation_id, created, reason)` — re-reading the row by id for the `escalation` field when non-null; `analyze.ts` treats `created:false` with null escalation as "no escalation" (skip the audit event, count nothing) — the pipeline semantics tests in Task 5 pin this.
+- [ ] **Step 5:** GREEN across the named files + full suite + tsc + `npm run db:validate`.
+- [ ] **Step 6:** `git commit -m "feat(escalations): one shared, atomic escalation contract — open-only, occurrence-idempotent (D158)"`
 
 ---
 
-### Task 8: Supabase adapter goes real
+### Task 5: Analysis-pipeline end-to-end tests
 
 **Files:**
-- Modify: `src/lib/data/supabase/index.ts` (`automationSweeps.claim`/`finalize`, `automationRuleExecutions.executeUnit`/`recordProjection`, `automationRules.markActivity` — all currently throwing stubs)
-- Modify: `src/lib/data/supabase/mappers.ts` (add `mapAutomationSweep` if absent)
-- Test: extend the supabase adapter test file covering automation (locate with `grep -rln "automation" tests/ | grep -i supabase` — follow its stubbed-client pattern)
+- Test: extend `tests/analysis-run.test.ts`
 
 **Interfaces:**
-- Consumes: Task 7's RPC; the sweeps partial unique index `automation_sweeps_one_running`; `serviceClient()`.
-- Produces: the full `AutomationSweepRepository`/`AutomationRuleExecutionRepository`/`markActivity` contract against real Postgres. All five methods use `serviceClient()` — execution is a cron-context write path (D88); RLS grants authenticated no writes on these tables by design.
+- Consumes: `analyzeMentions` with the stubbed provider (existing pattern), Task 4's contract.
 
-- [ ] **Step 1: Write the failing adapter tests** — following the existing supabase test pattern (stubbed fetch/client): `executeUnit` calls `.rpc("execute_automation_rule", {...})` with snake_case params mapped from `ExecuteUnitInput` and maps the returned row through `mapAutomationRuleExecution`; RPC error → `DataError` (translate through the adapter's existing error helper); `claim` inserts and, on unique-violation (code `23505` on `automation_sweeps_one_running`), reads the running sweep — fresh (< 30 min) → `{claimed: false}`, stale → update it `failed`/`lease_expired` then insert fresh and return `{claimed: true}`; `finalize` updates status/counters/completed_at; `recordProjection` inserts `on conflict do nothing` (via upsert with `ignoreDuplicates: true` or a second read when insert returns no row — follow whichever idiom the adapter already uses for insert-or-read) and returns the stored row; `markActivity` issues `update automation_rules set last_evaluated_at = greatest(coalesce(last_evaluated_at, 'epoch'::timestamptz), $at), …` — since PostgREST cannot express `greatest`, implement as a small SQL function in the same migration family (add `automation_mark_activity(p_rule_id uuid, p_org uuid, p_at timestamptz, p_matched boolean, p_applied boolean)` to Task 7's migration file while it is still unapplied, service-role-only like the RPC) and call it via `.rpc(...)`.
-- [ ] **Step 2: RED**, **Step 3: implement**, **Step 4: GREEN** + full suite + tsc + `npm run db:validate` (the migration gained `automation_mark_activity`).
-- [ ] **Step 5: Commit** — `git commit -m "feat(data): supabase execution adapter — RPC-backed unit, sweep claims, monotonic activity"`
+- [ ] **Step 1: Write the tests** — through the pipeline, not `escalations.create` directly:
+  1. **First escalation:** a `new` mention classified high risk → escalated once; escalation row carries `triggerAnalysisId: null` (analysis path), mention `escalated`.
+  2. **Crash-retry absorption:** simulate the documented crash window — after `analyzeOne` created the escalation but before the analysis row exists (drive it the way the G0 rollback tests injected failures: make `createAnalysis` throw once) → re-run `analyzeMentions` → the mention is re-picked (still unanalyzed), the open escalation absorbs the retry (`created:false`), exactly one escalation, one `escalation.created_from_analysis` audit event total.
+  3. **Dismissed mention never escalates:** a mention with status `dismissed` and no analysis row, classified critical by the stub → no escalation row; the run completes (the refusal is not an error); mention still `dismissed`.
+  4. **Escalated mention with closed escalation is not re-escalated by the pipeline:** arrange a mention at `escalated` whose escalation is resolved and which has no analysis row (store surgery, mirroring how the repository tests arrange edge states) → run → `awaiting_retriage` refusal, no new escalation. (Unreachable through normal flow — analysis only picks unanalyzed mentions — but this pins the pipeline against the contract rather than against reachability luck.)
+- [ ] **Step 2:** RED where behavior changed (test 3 and 4 fail before Task 4's `analyze.ts` handling). **Step 3:** any `analyze.ts` adjustments live in Task 4; this task should need test code only — if implementation gaps surface, they are Task 4 defects to fix there.
+- [ ] **Step 4:** GREEN + full suite. **Step 5:** `git commit -m "test(analysis): the pipeline honors the shared escalation contract end to end"`
 
 ---
 
-### Task 9: The database execution harness
+### Task 6: Transition matrix in SQL + generated parity file
+
+Unchanged from v1 except file version. **Files:** `supabase/migrations/20260812000400_automation_transition_functions.sql`, `scripts/generate-matrix-parity-sql.ts` (exporting `buildMatrixParityLines(): string[]` shared by CLI and drift test), `supabase/tests/matrix-parity.generated.sql` (committed), `tests/matrix-parity-generated.test.ts`, package.json script `matrix:parity:generate`.
+
+- [ ] **Step 1:** Migration with `automation_set_status_decision(p_current mention_status, p_target mention_status, p_risk risk_level) returns text` and `automation_escalate_decision(p_current mention_status) returns text` — `language sql immutable`, the exact `case` bodies from v1 (git history `139098e`, Task 6 Step 1 — transcribe verbatim), revokes + service_role grants.
+- [ ] **Step 2:** Generator emitting one `pg_temp.check(...)` per cell (324 set_status + 9 escalate), from `buildMatrixParityLines()`.
+- [ ] **Step 3:** Drift-guard vitest: committed file equals `buildMatrixParityLines().join("\n")` byte-for-byte.
+- [ ] **Step 4:** `npm run db:validate`, focused + full suite, commit — `git commit -m "feat(db): transition matrix in SQL with generated parity assertions"`
+
+---
+
+### Task 7: The execution RPC — actions from storage
+
+**Files:**
+- Create: `supabase/migrations/20260812000500_execute_automation_rule_rpc.sql`
+- Modify: `src/lib/data/types.ts` (`ExecuteUnitInput` loses `actions`; becomes the five-field unit key), `src/lib/rules/execute.ts` (stops passing actions to `executeUnit`; dry-run projection keeps using the loaded rule's actions directly), `src/lib/data/demo/index.ts` (`executeUnit` loads actions from the stored rule after the revision check)
+- Test: `tests/automation-execution-repository.test.ts` (contract change ripples; plus the new validation cases)
+
+**Interfaces:**
+- Produces: `public.execute_automation_rule(p_organization_id uuid, p_sweep_id uuid, p_rule_id uuid, p_revision integer, p_mention_id uuid, p_analysis_id uuid) returns public.automation_rule_executions` — **no actions parameter**. TypeScript: `ExecuteUnitInput = { sweepId, automationRuleId, ruleRevision, mentionId, triggerAnalysisId }`; `RecordProjectionInput = ExecuteUnitInput & { status: DryRunExecutionStatus, outcomes: ExecutionActionOutcome[] }`.
+
+- [ ] **Step 1: Failing twin tests first** — the demo `executeUnit` contract change: a caller can no longer influence actions (the old "malformed action payload" test becomes: corrupt the STORED rule's actions in the store → terminal `invalid_action`); add: stored rule with an action whose `set_status` target is not a valid mention status → terminal `invalid_action` before any mutation; empty stored actions array → `no_op` row, empty outcomes, zero effects; null-ish/corrupt stored actions (store surgery) → terminal `invalid_action`.
+- [ ] **Step 2:** RED. **Step 3:** Update the demo twin (load `rule.actions` after the revision check; run the same Zod array parse it already used, now against stored data) and the engine call sites; tsc chases the type change through `tests/rules-execute.test.ts` helpers.
+- [ ] **Step 4: Write the RPC migration.** Start from v1's full function body (git history `139098e`, Task 7 Step 1) with these deltas, each mirroring a review item:
+  1. Drop `p_actions`; after the rule validation block, `v_actions := v_rule.actions;` — the stored revision's actions are the only actions.
+  2. **Validation before the subtransaction:** `v_actions` must be a jsonb array (else terminal `invalid_action`); every element's `type` in the eight-member vocabulary (else `invalid_action`); every `set_status` element's `status` value in `select enum_range(null::mention_status)::text[]` — checked as text BEFORE any cast (else `invalid_action`); `escalate`/`set_status` field presence checked the same way. Empty array skips the loop and derives `no_op`.
+  3. The escalate arm calls the shared contract: `select * into v_esc_id, v_esc_created, v_esc_reason from public.raise_escalation(p_organization_id, p_mention_id, 'other', v_mention.risk_level, 'Escalated by rule: ' || v_rule.name, null, null, p_analysis_id);` — `created` → `applied` outcome + `v_status := 'escalated'` (the contract already moved the mention; refresh `v_status` from its effect); `escalation_exists`/`occurrence_replayed` → `no_op` with that reason as code; `mention_dismissed`/`awaiting_retriage` are unreachable behind the matrix (the function may still return them; map to `blocked` with the reason as code, so a future matrix change cannot silently invent an eighth semantics).
+  4. Everything else from v1 stands: claim insert with `on conflict do nothing`, `for update` replay/retry gate, `rule_changed` on revision drift, per-action outcomes, status derivation, success clearing error fields, the exception handler's whole-unit rollback with retryable classification and the `execution_failed` audit event carrying identifiers + SQLSTATE (permitted by the revised audit contract).
+- [ ] **Step 5:** `npm run db:validate`; full suite + tsc green. **Step 6:** `git commit -m "feat(db): execute_automation_rule — transactional unit executing the stored revision only"`
+
+---
+
+### Task 8: Atomic sweep claim + activity support functions
+
+**Files:**
+- Create: `supabase/migrations/20260812000600_automation_execution_support.sql`
+
+**Interfaces:**
+- Produces: `public.claim_automation_sweep(p_organization_id uuid, p_mode text) returns table (sweep public.automation_sweeps, claimed boolean)` and `public.automation_mark_activity(p_organization_id uuid, p_rule_id uuid, p_at timestamptz, p_matched boolean, p_applied boolean) returns void`.
+
+- [ ] **Step 1: Write the migration**
+
+```sql
+-- Sweep claiming as one atomic decision (review item 4): the multi-step
+-- PostgREST version could double-expire a stale sweep and race the
+-- replacement insert. Here the existing running row is locked FOR UPDATE,
+-- so exactly one caller performs the takeover; the loser blocks, re-reads,
+-- and receives the winner's claim as a normal (sweep, claimed=false)
+-- outcome. The partial unique index automation_sweeps_one_running remains
+-- the constraint-level backstop.
+create function public.claim_automation_sweep(
+  p_organization_id uuid, p_mode text
+) returns table (sweep public.automation_sweeps, claimed boolean)
+language plpgsql security definer set search_path = public, pg_temp
+as $$
+declare
+  v_running public.automation_sweeps;
+  v_new public.automation_sweeps;
+begin
+  select * into v_running from public.automation_sweeps s
+   where s.organization_id = p_organization_id and s.status = 'running'
+   for update;
+
+  if v_running is not null then
+    if v_running.started_at > now() - interval '30 minutes' then
+      return query select v_running, false; return;
+    end if;
+    update public.automation_sweeps
+       set status = 'failed', error_code = 'lease_expired',
+           completed_at = now()
+     where id = v_running.id;
+  end if;
+
+  begin
+    insert into public.automation_sweeps (organization_id, mode, status)
+    values (p_organization_id, p_mode, 'running')
+    returning * into v_new;
+  exception when unique_violation then
+    -- A racer inserted between our lock release path and this insert
+    -- (possible only when no running row existed to lock). Their claim
+    -- is the answer.
+    select * into v_running from public.automation_sweeps s
+     where s.organization_id = p_organization_id and s.status = 'running';
+    return query select v_running, false; return;
+  end;
+  return query select v_new, true;
+end $$;
+
+-- Monotonic activity stamps (D154): greatest() is not expressible through
+-- PostgREST, so the update is a function. Never moves a timestamp
+-- backwards; matched/applied advance only when their flag says so.
+create function public.automation_mark_activity(
+  p_organization_id uuid, p_rule_id uuid, p_at timestamptz,
+  p_matched boolean, p_applied boolean
+) returns void
+language sql security definer set search_path = public, pg_temp
+as $$
+  update public.automation_rules set
+    last_evaluated_at = greatest(coalesce(last_evaluated_at, '-infinity'), p_at),
+    last_matched_at = case when p_matched
+      then greatest(coalesce(last_matched_at, '-infinity'), p_at)
+      else last_matched_at end,
+    last_applied_at = case when p_applied
+      then greatest(coalesce(last_applied_at, '-infinity'), p_at)
+      else last_applied_at end
+  where id = p_rule_id and organization_id = p_organization_id;
+$$;
+
+revoke execute on function public.claim_automation_sweep(uuid, text) from public, anon, authenticated;
+grant execute on function public.claim_automation_sweep(uuid, text) to service_role;
+revoke execute on function public.automation_mark_activity(uuid, uuid, timestamptz, boolean, boolean) from public, anon, authenticated;
+grant execute on function public.automation_mark_activity(uuid, uuid, timestamptz, boolean, boolean) to service_role;
+```
+
+- [ ] **Step 2:** `npm run db:validate`. **Step 3:** `git commit -m "feat(db): atomic sweep claiming and monotonic activity stamps"`
+
+---
+
+### Task 9: Supabase adapter goes real
+
+**Files:**
+- Modify: `src/lib/data/supabase/index.ts` (all five stubs), `src/lib/data/supabase/mappers.ts` (`mapAutomationSweep` if absent)
+- Test: the supabase adapter test file covering automation (follow its stubbed-client pattern)
+
+**Interfaces:**
+- Consumes: Tasks 7–8's functions; `serviceClient()`.
+- Produces: `executeUnit` → `.rpc("execute_automation_rule", { p_organization_id, p_sweep_id, p_rule_id, p_revision, p_mention_id, p_analysis_id })` mapped through `mapAutomationRuleExecution`; `claim` → `.rpc("claim_automation_sweep", …)` mapped to `{sweep, claimed}`; `finalize` → status/counters/completed_at update; `recordProjection` → insert with `ignoreDuplicates` + read-back of the stored row (the returned row, not the intended one — G0's pinned counter semantics depend on it); `markActivity` → `.rpc("automation_mark_activity", …)`. All via `serviceClient()` (cron-context path, D88; RLS grants authenticated no writes by design). RPC errors translate through the adapter's existing error helper into `DataError` — never a raw postgrest error.
+
+- [ ] **Step 1:** Failing adapter tests per method (params mapped snake_case; error translation; claim's `{claimed:false}` shape; recordProjection returning the STORED row on replay). **Step 2:** RED. **Step 3:** Implement. **Step 4:** GREEN + full suite + tsc + `npm run db:validate`. **Step 5:** `git commit -m "feat(data): supabase execution adapter — RPC-backed units, atomic claims, monotonic activity"`
+
+---
+
+### Task 10: Database harness + real concurrency tests
 
 **Files:**
 - Create: `supabase/tests/execution-verification.sql`
-- Modify: `package.json` (script `db:verify-execution`)
+- Create: `scripts/execution-race-test.sh`
+- Modify: `package.json` (`db:verify-execution`)
 
 **Interfaces:**
-- Consumes: everything above, applied by `supabase db reset`; the `pg_temp.check` helper idiom from `rls-verification.sql`; Task 6's generated parity file.
-- Produces: the spec §11 DB suite, runnable as `npm run db:verify-execution` (which runs reset, then the RLS file, then this file, then the parity file — all under `ON_ERROR_STOP=1`).
+- Consumes: everything above via `supabase db reset`; the `pg_temp.check` idiom from `rls-verification.sql` (hoist the helper so both included files share it — resolve the transaction-scoping here).
+- Produces: `npm run db:verify-execution` = reset → rls file → execution file → generated parity file → race script, all `ON_ERROR_STOP=1`.
 
-- [ ] **Step 1: Write the harness.** Structure mirrors `rls-verification.sql` (fixtures temp table resolved by slug, `pg_temp.check(name, condition)` helper that raises on failure, numbered sections, `begin`/`rollback` around mutating sections). Sections, each with the concrete assertions:
-
-1. **Audit hardening (DB-1):** as a seeded authenticated member (`set local role authenticated; set local request.jwt.claims ...` — copy the impersonation idiom from `rls-verification.sql`), `insert into audit_events ...` must fail (42501); as service role it succeeds; cross-org select still refused.
-2. **Cross-org integrity (DB-2):** as service role, insert an execution mixing org A's rule with org B's mention → FK violation; same for sweep/org, analysis/mention, location/mention mismatches (four checks, each expecting the specific constraint name in the error).
-3. **Location equality (DB-3):** an execution whose `location_id` differs from its mention's fails `execs_location_is_mentions`; updating the mention's `location_id` cascades into the stored execution row (insert, remap, re-read).
-4. **Location-manager visibility (DB-4):** impersonate the seeded location manager: sees only rows whose `location_id` is their location; unlocated rows invisible; admin sees all; org-B manager sees none.
-5. **Idempotency and occurrence (DB-5):** call `execute_automation_rule` twice with identical args → second call returns the same row, `attempt_count` unchanged, exactly one escalation/status write (assert row counts); insert a second `mention_analyses` row and call with the new id → new execution row, and with D158: after resolving the first escalation and re-triaging the mention, the new occurrence escalates again (assert two escalations, one open).
-6. **Whole-unit rollback (DB-6):** create a constraint trigger on `public.escalations` that raises for a marker mention id; call the RPC with `[set_status monitoring, escalate]` on that mention → returned row `failed`/`retryable`, the mention's status is UNCHANGED (the earlier set_status rolled back), no escalation row; drop the trigger.
-7. **Retry (DB-7):** after DB-6, call again (trigger dropped) → `applied`, `attempt_count = 2`, `error_class is null`, `last_error_code is null` (the success-clears pin). A terminal `rule_changed` row (bump the rule's revision, call with the old one) replays unchanged on a second call.
-8. **Claim concurrency at the constraint (DB-8):** two inserts into `automation_sweeps` with `status='running'` for one org → second fails `automation_sweeps_one_running`; two RPC calls for the same unit serialized in one session → one applies, one replays (true two-session interleaving is exercised by the race script below).
-9. **Matrix parity (DB-9):** `\i supabase/tests/matrix-parity.generated.sql` (324 set_status cells + 9 escalate sources).
-10. **Reset gate (DB-10):** implicit — the script only runs after a clean `supabase db reset`.
-
-Also create `scripts/execution-claim-race.sh`: launches two `psql` processes in parallel, each attempting the same organization's sweep claim inside a transaction with a `pg_sleep(1)` before commit; asserts afterwards exactly one `running` row exists. Wire it as the last step of `db:verify-execution`.
-
-- [ ] **Step 2: Add the script** — `"db:verify-execution": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/execution-verification.sql && bash scripts/execution-claim-race.sh"`.
-- [ ] **Step 3: Run it** (Docker required; `export SUPABASE_DB_URL` from `supabase status` per project memory). Iterate until green. This step is the plan's centerpiece verification — the RPC's semantics are only proven here.
-- [ ] **Step 4: Commit** — `git commit -m "test(db): execution harness — hardening, integrity, idempotency, rollback, parity"`
+- [ ] **Step 1: Write the harness.** Sections (fixtures resolved by slug, mutating sections in `begin`/`rollback`, **every role switch explicit** — review item 11):
+  1. **Audit identities (DB-1):** as `authenticated` (the harness's JWT-claims impersonation idiom) insert into `audit_events` → expect 42501; **as the definer path** — call `execute_automation_rule` for a unit that applies and assert exactly one `automation_rule.executed` row landed (the RPC's security-definer identity is the intended privileged writer); as `service_role` a direct insert succeeds; cross-organization audit READ refused as an authenticated member of the other org — service role is never used to test read refusal (it bypasses RLS by design).
+  2. **Escalation invariants (DB-2):** as service role, two direct inserts of open escalations for one mention → second fails `escalations_one_open_per_mention`; two inserts with one `trigger_analysis_id` → second fails `escalations_one_per_occurrence`.
+  3. **Cross-org + location integrity (DB-3):** the four composite-FK mismatch refusals (sweep/rule/analysis/location vs org or mention), each asserting the constraint name; mention relocation cascades into stored execution rows.
+  4. **Location-manager visibility (DB-4):** manager sees only their location's rows; null-location rows invisible to managers, visible to admins; org-B manager sees none.
+  5. **Contract scenario matrix (DB-5):** through `raise_escalation` and `execute_automation_rule`: resolved + still-escalated → `awaiting_retriage`, no row; re-triaged + replayed occurrence → `occurrence_replayed`, no row; re-triaged + new `mention_analyses` row → created, two escalations one open; dismissed → `mention_dismissed` always; RPC replay of a terminal unit → same row id, `attempt_count` unchanged, single escalation/status-write/audit-event (counted).
+  6. **Whole-unit rollback (DB-6):** constraint trigger on `escalations` raising for a marker mention; RPC with stored actions `[set_status monitoring, escalate]` → returned row `failed`/`retryable`, mention status unchanged, no escalation; drop trigger.
+  7. **Retry (DB-7):** re-call after dropping the trigger → `applied`, `attempt_count = 2`, `error_class`/`last_error_code` null; terminal `rule_changed` (bump revision, call with the old one) replays unchanged.
+  8. **Stored-actions validation (DB-8):** corrupt a rule's `actions` to a non-array / unknown type / invalid `set_status` target (direct update as service role) → terminal `invalid_action` before any mutation (mention untouched).
+  9. **Matrix parity (DB-9):** `\i supabase/tests/matrix-parity.generated.sql`.
+- [ ] **Step 2: Write the race script** (`scripts/execution-race-test.sh`) — **two genuine sessions, two races** (review item 5):
+  1. **Claim race:** two backgrounded `psql` processes call `claim_automation_sweep` for the same org simultaneously (loop a few rounds); after each round assert exactly one `running` row and exactly one `claimed=true` result (capture each psql's output to a temp file and grep).
+  2. **Execution race:** seed one unit's inputs; two backgrounded `psql` processes call `execute_automation_rule` with identical arguments simultaneously; afterwards assert — both outputs carry the SAME execution id; exactly one `automation_rule_executions` row for the key; exactly one escalation for the mention; the mention's status history shows one transition (status is `escalated`, and `updated_at` count can't show double-writes, so assert instead: exactly one `automation_rule.executed` audit event, `attempt_count = 1`).
+- [ ] **Step 3:** Wire `"db:verify-execution": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/execution-verification.sql -f supabase/tests/matrix-parity.generated.sql && bash scripts/execution-race-test.sh"`.
+- [ ] **Step 4: Run it** (Docker; `SUPABASE_DB_URL` exported). Iterate until green — this step proves the RPC.
+- [ ] **Step 5:** `git commit -m "test(db): execution harness — contract matrix, rollback, and two-session races"`
 
 ---
 
-### Task 10: Route-level apply-mode test + engine wiring check
+### Task 11: CI gate
 
 **Files:**
-- Test: `tests/rules-execution-route.test.ts` (extend)
+- Create: `.github/workflows/verify.yml`
 
 **Interfaces:**
-- Consumes: the G0 route (`executionEnabled` gating) and engine; nothing new to build — this closes the deferred "no route-level apply test" minor.
+- Consumes: `npm run verify`, `npm run db:verify-execution`. The repo has no CI today (verified); this workflow is the first, and the database job is REQUIRED so a TypeScript matrix change can never merge with stale SQL behavior (review item 6).
 
-- [ ] **Step 1: Write the test** — mode `apply` + allowlisted org: `executeRules` is invoked with `mode: "apply"` (spy assertion on the argument), sweeps appear in the response, and mode `apply` + non-allowlisted org is skipped exactly as dry_run is. RED only if gating is broken — expected GREEN immediately; the test's value is pinning apply isn't accidentally gated differently (verify it fails if you flip `executionEnabled` to exclude apply — do that locally as the RED check, then revert).
-- [ ] **Step 2: Full suite + tsc. Commit** — `git commit -m "test(cron): pin apply-mode gating parity with dry run"`
+- [ ] **Step 1: Write the workflow**
+
+```yaml
+name: verify
+on:
+  pull_request:
+  push:
+    branches: [master]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run verify
+  database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: supabase/setup-cli@v1
+        with: { version: latest }
+      - run: npm ci
+      - run: supabase start
+      - name: Run the database harness
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2-)"
+          npm run db:verify-execution
+```
+
+- [ ] **Step 2:** Push a branch and confirm both jobs run and pass on GitHub (this is the one task verified on the forge, not locally). Note in the PR that "database" should be marked a required status check in repo settings — an owner action; record it in the runbook.
+- [ ] **Step 3:** `git commit -m "ci: verify + database harness as merge gates"`
 
 ---
 
-### Task 11: Docs, ledger, and the G1 runbook
+### Task 12: Docs, ledger, and the internal-apply runbook
 
 **Files:**
-- Modify: `docs/architecture/current-state.md` (decision rows D159+; gaps; the Q7/D158 interim-behavior note becomes "landed")
-- Modify: `docs/superpowers/specs/2026-08-11-rules-execution-phase2-design.md` (§11 G1 block marked implemented)
+- Modify: `docs/architecture/current-state.md`, `docs/superpowers/specs/2026-08-11-rules-execution-phase2-design.md`
 
-- [ ] **Step 1: Decision rows** — D159: the RPC's shape (claim-row + subtransaction, all-retryable classification matching the twin, success clears error fields — now proven in the harness, superseding the "parity delta" note); D160: matrix parity is generated, not hand-kept (the drift-guard test + generated SQL); D161: audit events are service-path-only (policy dropped; adapter switched; RPC writes its own). Update the D158 row's "lands as a G1 task" tail to "landed" with the migration version.
-- [ ] **Step 2: Gaps** — G1 gaps section: apply is now REACHABLE for allowlisted orgs once migrations are pushed and mode is set; enumerate the operator runbook: (1) push migrations `20260812000100`–`000500` to hosted after `db:verify-execution` passes locally; (2) set `RULES_EXECUTION_MODE=dry_run` + internal org allowlist; watch a sweep; (3) flip to `apply`; reconcile the first live sweep's execution rows, escalation dedupe, and audit events by hand per the spec's acceptance criteria; (4) **watch item: false-positive re-escalation** (D158) — if resolved-then-retriaged mentions re-escalate noisily, that feedback gates any allowlist growth; (5) the cron response shape change note for any external monitoring.
-- [ ] **Step 3: `npm run verify` green. Commit** — `git commit -m "docs: record G1 decisions and the internal-apply runbook"`
+- [ ] **Step 1: Decision rows** — D159: the shared escalation contract (`raise_escalation` as sole creator; eligibility ladder; occurrence idempotency via `trigger_analysis_id` + partial unique index; the analysis path's null-occurrence rationale and its write-order-based retry safety; the governing principle sentence). D160: the RPC executes only the stored revision (no caller payload; malformed stored configuration is terminal). D161: atomic sweep claiming. D162: audit contract revision (identifiers/outcomes/status/SQLSTATE/counts permitted; mention content never) + service-path-only writes. D163: CI as the parity gate. Update D158's tail to "landed", with migration versions.
+- [ ] **Step 2: Runbook** — the six-migration push sequence (the §Migration sequence table verbatim); mark "database" as a required check; `dry_run` + internal allowlist → watch → `apply`; first-live-sweep reconciliation; the false-positive re-escalation watch item; the cron response-shape note.
+- [ ] **Step 3:** `npm run verify` green. **Step 4:** `git commit -m "docs: record G1 decisions and the internal-apply runbook"`
 
 ---
 
 ## Not in this plan
 
-The hosted migration push and mode changes (operator runbook steps, deliberately human-executed); G2's overlapping-mutation-path RPCs and location-aware write policies; the `not_claimed` reason discriminator, engine observability, and the other ledgered G0 minors not named above; any new executor.
+The hosted migration push and mode changes (runbook, human-executed); marking the CI check required (repo-settings owner action, in the runbook); G2's overlapping-mutation-path RPCs and location-aware write policies; ledgered G0 minors not named above; any new executor; re-analysis surfaces (when one exists, it passes a real occurrence id into the contract and gains structural idempotency for the analysis path too).
