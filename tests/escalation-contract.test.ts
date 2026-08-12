@@ -1,9 +1,24 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { freshDataSource, ushg } from "./helpers/scope";
 import { demoStore } from "@/lib/data/demo/store";
 import { createSupabaseDataSource } from "@/lib/data/supabase";
 import { DataError } from "@/lib/data/errors";
+
+/**
+ * The Supabase adapter's occurrence entry points route through the
+ * service-role client (Task 10), the same way `auditEvents.record` does — see
+ * `tests/audit-events-service-write.test.ts`'s doc comment for why. Mocked
+ * here, at module scope, so the tests below can hand it a stub that records
+ * the exact RPC payload without touching a real database.
+ */
+const { createSupabaseServiceClient } = vi.hoisted(() => ({
+  createSupabaseServiceClient: vi.fn(),
+}));
+
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient,
+}));
 import type {
   CreateMentionAnalysisInput,
   Escalation,
@@ -609,6 +624,51 @@ describe("the Supabase adapter", () => {
     role: "admin",
   };
 
+  /** A chainable stand-in for a PostgREST query builder that reads one row. */
+  interface FakeQueryChain {
+    select: (columns?: string) => FakeQueryChain;
+    eq: (column: string, value: unknown) => FakeQueryChain;
+    maybeSingle: () => Promise<{ data: unknown; error: unknown }>;
+    single: () => Promise<{ data: unknown; error: unknown }>;
+  }
+
+  /**
+   * A stub service-role client whose `rpc` calls are recorded verbatim and
+   * whose every `from(...).select()...` read returns the same fixed row.
+   * That is enough for the entry points under test here: each one makes
+   * exactly one RPC call and, on success, one confirming read.
+   */
+  function makeServiceClientStub(
+    rpcImpl: (fn: string, payload: Record<string, unknown>) => { data: unknown; error: unknown },
+    readRow: Record<string, unknown> | null = null,
+  ) {
+    const rpcCalls: Array<{ fn: string; payload: Record<string, unknown> }> = [];
+
+    const chain = (): FakeQueryChain => {
+      const c: FakeQueryChain = {
+        select: () => c,
+        eq: () => c,
+        maybeSingle: () => Promise.resolve({ data: readRow, error: null }),
+        single: () => Promise.resolve({ data: readRow, error: null }),
+      };
+      return c;
+    };
+
+    const client = {
+      rpc: (fn: string, payload: Record<string, unknown>) => {
+        rpcCalls.push({ fn, payload });
+        return Promise.resolve(rpcImpl(fn, payload));
+      },
+      from: () => chain(),
+    } as unknown as SupabaseClient;
+
+    return { client, rpcCalls };
+  }
+
+  beforeEach(() => {
+    createSupabaseServiceClient.mockReset();
+  });
+
   it("refuses to create an escalation outside the entry points", async () => {
     const remote = createSupabaseDataSource(unusableClient);
 
@@ -628,7 +688,144 @@ describe("the Supabase adapter", () => {
     });
   });
 
-  it("reports the occurrence entry points as not yet wired", async () => {
+  it("records an occurrence via record_analysis_occurrence with exact p_-prefixed params, then reads back the stored row", async () => {
+    const mentionId = crypto.randomUUID();
+    const analysisRunId = crypto.randomUUID();
+    const analysisId = crypto.randomUUID();
+    const analyzedAt = new Date().toISOString();
+
+    const storedRow = {
+      id: analysisId,
+      organization_id: supabaseScope.organizationId,
+      mention_id: mentionId,
+      model_provider: CLASSIFICATION.modelProvider,
+      model_name: CLASSIFICATION.modelName,
+      prompt_version: CLASSIFICATION.promptVersion,
+      relevance_score: String(CLASSIFICATION.relevanceScore),
+      relevance_explanation: CLASSIFICATION.relevanceExplanation,
+      sentiment: CLASSIFICATION.sentiment,
+      sentiment_score: String(CLASSIFICATION.sentimentScore),
+      risk_level: CLASSIFICATION.riskLevel,
+      risk_categories: CLASSIFICATION.riskCategories,
+      risk_explanation: CLASSIFICATION.riskExplanation,
+      topics: CLASSIFICATION.topics,
+      facts_needing_verification: CLASSIFICATION.factsNeedingVerification,
+      recommended_action: CLASSIFICATION.recommendedAction,
+      recommendation_explanation: CLASSIFICATION.recommendationExplanation,
+      analyzed_at: analyzedAt,
+      analysis_run_id: analysisRunId,
+      input_tokens: null,
+      output_tokens: null,
+      outcome_applied_at: null,
+      created_at: new Date().toISOString(),
+    };
+
+    const { client, rpcCalls } = makeServiceClientStub(
+      () => ({ data: [{ analysis_id: analysisId, created: true }], error: null }),
+      storedRow,
+    );
+    createSupabaseServiceClient.mockReturnValue(client);
+
+    const remote = createSupabaseDataSource(unusableClient);
+    const result = await remote.mentions.recordAnalysisOccurrence(supabaseScope, {
+      ...CLASSIFICATION,
+      mentionId,
+      analysisRunId,
+      analyzedAt,
+    });
+
+    expect(result).toEqual({
+      created: true,
+      analysis: expect.objectContaining({ id: analysisId, mentionId }),
+    });
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0]?.fn).toBe("record_analysis_occurrence");
+    expect(rpcCalls[0]?.payload).toStrictEqual({
+      p_organization_id: supabaseScope.organizationId,
+      p_mention_id: mentionId,
+      p_analysis_run_id: analysisRunId,
+      p_model_provider: CLASSIFICATION.modelProvider,
+      p_model_name: CLASSIFICATION.modelName,
+      p_prompt_version: CLASSIFICATION.promptVersion,
+      p_relevance_score: CLASSIFICATION.relevanceScore,
+      p_relevance_explanation: CLASSIFICATION.relevanceExplanation,
+      p_sentiment: CLASSIFICATION.sentiment,
+      p_sentiment_score: CLASSIFICATION.sentimentScore,
+      p_risk_level: CLASSIFICATION.riskLevel,
+      p_risk_categories: CLASSIFICATION.riskCategories,
+      p_risk_explanation: CLASSIFICATION.riskExplanation,
+      p_topics: CLASSIFICATION.topics,
+      p_facts_needing_verification: CLASSIFICATION.factsNeedingVerification,
+      p_recommended_action: CLASSIFICATION.recommendedAction,
+      p_recommendation_explanation: CLASSIFICATION.recommendationExplanation,
+      p_analyzed_at: analyzedAt,
+    });
+  });
+
+  it("applies an occurrence via apply_analysis_occurrence with exact p_-prefixed params", async () => {
+    const mentionId = crypto.randomUUID();
+    const analysisId = crypto.randomUUID();
+
+    const { client, rpcCalls } = makeServiceClientStub(() => ({
+      data: [
+        {
+          escalation_id: null,
+          escalation_created: false,
+          reason: null,
+          already_applied: false,
+          final_status: "analyzed",
+        },
+      ],
+      error: null,
+    }));
+    createSupabaseServiceClient.mockReturnValue(client);
+
+    const remote = createSupabaseDataSource(unusableClient);
+    const input = {
+      mentionId,
+      analysisId,
+      shouldEscalate: false,
+      category: "other" as const,
+      severity: "high" as const,
+      title: "Escalated by analysis",
+      summary: null,
+      sentiment: "negative" as const,
+      riskLevel: "high" as const,
+      relevanceScore: 0.8,
+    };
+    const result = await remote.mentions.applyAnalysisOccurrence(supabaseScope, input);
+
+    expect(result).toEqual({
+      escalationId: null,
+      escalationCreated: false,
+      reason: null,
+      alreadyApplied: false,
+      finalStatus: "analyzed",
+    });
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0]?.fn).toBe("apply_analysis_occurrence");
+    expect(rpcCalls[0]?.payload).toStrictEqual({
+      p_organization_id: supabaseScope.organizationId,
+      p_mention_id: mentionId,
+      p_analysis_id: analysisId,
+      p_should_escalate: false,
+      p_category: "other",
+      p_severity: "high",
+      p_title: "Escalated by analysis",
+      p_summary: null,
+      p_sentiment: "negative",
+      p_risk_level: "high",
+      p_relevance_score: 0.8,
+    });
+  });
+
+  it("translates a postgrest error from either occurrence RPC into a DataError, never the raw error", async () => {
+    const { client } = makeServiceClientStub(() => ({
+      data: null,
+      error: { message: "boom", code: "XX000" },
+    }));
+    createSupabaseServiceClient.mockReturnValue(client);
+
     const remote = createSupabaseDataSource(unusableClient);
 
     await expect(
@@ -638,7 +835,12 @@ describe("the Supabase adapter", () => {
         analysisRunId: crypto.randomUUID(),
         analyzedAt: new Date().toISOString(),
       }),
-    ).rejects.toMatchObject({ code: "unavailable" });
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "DataError",
+        message: expect.not.stringContaining("boom"),
+      }),
+    );
 
     await expect(
       remote.mentions.applyAnalysisOccurrence(supabaseScope, {
@@ -653,6 +855,11 @@ describe("the Supabase adapter", () => {
         riskLevel: "high",
         relevanceScore: 0.8,
       }),
-    ).rejects.toMatchObject({ code: "unavailable" });
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "DataError",
+        message: expect.not.stringContaining("boom"),
+      }),
+    );
   });
 });

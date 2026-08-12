@@ -30,10 +30,12 @@ import {
   type AnalysisRun,
   type Approval,
   type BrandVoiceProfile,
+  type EscalationRefusalReason,
   type Invitation,
   type InvitationPreview,
   type Mention,
   type MentionAnalysis,
+  type MentionStatus,
   type OrganizationOnboarding,
   type PlatformSyncRun,
   type ResponseDraft,
@@ -58,6 +60,7 @@ import {
 } from "@/lib/data/types";
 import {
   mapAutomationRuleExecution,
+  mapAutomationSweep,
   toAnalysisRun,
   toApproval,
   toAuditEvent,
@@ -100,6 +103,26 @@ type Row = Record<string, unknown>;
 
 function rows(data: unknown): Row[] {
   return Array.isArray(data) ? (data as Row[]) : [];
+}
+
+/**
+ * The one row an RPC returned, whichever shape PostgREST chose to send it in.
+ *
+ * A `returns table (...)` function is SETOF under the hood, so PostgREST
+ * answers with a JSON array even when exactly one row comes back
+ * (`record_analysis_occurrence`, `apply_analysis_occurrence`,
+ * `claim_automation_sweep`). A function declared `returns <composite type>`
+ * with no `SETOF` — `execute_automation_rule` — is not a set, so PostgREST
+ * answers with that row's JSON object directly, unwrapped. Both call sites
+ * want "the row, or null if none came back," so this normalises the two
+ * shapes rather than each call site guessing which one its function uses.
+ */
+function singleRow(data: unknown): Row | null {
+  if (Array.isArray(data)) {
+    const first = data[0];
+    return first && typeof first === "object" ? (first as Row) : null;
+  }
+  return data && typeof data === "object" ? (data as Row) : null;
 }
 
 function isoOrNull(value: unknown): string | null {
@@ -2079,19 +2102,97 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       /**
-       * The occurrence entry points, not yet wired.
+       * Record an occurrence, or load the one already recorded.
        *
-       * `record_analysis_occurrence` and `apply_analysis_occurrence` exist in
-       * the database and are granted to the service role; routing the analysis
-       * pipeline through them is its own step, and claiming these work before
-       * that step lands would put a silent no-op where a transaction belongs.
+       * The mirror of `record_analysis_occurrence`: idempotent on the event key
+       * (organization, run, mention), and handed the pending row instead when a
+       * *different* event is still unapplied for this mention. Runs under the
+       * service role — this is called from the analysis pipeline, a background
+       * job with no user session — and the confirming read that follows uses
+       * the service role too, for the same reason, scoped by `organization_id`
+       * exactly like every other query in this adapter.
        */
-      async recordAnalysisOccurrence(): Promise<never> {
-        throw new DataError("unavailable", "Arrives with Task 10's entry-point wiring.");
+      async recordAnalysisOccurrence(scope, input) {
+        const value = createMentionAnalysisInputSchema.parse(input);
+
+        const { data, error } = await serviceClient().rpc("record_analysis_occurrence", {
+          p_organization_id: scope.organizationId,
+          p_mention_id: value.mentionId,
+          p_analysis_run_id: value.analysisRunId,
+          p_model_provider: value.modelProvider,
+          p_model_name: value.modelName,
+          p_prompt_version: value.promptVersion,
+          p_relevance_score: value.relevanceScore,
+          p_relevance_explanation: value.relevanceExplanation,
+          p_sentiment: value.sentiment,
+          p_sentiment_score: value.sentimentScore,
+          p_risk_level: value.riskLevel,
+          p_risk_categories: value.riskCategories,
+          p_risk_explanation: value.riskExplanation,
+          p_topics: value.topics,
+          p_facts_needing_verification: value.factsNeedingVerification,
+          p_recommended_action: value.recommendedAction,
+          p_recommendation_explanation: value.recommendationExplanation,
+          p_analyzed_at: value.analyzedAt,
+        });
+
+        if (error) fail(error, "record the analysis");
+        const row = singleRow(data);
+        if (!row || typeof row.analysis_id !== "string") {
+          throw new DataError("unavailable", "Could not record the analysis. Please try again.");
+        }
+
+        // The function returns only the id and whether this call created it —
+        // the full row (needed either way, since a replay hands back the
+        // OTHER caller's output) is read back by that id.
+        const { data: analysisRow, error: readError } = await serviceClient()
+          .from("mention_analyses")
+          .select("*")
+          .eq("organization_id", scope.organizationId)
+          .eq("id", row.analysis_id)
+          .single();
+
+        if (readError) fail(readError, "load the recorded analysis");
+        return { analysis: toMentionAnalysis(analysisRow as Row), created: Boolean(row.created) };
       },
 
-      async applyAnalysisOccurrence(): Promise<never> {
-        throw new DataError("unavailable", "Arrives with Task 10's entry-point wiring.");
+      /**
+       * Apply one occurrence's outcome: the atomic analysis entry point.
+       *
+       * The mirror of `apply_analysis_occurrence`. Everything — eligibility,
+       * the escalation decision, the mention transition, the denormalised
+       * columns, the occurrence's completion stamp, and the escalation's audit
+       * event — happens inside that one function call; this method only maps
+       * parameters in and the result row out.
+       */
+      async applyAnalysisOccurrence(scope, input) {
+        const { data, error } = await serviceClient().rpc("apply_analysis_occurrence", {
+          p_organization_id: scope.organizationId,
+          p_mention_id: input.mentionId,
+          p_analysis_id: input.analysisId,
+          p_should_escalate: input.shouldEscalate,
+          p_category: input.category,
+          p_severity: input.severity,
+          p_title: input.title,
+          p_summary: input.summary,
+          p_sentiment: input.sentiment,
+          p_risk_level: input.riskLevel,
+          p_relevance_score: input.relevanceScore,
+        });
+
+        if (error) fail(error, "apply the analysis");
+        const row = singleRow(data);
+        if (!row) {
+          throw new DataError("unavailable", "Could not apply the analysis. Please try again.");
+        }
+
+        return {
+          escalationId: (row.escalation_id as string | null) ?? null,
+          escalationCreated: Boolean(row.escalation_created),
+          reason: (row.reason as EscalationRefusalReason | null) ?? null,
+          alreadyApplied: Boolean(row.already_applied),
+          finalStatus: row.final_status as MentionStatus,
+        };
       },
 
       async countByProfile(scope, profileIds) {
@@ -2619,44 +2720,188 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return rows(data).map(toAutomationRule);
       },
 
-      async markActivity() {
-        // The G1 execution RPC writes this alongside the sweep it belongs to;
-        // no standalone write exists yet.
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+      /**
+       * Apply-mode activity stamps, monotonic (`greatest()` on the database
+       * side — not expressible through PostgREST, hence the RPC rather than a
+       * plain update). Silent on an unknown rule id, matching the SQL: the
+       * function's `where id = ... and organization_id = ...` simply touches
+       * zero rows, and the caller here is a sweep that already resolved the
+       * rule id from `listActiveForExecution` in the same organization.
+       */
+      async markActivity(scope, ruleId, input) {
+        const { error } = await serviceClient().rpc("automation_mark_activity", {
+          p_organization_id: scope.organizationId,
+          p_rule_id: ruleId,
+          p_at: input.at,
+          p_matched: input.matched,
+          p_applied: input.applied,
+        });
+
+        if (error) fail(error, "record rule activity");
       },
     },
 
     automationSweeps: {
-      async claim() {
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+      /**
+       * Claim the organization's sweep.
+       *
+       * `claim_automation_sweep` returns `table (sweep automation_sweeps,
+       * claimed boolean)` — a SETOF composite, so PostgREST answers with a
+       * one-element array whose `sweep` column nests as a JSON object (see
+       * `singleRow`'s doc comment). Rather than trust that nested shape in
+       * full, only its `id` is read out of the payload and the sweep row is
+       * then read back in full by that id — one extra indexed read per claim,
+       * cheap next to a sweep's own work, and it keeps this method correct
+       * even if PostgREST's composite-column representation ever changes.
+       */
+      async claim(scope, input) {
+        const { data, error } = await serviceClient().rpc("claim_automation_sweep", {
+          p_organization_id: scope.organizationId,
+          p_mode: input.mode,
+        });
+
+        if (error) fail(error, "claim the sweep");
+        const row = singleRow(data);
+        const sweepPayload = row?.sweep;
+        const sweepId =
+          sweepPayload && typeof sweepPayload === "object"
+            ? (sweepPayload as Row).id
+            : sweepPayload;
+
+        if (!row || typeof sweepId !== "string") {
+          throw new DataError("unavailable", "Could not claim the sweep. Please try again.");
+        }
+
+        const { data: sweepRow, error: sweepError } = await serviceClient()
+          .from("automation_sweeps")
+          .select("*")
+          .eq("organization_id", scope.organizationId)
+          .eq("id", sweepId)
+          .single();
+
+        if (sweepError) fail(sweepError, "claim the sweep");
+        return { sweep: mapAutomationSweep(sweepRow as Row), claimed: Boolean(row.claimed) };
       },
-      async finalize() {
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+
+      async finalize(scope, sweepId, input) {
+        const { data, error } = await serviceClient()
+          .from("automation_sweeps")
+          .update({
+            status: input.status,
+            completed_at: new Date().toISOString(),
+            mentions_evaluated: input.counters.mentionsEvaluated,
+            rules_matched: input.counters.rulesMatched,
+            actions_applied: input.counters.actionsApplied,
+            actions_blocked: input.counters.actionsBlocked,
+            actions_skipped: input.counters.actionsSkipped,
+            actions_failed: input.counters.actionsFailed,
+            retryable_failures: input.counters.retryableFailures,
+            terminal_failures: input.counters.terminalFailures,
+            error_code: input.errorCode ?? null,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", sweepId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "finalize the sweep");
+        if (!data) throw notFound("Sweep");
+        return mapAutomationSweep(data as Row);
       },
     },
 
     automationRuleExecutions: {
-      async executeUnit() {
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+      /**
+       * One rule against one mention, atomically (spec §7). The mirror of
+       * `execute_automation_rule`: claim, validate, apply via the transition
+       * matrix, record, audit, all inside that one function call. Unlike
+       * `record_analysis_occurrence` and `claim_automation_sweep`,
+       * `execute_automation_rule` is declared `returns
+       * public.automation_rule_executions` with no `SETOF` — not a set — so
+       * PostgREST answers with that row's JSON object directly, unwrapped.
+       * `singleRow` accepts either shape.
+       */
+      async executeUnit(scope, input) {
+        const { data, error } = await serviceClient().rpc("execute_automation_rule", {
+          p_organization_id: scope.organizationId,
+          p_sweep_id: input.sweepId,
+          p_rule_id: input.automationRuleId,
+          p_revision: input.ruleRevision,
+          p_mention_id: input.mentionId,
+          p_analysis_id: input.triggerAnalysisId,
+        });
+
+        if (error) fail(error, "execute the rule");
+        const row = singleRow(data);
+        if (!row) {
+          throw new DataError("unavailable", "Could not execute the rule. Please try again.");
+        }
+        return mapAutomationRuleExecution(row);
       },
-      async recordProjection() {
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+
+      /**
+       * Dry run: insert a projection row, no business mutation. There is no
+       * RPC for this arm — a dry run touches only this one table, so a
+       * transaction has nothing to coordinate — so this does the
+       * insert-or-load itself: an insert with `ignoreDuplicates` against
+       * `execs_idempotent` (the same unique key `execute_automation_rule`
+       * claims against for apply mode), then a read-back by that key. The
+       * read-back is what returns the STORED row on a replay rather than the
+       * caller's own (discarded) projection, matching `recordProjection`'s
+       * contract: a repeated dry run is a no-op, not an error.
+       */
+      async recordProjection(scope, input) {
+        const { data: mention, error: mentionError } = await serviceClient()
+          .from("mentions")
+          .select("location_id")
+          .eq("organization_id", scope.organizationId)
+          .eq("id", input.mentionId)
+          .maybeSingle();
+
+        if (mentionError) fail(mentionError, "record the projection");
+        if (!mention) throw notFound("Mention");
+
+        const stampedAt = new Date().toISOString();
+        const { error: insertError } = await serviceClient()
+          .from("automation_rule_executions")
+          .upsert(
+            {
+              organization_id: scope.organizationId,
+              sweep_id: input.sweepId,
+              automation_rule_id: input.automationRuleId,
+              rule_revision: input.ruleRevision,
+              mention_id: input.mentionId,
+              trigger_analysis_id: input.triggerAnalysisId,
+              location_id: (mention as Row).location_id ?? null,
+              mode: "dry_run",
+              status: input.status,
+              outcomes: input.outcomes,
+              started_at: stampedAt,
+              completed_at: stampedAt,
+            },
+            {
+              onConflict: "automation_rule_id,rule_revision,mention_id,trigger_analysis_id,mode",
+              ignoreDuplicates: true,
+            },
+          );
+
+        if (insertError) fail(insertError, "record the projection");
+
+        const { data, error } = await serviceClient()
+          .from("automation_rule_executions")
+          .select("*")
+          .eq("organization_id", scope.organizationId)
+          .eq("automation_rule_id", input.automationRuleId)
+          .eq("rule_revision", input.ruleRevision)
+          .eq("mention_id", input.mentionId)
+          .eq("trigger_analysis_id", input.triggerAnalysisId)
+          .eq("mode", "dry_run")
+          .single();
+
+        if (error) fail(error, "record the projection");
+        return mapAutomationRuleExecution(data as Row);
       },
+
       async listForRule(scope, ruleId, limit) {
         const { data, error } = await from("automation_rule_executions", scope)
           .eq("automation_rule_id", ruleId)

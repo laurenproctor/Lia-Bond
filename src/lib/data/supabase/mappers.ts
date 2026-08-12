@@ -4,6 +4,7 @@ import {
   auditEventSchema,
   automationRuleExecutionSchema,
   automationRuleSchema,
+  automationSweepSchema,
   brandVoiceProfileSchema,
   escalationSchema,
   invitationSchema,
@@ -27,6 +28,7 @@ import {
   type AuditEvent,
   type AutomationRule,
   type AutomationRuleExecution,
+  type AutomationSweep,
   type BrandVoiceProfile,
   type Escalation,
   type Invitation,
@@ -631,6 +633,40 @@ export function mapAutomationRuleExecution(row: Row): AutomationRuleExecution {
       completedAt: isoOrNull(row.completed_at),
     },
     "rule execution",
+  );
+}
+
+/**
+ * One sweep's counters and lifecycle status.
+ *
+ * `counters` folds eight flat integer columns back into `SweepCounters` — the
+ * columns are separate in Postgres (each one is what `execute_automation_rule`
+ * and the sweep runner increment individually), the domain groups them
+ * because every consumer reads them together.
+ */
+export function mapAutomationSweep(row: Row): AutomationSweep {
+  return parseOrThrow(
+    automationSweepSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      mode: row.mode,
+      status: row.status,
+      startedAt: iso(row.started_at),
+      completedAt: isoOrNull(row.completed_at),
+      counters: {
+        mentionsEvaluated: Number(row.mentions_evaluated ?? 0),
+        rulesMatched: Number(row.rules_matched ?? 0),
+        actionsApplied: Number(row.actions_applied ?? 0),
+        actionsBlocked: Number(row.actions_blocked ?? 0),
+        actionsSkipped: Number(row.actions_skipped ?? 0),
+        actionsFailed: Number(row.actions_failed ?? 0),
+        retryableFailures: Number(row.retryable_failures ?? 0),
+        terminalFailures: Number(row.terminal_failures ?? 0),
+      },
+      errorCode: row.error_code ?? null,
+    },
+    "automation sweep",
   );
 }
 
