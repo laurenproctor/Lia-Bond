@@ -93,12 +93,19 @@ describe("POST /api/cron/analyze-mentions", () => {
     );
     const body = await response.json();
     expect(response.status).toBe(200);
-    expect(body.status).toBe("ok");
+    // `ok` or `degraded` — both are 200 and both mean the sweep ran. The seed
+    // data decides which, and pinning one would make this test a hostage to
+    // how many seeded mentions the mock analyser happens to fail.
+    expect(["ok", "degraded"]).toContain(body.status);
     // The seed dataset ships unanalysed mentions across more than one
     // organization; a route that only checked auth and returned zeroes would
     // also pass every test above, so this is what actually pins the sweep.
-    expect(body.organizations).toBeGreaterThan(0);
-    expect(typeof body.mentionsFailed).toBe("number");
-    expect(typeof body.erroredOrganizations).toBe("number");
+    expect(body.analysis.organizations).toBeGreaterThan(0);
+    expect(typeof body.analysis.mentionsFailed).toBe("number");
+    expect(typeof body.analysis.erroredOrganizations).toBe("number");
+    // Rules execution is off by default, so the sweep must not have claimed
+    // anything — the fail-closed posture, asserted rather than assumed.
+    expect(body.execution.mode).toBe("off");
+    expect(body.execution.sweeps).toEqual([]);
   });
 });

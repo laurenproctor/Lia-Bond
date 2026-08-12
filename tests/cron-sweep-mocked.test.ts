@@ -134,15 +134,28 @@ describe("POST /api/cron/analyze-mentions: per-organization isolation", () => {
     expect(analyzeMentionsMock).toHaveBeenCalledTimes(4);
 
     expect(response.status).toBe(200);
+    // `degraded`, not `ok`: one organization errored and three mentions failed
+    // to classify. The flat `ok` this used to return is the F8 defect — see
+    // `tests/rules-execution-route.test.ts` for the status table itself.
     expect(body).toEqual({
-      status: "ok",
-      organizations: 1, // only org-clean's call returned normally
-      skipped: 2, // org-conflict-1, org-conflict-2
-      analyzed: 2,
-      heuristic: 1,
-      escalated: 1,
-      mentionsFailed: 3, // result.counts.failed, carried through rather than dropped
-      erroredOrganizations: 1, // org-broken
+      status: "degraded",
+      analysis: {
+        organizations: 1, // only org-clean's call returned normally
+        skipped: 2, // org-conflict-1, org-conflict-2
+        analyzed: 2,
+        heuristic: 1,
+        escalated: 1,
+        mentionsFailed: 3, // result.counts.failed, carried through rather than dropped
+        erroredOrganizations: 1, // org-broken
+      },
+      execution: {
+        mode: "off",
+        reason: "mode_off",
+        sweeps: [],
+        organizationsAttempted: 0,
+        organizationsCompleted: 0,
+        organizationsNotAllowlisted: 0,
+      },
     });
   });
 
@@ -183,13 +196,23 @@ describe("POST /api/cron/analyze-mentions: per-organization isolation", () => {
     expect(analyzeMentionsMock).not.toHaveBeenCalled();
     expect(body).toEqual({
       status: "ok",
-      organizations: 0,
-      skipped: 0,
-      analyzed: 0,
-      heuristic: 0,
-      escalated: 0,
-      mentionsFailed: 0,
-      erroredOrganizations: 0,
+      analysis: {
+        organizations: 0,
+        skipped: 0,
+        analyzed: 0,
+        heuristic: 0,
+        escalated: 0,
+        mentionsFailed: 0,
+        erroredOrganizations: 0,
+      },
+      execution: {
+        mode: "off",
+        reason: "mode_off",
+        sweeps: [],
+        organizationsAttempted: 0,
+        organizationsCompleted: 0,
+        organizationsNotAllowlisted: 0,
+      },
     });
   });
 });

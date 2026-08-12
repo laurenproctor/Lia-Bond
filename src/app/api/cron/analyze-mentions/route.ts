@@ -6,9 +6,12 @@ import { isAuthorizedCronRequest } from "@/lib/cron/authorize";
 import { DataError } from "@/lib/data/errors";
 import type { OrganizationScope } from "@/lib/data/types";
 import { analyzeMentions } from "@/lib/analysis/analyze";
+import { zeroSweepCounters, type SweepCounters } from "@/domain";
+import { resolveRulesExecutionMode, rulesExecutionAllowlist } from "@/lib/env";
+import { executeRules } from "@/lib/rules/execute";
 
 /**
- * Scheduled mention analysis.
+ * Scheduled mention analysis, and the rules execution sweep that follows it.
  *
  * `analyzeMentions` (workflow 04) analyses one organization at a time — it
  * takes an `AnalysisContext` carrying a single `OrganizationScope`, and the
@@ -32,6 +35,21 @@ import { analyzeMentions } from "@/lib/analysis/analyze";
  * to `analyzeMentions` — so one organization's already-running analysis, or
  * one organization's unexpected failure, costs the sweep that organization
  * and nothing else, the same isolation `pollDueQueries` applies per query.
+ *
+ * Rules execution rides the same loop, one organization at a time and with
+ * the same isolation. It runs only after that organization's `analyzeMentions`
+ * returned — it consumes the `processed` pairs that call produced, so there is
+ * nothing to sweep before it — and it is wrapped in its own try/catch because
+ * `executeRules` rethrows when the sweep loop itself dies (it finalizes its
+ * `automation_sweeps` row first, so the failure is already recorded where it
+ * belongs). Without that catch one organization's broken sweep would cost
+ * every later organization both its execution and its place in the response.
+ *
+ * Two gates decide whether a sweep runs at all, both fail-closed: the mode
+ * (`off` means zero calls, not a call that does nothing) and the rollout
+ * allowlist. An organization refused by either is reported rather than
+ * silently absent — `organizationsNotAllowlisted` for the allowlist, and an
+ * `execution.reason` when nothing ran at all.
  *
  * Exported as both GET and POST. Vercel Cron invokes scheduled routes with
  * GET, so GET is the one that matters in production — without it every
@@ -66,6 +84,136 @@ interface SweepTotals {
   erroredOrganizations: number;
 }
 
+/**
+ * One organization's execution sweep, as the response reports it.
+ *
+ * `status` is the route's own reading of what came back, not a database
+ * column:
+ *
+ * - `completed` — `executeRules` returned having claimed and finalized a sweep.
+ * - `not_claimed` — it returned without a claim. Either another scheduler
+ *   already holds this organization's sweep, or there was nothing to sweep
+ *   (no processed mentions, no active rules). The engine's `idleResult` does
+ *   not distinguish those, and neither does this, rather than guessing.
+ * - `failed` — it threw. The sweep row was already finalized as `failed` by
+ *   the engine before it rethrew; that row, not this summary, is the record.
+ */
+interface SweepSummary {
+  organizationId: string;
+  /** null for `not_claimed` and for `failed`: the throw carries no id back. */
+  sweepId: string | null;
+  status: "completed" | "not_claimed" | "failed";
+  claimed: boolean;
+  counters: SweepCounters;
+  mentionsSkipped: number;
+  budgetExhausted: boolean;
+}
+
+/**
+ * Why no sweep ran, when none did. Null whenever at least one was attempted.
+ *
+ * Spec §10 requires the nothing-to-do case to state its reason rather than
+ * returning an `ok` indistinguishable from a clean sweep of real work.
+ */
+type ExecutionReason =
+  | "mode_off"
+  | "allowlist_empty"
+  | "no_organizations_due"
+  | "no_analysis_succeeded"
+  | "no_allowlisted_organizations";
+
+interface ExecutionTotals {
+  sweeps: SweepSummary[];
+  /** Organizations `executeRules` was called for. */
+  organizationsAttempted: number;
+  /** Of those, the ones where it returned instead of throwing. */
+  organizationsCompleted: number;
+  /**
+   * Organizations that reached the execution gate — an active mode, and their
+   * own analysis already returned — and were refused by the rollout allowlist.
+   */
+  organizationsNotAllowlisted: number;
+}
+
+/**
+ * Whether a sweep result describes work that failed rather than work that
+ * simply found nothing to do.
+ *
+ * `actionsSkipped` and `budgetExhausted` are deliberately not here: those are
+ * the engine reporting that it stopped at a configured cap, which is the cap
+ * working. Blocked and no-op actions are likewise normal operation (spec §10).
+ * Failures of any class are not — including `retryableFailures`, which spec
+ * §10 names, and `terminalFailures`, which covers a failure with no action
+ * outcome at all (a mention the analysis run promised and the sweep could not
+ * read), and would otherwise read as a clean sweep.
+ */
+function sweepHadFailures(summary: SweepSummary): boolean {
+  if (summary.status === "failed") return true;
+  const { actionsFailed, retryableFailures, terminalFailures } = summary.counters;
+  return actionsFailed > 0 || retryableFailures > 0 || terminalFailures > 0;
+}
+
+/**
+ * Why no sweep was attempted, or null if one was.
+ *
+ * The gates are reported in the order they are applied, so the reason names
+ * the first thing that stopped execution rather than the last: an `off` mode
+ * with an empty allowlist reads `mode_off`, because turning the mode on alone
+ * would still have run nothing.
+ */
+function executionReason(
+  mode: "off" | "dry_run" | "apply",
+  allowlistSize: number,
+  organizationsDue: number,
+  totals: SweepTotals,
+  execution: ExecutionTotals,
+): ExecutionReason | null {
+  if (execution.organizationsAttempted > 0) return null;
+  if (mode === "off") return "mode_off";
+  if (allowlistSize === 0) return "allowlist_empty";
+  if (organizationsDue === 0) return "no_organizations_due";
+  // Organizations were due and admitted in principle, but execution runs only
+  // behind a successful analysis. Saying "not allowlisted" here would blame
+  // the rollout gate for a sweep the analysis half never reached.
+  if (totals.organizations === 0) return "no_analysis_succeeded";
+  return "no_allowlisted_organizations";
+}
+
+/**
+ * The spec §10 status table, in one place so the body and the HTTP code can
+ * never disagree about what the sweep did.
+ *
+ * `failed` here is the 503 row only — "work was attempted and zero attempted
+ * units of work succeeded". The two clauses are a disjunction, matching the
+ * spec's parenthetical: every attempted organization erroring in analysis, or
+ * every execution sweep throwing, is each on its own a systemic failure worth
+ * a 503, even when the other half of the pipeline was fine. An execution-wide
+ * failure cannot satisfy the analysis clause — a sweep is only attempted after
+ * its organization's analysis succeeded — so without the disjunction the
+ * execution half could never report systemic breakage at all.
+ *
+ * The 500 row (the loop could not run) is not decided here: it is the outer
+ * catch, which has no totals to reason about.
+ */
+function resolveStatus(
+  totals: SweepTotals,
+  execution: ExecutionTotals,
+): "ok" | "degraded" | "failed" {
+  const analysisAttempted = totals.organizations + totals.erroredOrganizations;
+  const analysisAllFailed = analysisAttempted > 0 && totals.organizations === 0;
+  const executionAllFailed =
+    execution.organizationsAttempted > 0 && execution.organizationsCompleted === 0;
+
+  if (analysisAllFailed || executionAllFailed) return "failed";
+
+  const materialFailure =
+    totals.erroredOrganizations > 0 ||
+    totals.mentionsFailed > 0 ||
+    execution.sweeps.some(sweepHadFailures);
+
+  return materialFailure ? "degraded" : "ok";
+}
+
 async function handleAnalyzeMentions(request: Request): Promise<Response> {
   if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -87,6 +235,24 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
     mentionsFailed: 0,
     erroredOrganizations: 0,
   };
+
+  const execution: ExecutionTotals = {
+    sweeps: [],
+    organizationsAttempted: 0,
+    organizationsCompleted: 0,
+    organizationsNotAllowlisted: 0,
+  };
+
+  // Read once for the whole sweep: a mode or allowlist that changed mid-run
+  // would otherwise treat two organizations in the same invocation by
+  // different rules, and the response could not honestly name one `mode`.
+  //
+  // `executionEnabled` is also what narrows `mode` to the two modes
+  // `executeRules` accepts — an early `continue` on it leaves `off` behind at
+  // the type level too, so the engine cannot be called with it by mistake.
+  const mode = resolveRulesExecutionMode();
+  const allowlist = new Set(rulesExecutionAllowlist());
+  const executionEnabled = mode !== "off" && allowlist.size > 0;
 
   try {
     // Service-role, not `getDataSource()`, for the same reason as news-poll:
@@ -122,6 +288,49 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
         totals.escalated += result.counts.escalated;
         // Returned, not swallowed — see the field's own doc comment above.
         totals.mentionsFailed += result.counts.failed;
+
+        if (!executionEnabled) continue;
+        if (!allowlist.has(organizationId)) {
+          execution.organizationsNotAllowlisted += 1;
+          continue;
+        }
+
+        execution.organizationsAttempted += 1;
+        try {
+          // The organization's own scope — the same one its analysis ran
+          // under — and the pairs that analysis just produced. Nothing
+          // ambient, and nothing from the previous organization.
+          const sweep = await executeRules(
+            { dataSource, scope },
+            { mode, processed: result.processed },
+          );
+          execution.organizationsCompleted += 1;
+          execution.sweeps.push({
+            organizationId,
+            sweepId: sweep.sweepId,
+            status: sweep.claimed ? "completed" : "not_claimed",
+            claimed: sweep.claimed,
+            counters: sweep.counters,
+            mentionsSkipped: sweep.mentionsSkipped,
+            budgetExhausted: sweep.budgetExhausted,
+          });
+        } catch {
+          // `executeRules` rethrows only after finalizing its sweep row as
+          // failed, so the durable record already exists; what is lost is the
+          // id, which the throw does not carry. Counters are reported as zero
+          // and every handed-over mention as unreached — this summary states
+          // what it can verify rather than inventing progress. The row in
+          // `automation_sweeps` remains the authority on how far it got.
+          execution.sweeps.push({
+            organizationId,
+            sweepId: null,
+            status: "failed",
+            claimed: false,
+            counters: zeroSweepCounters(),
+            mentionsSkipped: result.processed.length,
+            budgetExhausted: false,
+          });
+        }
       } catch (error) {
         // A conflict means another process already holds this organization's
         // analysis lock — not a failure of the sweep, the same reasoning
@@ -136,18 +345,37 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
       }
     }
 
+    const status = resolveStatus(totals, execution);
     return NextResponse.json(
       {
-        status: "ok",
-        organizations: totals.organizations,
-        skipped: totals.skipped,
-        analyzed: totals.analyzed,
-        heuristic: totals.heuristic,
-        escalated: totals.escalated,
-        mentionsFailed: totals.mentionsFailed,
-        erroredOrganizations: totals.erroredOrganizations,
+        status,
+        analysis: {
+          organizations: totals.organizations,
+          skipped: totals.skipped,
+          analyzed: totals.analyzed,
+          heuristic: totals.heuristic,
+          escalated: totals.escalated,
+          mentionsFailed: totals.mentionsFailed,
+          erroredOrganizations: totals.erroredOrganizations,
+        },
+        execution: {
+          mode,
+          reason: executionReason(
+            mode,
+            allowlist.size,
+            organizationIds.length,
+            totals,
+            execution,
+          ),
+          sweeps: execution.sweeps,
+          organizationsAttempted: execution.organizationsAttempted,
+          organizationsCompleted: execution.organizationsCompleted,
+          organizationsNotAllowlisted: execution.organizationsNotAllowlisted,
+        },
       },
-      { status: 200 },
+      // 503, not 500: the loop ran, so this is the "nothing succeeded" row of
+      // the table rather than a route that could not start. Both say `failed`.
+      { status: status === "failed" ? 503 : 200 },
     );
   } catch (error) {
     // Reached only when something outside the per-organization loop failed —
@@ -158,7 +386,7 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
       error instanceof Error ? error.name : "unknown",
     );
     return NextResponse.json(
-      { status: "error", error: "Mention analysis could not complete." },
+      { status: "failed", error: "Mention analysis could not complete." },
       { status: 500 },
     );
   }
