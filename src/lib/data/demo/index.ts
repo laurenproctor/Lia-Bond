@@ -2532,10 +2532,15 @@ export function createDemoDataSource(): LiaDataSource {
           ruleRevision: input.ruleRevision,
           mentionId: input.mentionId,
           triggerAnalysisId: input.triggerAnalysisId,
-          // Denormalized from the mention as it was when the unit began, so a
-          // later move between locations cannot rewrite where this ran — on
-          // the first attempt and on every retry of it alike.
-          locationId: existing ? existing.locationId : mention?.locationId ?? null,
+          // Denormalized from the mention, but not frozen: the schema's
+          // `execs_location_is_mentions` FK is `on update cascade`, so when a
+          // mention's location assignment changes the stored row's location
+          // follows it (spec §5, "history follows the mention" — visibility
+          // tracks the current assignment; the record of *what happened* is
+          // carried by the outcomes, not by this column). The twin models the
+          // cascade by re-reading the mention's location on every attempt,
+          // which is what a post-cascade stored row would show.
+          locationId: mention?.locationId ?? null,
           mode: "apply" as const,
           outcomeSchemaVersion: OUTCOME_SCHEMA_VERSION,
           // A retryable failure under the cap means this call is attempt n+1.

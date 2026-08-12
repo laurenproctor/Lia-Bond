@@ -361,9 +361,14 @@ describe("automationRuleExecutions.executeUnit", () => {
     expect(retried.attemptCount).toBe(2);
     expect(countExecutionRows()).toBe(1);
     expect((await ds.mentions.get(scope, mentionId))!.status).toBe("escalated");
+    // Success clears the previous attempt's diagnosis. A row that succeeded
+    // while still carrying an error class reads as a failure in the history,
+    // and the G1 RPC's SUCCESS update has to null the same two columns.
+    expect(retried.errorClass).toBeNull();
+    expect(retried.lastErrorCode).toBeNull();
   });
 
-  it("a retry keeps the sweep and the location the unit began with", async () => {
+  it("a retry keeps the unit's first sweep and follows the mention's location", async () => {
     injectEscalationFailure();
     const escalate = unit({ actions: [{ type: "escalate", assigneeUserId: null }] });
     const failed = await ds.automationRuleExecutions.executeUnit(scope, escalate);
@@ -371,7 +376,11 @@ describe("automationRuleExecutions.executeUnit", () => {
     expect(failed.locationId).not.toBeNull();
 
     // A later sweep picks the unit up, and the mention has moved location in
-    // the meantime — neither may rewrite where and when this unit began.
+    // the meantime. The sweep the unit began in may not be rewritten (`on
+    // conflict do nothing` discards the retrying caller's sweep id), but the
+    // location must follow the mention: `execs_location_is_mentions` is `on
+    // update cascade`, so the stored row's location tracks the mention's
+    // current assignment (spec §5).
     await ds.automationSweeps.finalize(scope, sweepId, {
       status: "completed",
       counters: zeroCounters(),
@@ -390,7 +399,8 @@ describe("automationRuleExecutions.executeUnit", () => {
 
     expect(retried.attemptCount).toBe(2);
     expect(retried.sweepId).toBe(sweepId);
-    expect(retried.locationId).toBe(failed.locationId);
+    expect(retried.locationId).toBe(elsewhere.id);
+    expect(retried.locationId).not.toBe(failed.locationId);
     expect(countExecutionRows()).toBe(1);
   });
 
