@@ -1,7 +1,24 @@
 # Voice-aware response generation for Google reviews
 
 Design document, v3. Written 2026-08-07; revised twice the same day after
-design review. Supersedes v2 (git history holds v1 and v2). Not implemented.
+design review. Supersedes v2 (git history holds v1 and v2).
+
+**Implemented** on 2026-08-12, per `docs/superpowers/plans/2026-08-12-response-generation.md`.
+Decisions D166–D169 in `docs/architecture/current-state.md` record what shipped
+and why. Section markers below say where each part landed, including the two
+places the implementation deliberately differs from this document:
+
+- The vocabulary change shipped as **four** migrations rather than three: the
+  audit literals had to land with the domain change that introduced them (the
+  TS↔SQL drift-guard test), so `20260812000700` precedes the schema and
+  function migrations and `20260813000300` carries the enum value.
+- The concurrency proofs are `scripts/generation-race-test.sh` (FIFO-driven
+  psql sessions), not the `pg`-based `scripts/verify-generation-concurrency.ts`
+  proposed under "Test plan" — same guarantees, no new dependency, and the
+  interleaving is chosen rather than timed. Recorded in D169.
+
+Not shipped, deliberately: the retention *period* (D169 — the mechanism exists,
+nothing calls it) remains an open operational decision.
 
 Standing scope (unchanged): manual generation (D116), Google reviews only
 (D117), human approval before anything leaves Lia. No automation, no
@@ -68,6 +85,11 @@ rendering; output validation; classified error copy; telemetry queries;
 retention function invocation.
 
 ## Schema (migration 1)
+
+> **Implemented:** `supabase/migrations/20260813000100_generation_attempts.sql`.
+> Verified by section 3 of `supabase/tests/generation-verification.sql` (state
+> shapes, tenant FKs, the one-pending index) and section 1 (the column revoke
+> that makes `claim_token` unreadable).
 
 ```sql
 create type generation_attempt_status as enum ('pending', 'completed', 'failed');
@@ -177,6 +199,10 @@ unreadable; members see attempt existence and state, never the token.
 
 ## Functions (migration 2)
 
+> **Implemented:** `supabase/migrations/20260813000200_generation_functions.sql`.
+> Verified by sections 2, 4, and 5 of the harness, and by all three races in
+> `scripts/generation-race-test.sh`. See D166.
+
 All three: `security definer`, `set search_path = public, pg_temp`.
 Grants: `revoke execute … from anon` on all of them; claim, complete, and
 fail remain executable by `authenticated` — claim enforces the role check
@@ -279,6 +305,9 @@ Same CAS; double-fail and fail-after-supersession return `'superseded'`.
 
 ## Concurrency scenarios (review item 3, documented)
 
+> **Implemented:** every scenario here is an executed race, not a documented
+> one — `scripts/generation-race-test.sh` rounds 1-3.
+
 | Scenario | Outcome |
 | --- | --- |
 | Two users click simultaneously | Both claims serialize on the mention row lock; first inserts, second gets `in_progress` + `dedup_hits` incremented. One model call. |
@@ -289,6 +318,9 @@ Same CAS; double-fail and fail-after-supersession return `'superseded'`.
 | Completion or failure submitted twice | Second call returns `superseded`; no duplicate draft (also structurally blocked: `ga_completed_shape` + one `response_draft_id`). |
 
 ## Draft lifecycle (review item 4 — no disguised rejection)
+
+> **Implemented:** `changes_requested` through the domain schema, both
+> adapters, the action, and the composer's "Request changes". See D168.
 
 The decision vocabulary gains **`changes_requested`** (the review's stated
 preference), replacing this phase's use of `rejected`:
@@ -319,6 +351,10 @@ history already written by seed/demo data; only the emission changes.
 
 ## Provenance (review item 2 — precise claim)
 
+> **Implemented:** `src/lib/responses/drafting-context.ts` (frozen snapshot +
+> canonical hash) and `src/ai/anthropic/drafting-prompt.ts` (version pin,
+> rendered-message hashes). See D167.
+
 Stored per attempt: the **complete business context supplied to the model**
 (the `DraftingContext` snapshot, verbatim, plus its hash) — *not* the
 rendered wire messages. Reconstruction is: immutable prompt template at
@@ -338,6 +374,10 @@ mechanical.
 
 ## DTO, prompt rules, and output validation (unchanged from v2)
 
+> **Implemented:** `src/lib/responses/drafting-context.ts`,
+> `src/ai/anthropic/drafting-prompt.ts`, `src/lib/responses/validate-draft.ts`,
+> and the service that sequences them, `src/lib/responses/generate.ts`.
+
 `DraftingContext` / `DraftingVoiceSnapshot` exactly as v2 (narrow, pure
 builder, snapshot = provider input verbatim). Untrusted-input framing and
 the full safety rule set as v2 (D136), including the corrected boundary
@@ -348,6 +388,10 @@ preambles, alternatives, URLs/e-mails/phones, Markdown structure;
 Unicode-safe. Invalid output → `fail_generation_attempt('invalid_output')`.
 
 ## Retention and redaction (review item 7)
+
+> **Implemented (mechanism only):** `redact_generation_snapshots`, verified by
+> section 6 of the harness. The retention period is an open operational
+> decision and nothing calls the function yet — D169.
 
 The snapshot duplicates review text and reviewer names, so it is not
 silently permanent:
@@ -374,6 +418,10 @@ silently permanent:
 
 ## Permission matrix, telemetry, failure table
 
+> **Implemented:** `response.generate` in `src/lib/auth/permissions.ts`,
+> restated inside `claim_generation_attempt`, and proven for every refused role
+> in section 2 of the harness.
+
 As v2, unchanged: `response.generate` = owner/admin/communications_lead
 (now also DB-enforced); full role table as v2; the attempt table is the
 telemetry store; edited-before-approval via `hasHumanEdit` join is the
@@ -381,6 +429,9 @@ quality metric; failure/retry table as v2 with `lease_expired` replacing
 `timeout_expired`.
 
 ## Migration order and rollback
+
+> **Implemented as four migrations, not three** — see the header. The hosted
+> push is sequenced in the runbook in `docs/architecture/current-state.md`.
 
 1. `<ts>_generation_attempts.sql` — enums, table, constraints, composite-FK
    backing uniques, indexes, RLS + revokes.
@@ -399,6 +450,11 @@ additive and `rejected` is left in place. The audit-constraint
 redefinition reverses by re-running the previous full list.
 
 ## Test plan (review item 8)
+
+> **Implemented**, with the tooling deviation recorded in D169: the
+> concurrency proofs are FIFO-driven psql sessions
+> (`scripts/generation-race-test.sh`), not a `pg`-based TypeScript script, so
+> no new dependency was added.
 
 **Unit (vitest, node)** — as v2 (DTO, prompt incl. injection rendering,
 validation incl. Unicode/malformed output, mock provider, permission
@@ -434,6 +490,11 @@ transactions" requirement; the psql file cannot express it, the script
 can.
 
 ## Acceptance criteria (measurable)
+
+> **All ten met.** 1-6 by `npm run db:verify-generation` (85 harness checks and
+> three races); 7 by the prompt-pin test; 8 by `npm run verify`; 9 by the
+> composer relabel plus the schema that now rejects `rejected`; 10 by the
+> default-voice case in `tests/generate-response.test.ts`.
 
 1. `db:verify-generation` (script + SQL file) passes against a reset local
    database, including the two-connection interleaving proofs.
