@@ -1,6 +1,11 @@
 import "server-only";
 
-import { resolvePublishingMode, type MentionSourceType, type PublishingMode } from "@/domain";
+import {
+  resolvePublishingMode,
+  type GenerationAttempt,
+  type MentionSourceType,
+  type PublishingMode,
+} from "@/domain";
 import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
 import type { MentionDetail } from "@/lib/data/types";
@@ -24,6 +29,15 @@ export interface WorkspaceData {
   publishing: PublishingMode;
   canDecide: boolean;
   canEdit: boolean;
+  /** Role-level generation permission; the action and the claim re-check it. */
+  canGenerate: boolean;
+  /**
+   * The newest generation attempt for the selected mention, any status.
+   *
+   * Drives the generate control's state (`resolveGenerateButtonState`). Null
+   * when nobody has ever asked Lia to write a reply for this one.
+   */
+  latestGenerationAttempt: GenerationAttempt | null;
 }
 
 export async function loadWorkspace(
@@ -59,6 +73,11 @@ export async function loadWorkspace(
 
   if (!selected) return null;
 
+  const latestGenerationAttempt = await dataSource.generationAttempts.latestForMention(
+    context.scope,
+    detail.mention.id,
+  );
+
   return {
     queue,
     selected,
@@ -70,5 +89,7 @@ export async function loadWorkspace(
       : "unavailable",
     canDecide: can(context.role, "response.decide"),
     canEdit: can(context.role, "response.edit"),
+    canGenerate: can(context.role, "response.generate"),
+    latestGenerationAttempt,
   };
 }
