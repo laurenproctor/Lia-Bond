@@ -838,6 +838,62 @@ describe("the occurrence lifecycle", () => {
         eventTypes: ["escalation.created_from_analysis"],
       }),
     ).toHaveLength(1);
+
+    // And the recovering run names no model, because it called none. The run
+    // row is what a cost review reads: this run applied a model analysis
+    // somebody else paid for, and claiming the spend as its own would
+    // double-count it. The bucket the mention landed in (`analyzed`, from the
+    // stored row's provenance) is a separate question from whether this run
+    // ever opened a connection — which is exactly why the two are tracked
+    // separately.
+    const secondRun = await dataSource.analysisRuns.get(scope, second.analysisRunId);
+    expect(second.counts.analyzed).toBe(1);
+    expect(secondRun?.modelProvider).toBeNull();
+    expect(secondRun?.modelName).toBeNull();
+    expect(secondRun?.promptVersion).toBeNull();
+  });
+
+  it("recovers a heuristic occurrence as heuristic, whatever the mention looks like", async () => {
+    // A mention with words in it: `isRatingOnly` says "this one needs a model".
+    // The occurrence waiting on it says otherwise — it was classified by the
+    // rating heuristic — and the occurrence is the one that is true, because it
+    // is the analysis that actually exists. Reporting it as `analyzed` would
+    // claim a model reading of this mention that nobody ever made.
+    const target = await ingestFresh("lifecycle-heuristic-recovery");
+
+    const pending = await seedPendingOccurrence(target.id, {
+      // The heuristic's own provenance — `HEURISTIC_MODEL_PROVIDER` and
+      // `HEURISTIC_MODEL_NAME`, spelled out the way the neighbouring
+      // provenance test spells them.
+      modelProvider: "lia",
+      modelName: "rating-heuristic",
+      // Provenance is the whole identity: `isHeuristicAnalysis` reads these two
+      // columns and nothing else, so this row is a heuristic analysis however
+      // model-shaped the mention it belongs to is.
+      inputTokens: null,
+      outputTokens: null,
+      riskLevel: "low",
+      riskCategories: [],
+    });
+
+    const provider = fakeProvider();
+    const result = await analyzeMentions({ dataSource, scope }, { provider, limit: 1 });
+
+    // Recovery, so nothing was classified a second time.
+    expect(provider.calls).toHaveLength(0);
+
+    expect(result.counts.heuristic).toBe(1);
+    expect(result.counts.analyzed).toBe(0);
+    expect(result.processed).toEqual([
+      { mentionId: target.id, analysisId: pending.id },
+    ]);
+
+    // Applied exactly once, under the occurrence that was already there.
+    expect(occurrencesFor(target.id)).toHaveLength(1);
+    const stored = await dataSource.mentions.latestAnalysis(scope, target.id);
+    expect(stored?.id).toBe(pending.id);
+    expect(stored?.outcomeAppliedAt).not.toBeNull();
+    expect((await dataSource.mentions.get(scope, target.id))?.status).toBe("analyzed");
   });
 
   it("replaying a completed occurrence has no effects", async () => {
