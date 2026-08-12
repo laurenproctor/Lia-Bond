@@ -80,6 +80,33 @@ describe("validateDraftText: preamble", () => {
     ).toEqual({ ok: false, reason: "preamble" });
   });
 
+  it("rejects 'Here's our response...', with 'our' as the determiner", () => {
+    expect(
+      validateDraftText(
+        "Here's our response to your feedback: we appreciate you taking the time to write it.",
+      ),
+    ).toEqual({ ok: false, reason: "preamble" });
+  });
+
+  it("rejects 'Sure, here's a draft...' framing", () => {
+    expect(
+      validateDraftText(
+        "Sure, here's a draft: Thank you for your feedback, we appreciate it.",
+      ),
+    ).toEqual({ ok: false, reason: "preamble" });
+  });
+
+  it("does not flag an ordinary 'Sure, ...' opening as preamble", () => {
+    // Regression: an earlier PREAMBLE_PATTERN matched "sure" followed by a
+    // bare comma, with nothing requiring "here's/here is" to actually
+    // follow -- so this entirely ordinary reply opening was wrongly rejected.
+    const result = validateDraftText(
+      "Sure, thank you for the kind words! We're glad you enjoyed your visit.",
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
   it("does not flag an ordinary 'Thank you for...' opening as preamble", () => {
     const result = validateDraftText(CLEAN_REPLY);
 

@@ -214,7 +214,10 @@ describe("buildDraftingContext: brand voice", () => {
       signOff: null,
     });
     expect(result.brandVoiceSource).toBe("configured");
-    expect(result.brandVoiceVersion).toBe(profile.updatedAt);
+    // `String(profile.version)`, not `profile.updatedAt` -- brand-voice.ts's
+    // own doc comment on `version` says `response_drafts.brand_voice_version`
+    // records this field.
+    expect(result.brandVoiceVersion).toBe(String(profile.version));
   });
 
   it("falls back to DEFAULT_BRAND_VOICE with brandVoiceSource: default and a null version when there is no row", () => {

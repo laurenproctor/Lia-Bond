@@ -1,3 +1,5 @@
+import "server-only";
+
 /**
  * The hard output gate for a drafted response.
  *
@@ -53,12 +55,18 @@ const MARKDOWN_PATTERN =
 /**
  * The model announcing the reply rather than writing it: "Dear reviewer,"
  * (a generic, un-personalised salutation -- not "Dear Priya,", which is a
- * legitimate reply opening) or "here's/here is/sure, here's" framing.
- * Deliberately does not match "Thank you for..." or "Thanks for..." -- those
- * are ordinary, desired reply openings, not preamble.
+ * legitimate reply opening), "here's/here is a draft/reply/response", and
+ * that same framing led into by "Sure, here's...". "Sure" alone is never
+ * enough -- an earlier version of this pattern matched "Sure" followed by a
+ * bare comma (so "Sure, thank you for the kind words!" was wrongly flagged),
+ * so the "sure" lead-in is tied directly into the "here's/here is" fragment
+ * rather than treated as its own alternative: "here's"/"here is" must
+ * actually follow for either branch to match. Deliberately does not match
+ * "Thank you for..." or "Thanks for..." -- those are ordinary, desired reply
+ * openings, not preamble.
  */
 const PREAMBLE_PATTERN =
-  /^dear reviewer\b|^here'?s\s+(?:a\s+|your\s+|my\s+)?(?:draft|reply|response)\b|^here is\s+(?:a\s+|your\s+|my\s+)?(?:draft|reply|response)\b|^sure[,!]?\s*(?:here|,)/i;
+  /^dear reviewer\b|^(?:sure[,!]?\s+)?here'?s\s+(?:a\s+|your\s+|my\s+|our\s+)?(?:draft|reply|response)\b|^(?:sure[,!]?\s+)?here is\s+(?:a\s+|your\s+|my\s+|our\s+)?(?:draft|reply|response)\b/i;
 
 /** A second offered option: "Option 1:", "Alternative 2", "Choice A". */
 const ALTERNATIVES_PATTERN = /\boption\s*[1-9]\b|\balternative\s*[1-9]\b|\bchoice\s*[1-9]\b/i;

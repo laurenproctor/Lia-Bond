@@ -1,3 +1,5 @@
+import "server-only";
+
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -81,7 +83,7 @@ export type DraftingContext = z.infer<typeof draftingContextSchema>;
 export interface BuildDraftingContextResult {
   context: DraftingContext;
   brandVoiceSource: BrandVoiceSource;
-  /** The profile's `updatedAt` (ISO timestamp) when configured; `null` on defaults. */
+  /** The profile's `version`, stringified, when configured; `null` on defaults. */
   brandVoiceVersion: string | null;
   analysisIncluded: boolean;
 }
@@ -162,7 +164,14 @@ export function buildDraftingContext(
     // than a side effect of how Zod happens to parse today.
     context: structuredClone(context),
     brandVoiceSource: voiceProfile ? "configured" : "default",
-    brandVoiceVersion: voiceProfile ? voiceProfile.updatedAt : null,
+    // `String(profile.version)`, not `profile.updatedAt`: brand-voice.ts's own
+    // doc comment on `version` says `response_drafts.brand_voice_version`
+    // records *this* field ("Incremented on every save that changes
+    // something... records which voice produced a draft"), and a no-op save
+    // must not bump it -- see the repository. A stringified version number is
+    // also what a reviewer can directly cross-reference against
+    // `brand_voice_profiles.version`, unlike a raw timestamp.
+    brandVoiceVersion: voiceProfile ? String(voiceProfile.version) : null,
     analysisIncluded: latestAnalysis !== null,
   };
 }
