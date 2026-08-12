@@ -114,5 +114,14 @@ create policy generation_attempts_select on public.generation_attempts
 
 revoke insert, update, delete on public.generation_attempts from authenticated;
 -- The CAS credential is never readable: members see attempt existence and
--- state, never the token.
-revoke select (claim_token) on public.generation_attempts from authenticated;
+-- state, never the token. Default table-level SELECT privilege makes a bare
+-- `revoke select (claim_token)` inert — we must revoke the full table grant
+-- and then re-grant only the safe columns.
+revoke select on public.generation_attempts from authenticated;
+grant select (id, organization_id, mention_id, status, failure_category,
+  claimed_by_user_id, claimed_at, expires_at, finished_at, response_draft_id,
+  context, context_hash, prompt_version, rendered_system_hash, rendered_user_hash,
+  output_schema_version, model_provider, model_name, max_output_tokens, temperature,
+  provider_request_id, input_tokens, output_tokens, latency_ms, brand_voice_source,
+  brand_voice_version, analysis_included, dedup_hits, created_at, updated_at)
+  on public.generation_attempts to authenticated;

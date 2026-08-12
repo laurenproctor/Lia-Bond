@@ -215,19 +215,4 @@ export const SEED_COLUMN_EXCLUSIONS: Record<string, readonly string[]> = {
     "sourceUpdatedAt", "sourceReplyText", "sourceReplyUpdatedAt",
     "sourceMetadata", "lastSyncedAt",
   ],
-  generation_attempts: [
-    // Runtime-only table: populated by claim_generation_attempt and related
-    // functions, never seeded. Service role writes; authenticated members read
-    // per RLS. Every column is excluded here because the table's rows
-    // represent in-flight generation state (pending, completed, failed
-    // attempts), not seed fixtures. Mirroring automation_sweeps' treatment.
-    "id", "organizationId", "mentionId", "status", "failureCategory",
-    "claimedByUserId", "claimToken", "claimedAt", "expiresAt", "finishedAt",
-    "responseDraftId", "context", "contextHash", "promptVersion",
-    "renderedSystemHash", "renderedUserHash", "outputSchemaVersion",
-    "modelProvider", "modelName", "maxOutputTokens", "temperature",
-    "providerRequestId", "inputTokens", "outputTokens", "latencyMs",
-    "brandVoiceSource", "brandVoiceVersion", "analysisIncluded", "dedupHits",
-    "createdAt", "updatedAt",
-  ],
 };
