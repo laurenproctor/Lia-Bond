@@ -240,6 +240,92 @@ describe("automationRules.markActivity", () => {
   });
 });
 
+/**
+ * `fail()`'s SQLSTATE branches (`src/lib/data/supabase/index.ts`, just above
+ * `createSupabaseDataSource`) are shared by every write in this adapter, so
+ * this pins the branch logic itself through one representative, simple call
+ * site — `markActivity` (a single RPC, no read-back to also stub) — rather
+ * than repeating the same three cases at every one of this task's call
+ * sites.
+ *
+ * Live review against a real database found that both P0002 (raised by
+ * every entry-point RPC here for "the row this call named isn't there" — a
+ * missing mention or occurrence) and 23503 (a same-tenant/same-parent
+ * foreign-key refusal — a mention that doesn't belong to the claimed
+ * organization, an occurrence that doesn't belong to the claimed mention)
+ * were falling into the generic `unavailable` branch: a permanent condition
+ * — retrying with the same id fails the same way forever — labelled as
+ * transient. Fixed by giving both their own branches ahead of the generic
+ * fallback.
+ */
+describe("fail(): PostgREST error code translation", () => {
+  it("translates P0002 (the named row does not exist) into not_found, never the raw message", async () => {
+    const { client } = makeStub({
+      "rpc:automation_mark_activity": [{ data: null, error: { message: "boom", code: "P0002" } }],
+    });
+    createSupabaseServiceClient.mockReturnValue(client);
+    const remote = createSupabaseDataSource(unusableClient);
+
+    await expect(
+      remote.automationRules.markActivity(supabaseScope, crypto.randomUUID(), {
+        at: new Date().toISOString(),
+        matched: false,
+        applied: false,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "DataError",
+        code: "not_found",
+        message: expect.not.stringContaining("boom"),
+      }),
+    );
+  });
+
+  it("translates 23503 (a foreign-key refusal) into invalid_input, never the raw message", async () => {
+    const { client } = makeStub({
+      "rpc:automation_mark_activity": [{ data: null, error: { message: "boom", code: "23503" } }],
+    });
+    createSupabaseServiceClient.mockReturnValue(client);
+    const remote = createSupabaseDataSource(unusableClient);
+
+    await expect(
+      remote.automationRules.markActivity(supabaseScope, crypto.randomUUID(), {
+        at: new Date().toISOString(),
+        matched: false,
+        applied: false,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "DataError",
+        code: "invalid_input",
+        message: expect.not.stringContaining("boom"),
+      }),
+    );
+  });
+
+  it("still falls through to unavailable for an unclassified SQLSTATE — the pre-existing fallback, unregressed", async () => {
+    const { client } = makeStub({
+      "rpc:automation_mark_activity": [{ data: null, error: genericError }],
+    });
+    createSupabaseServiceClient.mockReturnValue(client);
+    const remote = createSupabaseDataSource(unusableClient);
+
+    await expect(
+      remote.automationRules.markActivity(supabaseScope, crypto.randomUUID(), {
+        at: new Date().toISOString(),
+        matched: false,
+        applied: false,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        name: "DataError",
+        code: "unavailable",
+        message: expect.not.stringContaining("boom"),
+      }),
+    );
+  });
+});
+
 describe("automationSweeps.claim", () => {
   it("claims via claim_automation_sweep with exact p_-prefixed params, then re-reads the sweep row by id", async () => {
     const sweepId = crypto.randomUUID();

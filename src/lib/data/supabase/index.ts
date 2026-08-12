@@ -182,6 +182,22 @@ function fail(error: { message: string; code?: string }, action: string): never 
   if (error.code === "42501" || error.code === "PGRST301") {
     throw new DataError("forbidden", "You don't have permission to do that.");
   }
+  // P0002 is a Postgres `raise ... using errcode = 'P0002'` from inside a
+  // function — every entry-point RPC in this adapter raises it for "the row
+  // this call named isn't there" (a mention, an occurrence, a sweep). That is
+  // permanent, not transient: retrying with the same id fails the same way
+  // every time, so it is not `unavailable`.
+  if (error.code === "P0002") {
+    throw notFound("That record");
+  }
+  // 23503 is a foreign-key violation. Every FK this adapter's RPCs check at
+  // that errcode is a same-tenant/same-parent composite (a mention's
+  // organization, an occurrence's mention) — the caller named two things
+  // that do not belong together. Retrying unchanged fails the same way every
+  // time, so this is a caller mistake (`invalid_input`), not `unavailable`.
+  if (error.code === "23503") {
+    throw invalidInput("That reference does not belong together.");
+  }
   throw new DataError("unavailable", `Could not ${action}. Please try again.`);
 }
 
