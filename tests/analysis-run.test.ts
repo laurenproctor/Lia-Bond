@@ -839,14 +839,25 @@ describe("the occurrence lifecycle", () => {
       }),
     ).toHaveLength(1);
 
-    // And the recovering run names no model, because it called none. The run
-    // row is what a cost review reads: this run applied a model analysis
-    // somebody else paid for, and claiming the spend as its own would
-    // double-count it. The bucket the mention landed in (`analyzed`, from the
-    // stored row's provenance) is a separate question from whether this run
-    // ever opened a connection — which is exactly why the two are tracked
-    // separately.
+    // The run rows are the cost record, and between them they have to account
+    // for exactly one model call — the one the provider spy saw.
+    const firstRun = await dataSource.analysisRuns.get(scope, first.analysisRunId);
     const secondRun = await dataSource.analysisRuns.get(scope, second.analysisRunId);
+
+    // Run 1 called the model and then failed to apply what it got back. The
+    // money is spent either way, so a run row denying it would hide real spend
+    // from a cost review — even though this run recorded no successful item.
+    expect(first.counts.analyzed).toBe(0);
+    expect(firstRun?.status).toBe("failed");
+    expect(firstRun?.modelProvider).toBe("fake");
+    expect(firstRun?.modelName).toBe("fake-model");
+    expect(firstRun?.promptVersion).not.toBeNull();
+
+    // Run 2 called nothing: it applied an analysis run 1 paid for. Claiming the
+    // model here would double-count that one call. Note it says so while
+    // reporting the mention as `analyzed` — the bucket comes from the stored
+    // row's provenance, the spend from what this run actually did, and the two
+    // are deliberately not the same question.
     expect(second.counts.analyzed).toBe(1);
     expect(secondRun?.modelProvider).toBeNull();
     expect(secondRun?.modelName).toBeNull();

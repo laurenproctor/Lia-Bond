@@ -101,6 +101,15 @@ export interface AnalyzeMentionsResult {
 /* One mention                                                                 */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * `calledModel` is on **both** variants, and that is the point of the shape.
+ *
+ * Whether this run paid the provider for this mention is independent of whether
+ * anything came of it: a classification that lands and then fails to apply has
+ * still been billed. Carrying the fact only on the successful variant is what
+ * let a crashed run report `modelName: null` while the analysis row it wrote
+ * named the model perfectly well.
+ */
 type ItemOutcome =
   | {
       kind: "applied";
@@ -113,7 +122,19 @@ type ItemOutcome =
       /** True only when this application is what brought the case into being. */
       escalationCreated: boolean;
     }
-  | { kind: "failed"; code: string; message: string; fatal: boolean };
+  | {
+      kind: "failed";
+      code: string;
+      message: string;
+      fatal: boolean;
+      /**
+       * True when the provider returned a classification and something after it
+       * failed. False when the provider itself threw — a rejected credential or
+       * a refused request computed nothing and bought nothing, so naming the
+       * model would invent a cost rather than record one.
+       */
+      calledModel: boolean;
+    };
 
 /**
  * Take one mention through the occurrence lifecycle.
@@ -166,6 +187,11 @@ async function analyzeOne(
   runId: string,
   analyzedAt: string,
 ): Promise<ItemOutcome> {
+  // Outside the `try` so the failure path can still report it. The provider is
+  // billed at the moment it answers, not at the moment Lia manages to store
+  // what it said.
+  let calledModel = false;
+
   try {
     // Recovery check, before any spending. A mention reaches this function
     // because it needs analysis work, which is either "never classified" or
@@ -183,7 +209,6 @@ async function analyzeOne(
     );
 
     let stored = latest?.outcomeAppliedAt === null ? latest : null;
-    let calledModel = false;
     // The model's own case title, which is not a stored column. Null on every
     // path that reads a stored row, including a recorder that lost the race.
     let escalationTitle: string | null = null;
@@ -263,6 +288,9 @@ async function analyzeOne(
       message:
         error instanceof DataError ? error.message : toAiMessage(error),
       fatal: isFatalToRun(error),
+      // Still true when the classification succeeded and the apply is what
+      // threw: the run has spent that money whether or not it kept the answer.
+      calledModel,
     };
   }
 }
@@ -327,17 +355,20 @@ export async function analyzeMentions(
     const analyzedAt = new Date().toISOString();
 
     const apply = (outcome: ItemOutcome): void => {
+      // Provenance first, and for every outcome including a failed one. This is
+      // the run's cost record, and it answers one question only: did this run
+      // call the model? A recovery applies a model analysis without calling
+      // one, so it must not claim the spend; a run that called the model and
+      // then crashed did spend it, so it must not deny it. Both directions
+      // matter, and neither follows from which bucket the mention landed in.
+      if (outcome.calledModel) usedModel = true;
+
       if (outcome.kind === "applied") {
         // Which bucket comes from the occurrence's own provenance, so a
         // recovered occurrence is reported as the kind of analysis it actually
         // is rather than as whatever this run would have done.
         if (outcome.heuristic) counts.heuristic += 1;
         else counts.analyzed += 1;
-
-        // Separately from the bucket: a recovery applies a model analysis
-        // without calling a model, and naming a model this run never invoked
-        // would put a fiction into the run's provenance.
-        if (outcome.calledModel) usedModel = true;
 
         if (outcome.escalationCreated) counts.escalated += 1;
         processed.push({ mentionId: outcome.mentionId, analysisId: outcome.analysisId });
