@@ -25,6 +25,7 @@ import {
   oauthStateSchema,
   recordAuditEventInputSchema,
   requiresResolutionNote,
+  ruleActionSchema,
   sourceFieldsChanged,
   startAnalysisRunInputSchema,
   startSyncRunInputSchema,
@@ -32,11 +33,16 @@ import {
   upsertPlatformConnectionInputSchema,
   upsertPlatformProfileInputSchema,
   type AnalysisRun,
+  type ApplyExecutionStatus,
   type Approval,
   type AuditEvent,
   type AutomationRule,
+  type AutomationRuleExecution,
+  type AutomationSweep,
   type BrandVoiceProfile,
+  type CreateEscalationInput,
   type Escalation,
+  type ExecutionActionOutcome,
   type Invitation,
   type Location,
   type Membership,
@@ -49,6 +55,7 @@ import {
   type PlatformProfile,
   type PlatformSyncRun,
   type ResponseDraft,
+  type SweepCounters,
   type UpdateBrandVoiceInput,
   type User,
 } from "@/domain";
@@ -71,7 +78,9 @@ import {
   type OrganizationScope,
   type ProfileSyncState,
 } from "@/lib/data/types";
+import { ACTION_CAPABILITIES } from "@/lib/rules/capabilities";
 import { activationProblems } from "@/lib/rules/readiness";
+import { decideEscalate, decideSetStatus } from "@/lib/rules/transitions";
 import { REFERENCE_NOW } from "@/lib/seed/clock";
 import { seedId } from "@/lib/seed/ids";
 
@@ -212,6 +221,97 @@ function uniqueSlug(name: string, taken: Set<string>, fallback = "location"): st
   return `${base}-${taken.size + 1}`;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Automation execution (spec §7)                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How long a running sweep holds its organization's claim.
+ *
+ * A process that dies mid-sweep leaves its row `running` forever, and an
+ * organization whose automation is permanently locked by a crash is worse
+ * than one that occasionally runs a sweep twice — so the claim is a lease,
+ * not a flag. Matches the 30 minutes the G1 RPC uses.
+ */
+const SWEEP_LEASE_MS = 30 * 60 * 1000;
+
+/** Attempts a retryable unit failure gets before it stops being retried (spec §7). */
+const EXECUTION_ATTEMPT_CAP = 3;
+
+/** The shape `outcomes` is written in. Bumped only when that array's shape changes. */
+const OUTCOME_SCHEMA_VERSION = 1;
+
+/**
+ * Statuses that mean the unit is finished and must never run again.
+ *
+ * `failed` is deliberately absent: whether a failure is finished depends on
+ * its class and its attempt count, which is what `isTerminalExecution` adds.
+ */
+const TERMINAL_APPLY_STATUSES: readonly string[] = [
+  "applied",
+  "partial",
+  "blocked",
+  "no_op",
+];
+
+function zeroSweepCounters(): SweepCounters {
+  return {
+    mentionsEvaluated: 0,
+    rulesMatched: 0,
+    actionsApplied: 0,
+    actionsBlocked: 0,
+    actionsSkipped: 0,
+    actionsFailed: 0,
+    retryableFailures: 0,
+    terminalFailures: 0,
+  };
+}
+
+/** Whether an existing row is a replay (return it untouched) or a retry. */
+function isTerminalExecution(row: AutomationRuleExecution): boolean {
+  if (TERMINAL_APPLY_STATUSES.includes(row.status)) return true;
+  if (row.status !== "failed") return false;
+  // A terminal failure is a decision, not an accident: re-running it would
+  // produce the same failure and a stale rule revision does not un-stale
+  // itself. Retryable failures stop at the cap so a permanently broken unit
+  // cannot consume every sweep forever.
+  if (row.errorClass === "terminal") return true;
+  return row.attemptCount >= EXECUTION_ATTEMPT_CAP;
+}
+
+/**
+ * The row status a set of action outcomes adds up to.
+ *
+ * Policy refusals are outcomes, not errors (spec §7): a blocked action beside
+ * an applied one is `partial`, which is an honest description of what
+ * happened, rather than either "applied" (overclaims) or "failed" (hides a
+ * real effect).
+ */
+function deriveApplyStatus(
+  outcomes: readonly ExecutionActionOutcome[],
+): ApplyExecutionStatus {
+  const applied = outcomes.filter((row) => row.outcome === "applied").length;
+  const failed = outcomes.filter((row) => row.outcome === "failed").length;
+  const blocked = outcomes.filter((row) => row.outcome === "blocked").length;
+
+  if (applied > 0 && failed + blocked > 0) return "partial";
+  if (applied > 0) return "applied";
+  if (failed > 0) return "failed";
+  if (blocked > 0) return "blocked";
+  return "no_op";
+}
+
+/**
+ * The code recorded when a unit dies technically.
+ *
+ * Typed failures keep their code so the rules screen can say something
+ * specific; anything else collapses to one word rather than carrying a driver
+ * message into a stored record that members can read.
+ */
+function failureCode(error: unknown): string {
+  return error instanceof DataError ? error.code : "unexpected_error";
+}
+
 export function createDemoDataSource(): LiaDataSource {
   const store = () => demoStore();
 
@@ -264,6 +364,102 @@ export function createDemoDataSource(): LiaDataSource {
     orgRows(store().responseDrafts, scope);
   const analysesIn = (scope: OrganizationScope): MentionAnalysis[] =>
     orgRows(store().mentionAnalyses, scope);
+
+  /**
+   * The escalation a mention already has, if any.
+   *
+   * One function so the dedupe question has one answer: `escalations.create`
+   * and the automation execution unit must agree about what "already
+   * escalated" means, or automation would raise the second case the
+   * escalations centre exists to prevent.
+   */
+  const escalationFor = (
+    scope: OrganizationScope,
+    mentionId: string,
+  ): Escalation | null =>
+    orgRows(store().escalations, scope).find((row) => row.mentionId === mentionId) ??
+    null;
+
+  /**
+   * Raise an escalation, or confirm the one already there.
+   *
+   * Shared by `escalations.create` (which parses its input first) and the
+   * execution unit's `escalate` executor, so an automated escalation is the
+   * same record, with the same dedupe, as one raised by analysis.
+   */
+  function raiseEscalation(
+    scope: OrganizationScope,
+    value: CreateEscalationInput,
+  ): { escalation: Escalation; created: boolean } {
+    const mention = mentionsIn(scope).find((row) => row.id === value.mentionId);
+    if (!mention) throw notFound("Mention");
+
+    const existing = escalationFor(scope, value.mentionId);
+    if (existing) return { escalation: existing, created: false };
+
+    const created: Escalation = {
+      id: seedId(`escalation:runtime:${value.mentionId}`),
+      organizationId: scope.organizationId,
+      mentionId: value.mentionId,
+      category: value.category,
+      severity: value.severity,
+      status: "open",
+      title: value.title,
+      summary: value.summary,
+      // Unassigned on purpose: an unowned item in the escalations centre
+      // is the "somebody must look at this" signal. Defaulting an owner
+      // would make it look handled.
+      assignedUserId: null,
+      dueAt: value.dueAt,
+      resolvedAt: null,
+      resolutionNote: null,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    store().escalations.push(created);
+    return { escalation: created, created: true };
+  }
+
+  /**
+   * What an escalation raised by a rule says about itself.
+   *
+   * The severity is the mention's own risk level and the category comes from
+   * the analysis that triggered the rule, so the case carries the same facts a
+   * human would have read. The summary names the rule rather than describing
+   * the guest's complaint: somebody opening this case has to be able to tell
+   * why it exists without guessing, and only the rule knows that. No due date,
+   * for the reason `toEscalationInput` gives — an SLA nobody agreed to is
+   * worse than none.
+   */
+  function automationEscalationInput(
+    scope: OrganizationScope,
+    mention: Mention,
+    rule: AutomationRule,
+    analysis: MentionAnalysis | null,
+  ): CreateEscalationInput {
+    const category = analysis?.riskCategories[0] ?? "other";
+    const location =
+      mention.locationId === null
+        ? null
+        : orgRows(store().locations, scope).find(
+            (row) => row.id === mention.locationId,
+          ) ?? null;
+
+    const subject = category.replace(/_/g, " ");
+    const title = `${subject.charAt(0).toUpperCase()}${subject.slice(1)} risk${
+      location ? ` at ${location.name}` : ""
+    }`;
+
+    return {
+      mentionId: mention.id,
+      category,
+      severity: mention.riskLevel,
+      title,
+      summary: `Raised automatically by the rule "${rule.name}".`,
+      dueAt: null,
+    };
+  }
 
   return {
     kind: "demo",
@@ -1968,40 +2164,11 @@ export function createDemoDataSource(): LiaDataSource {
       },
 
       async create(scope, input) {
-        const value = createEscalationInputSchema.parse(input);
-
-        const mention = mentionsIn(scope).find((row) => row.id === value.mentionId);
-        if (!mention) throw notFound("Mention");
-
         // One escalation per mention. Two open cases for one review is a queue
-        // nobody trusts, and re-running an analysis must not produce that.
-        const existing = orgRows(store().escalations, scope).find(
-          (row) => row.mentionId === value.mentionId,
-        );
-        if (existing) return { escalation: existing, created: false };
-
-        const created: Escalation = {
-          id: seedId(`escalation:runtime:${value.mentionId}`),
-          organizationId: scope.organizationId,
-          mentionId: value.mentionId,
-          category: value.category,
-          severity: value.severity,
-          status: "open",
-          title: value.title,
-          summary: value.summary,
-          // Unassigned on purpose: an unowned item in the escalations centre
-          // is the "somebody must look at this" signal. Defaulting an owner
-          // would make it look handled.
-          assignedUserId: null,
-          dueAt: value.dueAt,
-          resolvedAt: null,
-          resolutionNote: null,
-          createdAt: nowIso(),
-          updatedAt: nowIso(),
-        };
-
-        store().escalations.push(created);
-        return { escalation: created, created: true };
+        // nobody trusts, and re-running an analysis must not produce that —
+        // `raiseEscalation` holds that rule for every writer, this one and the
+        // automation execution unit alike.
+        return raiseEscalation(scope, createEscalationInputSchema.parse(input));
       },
 
       async updateStatus(scope, escalationId, status, resolutionNote) {
@@ -2247,31 +2414,356 @@ export function createDemoDataSource(): LiaDataSource {
           );
       },
 
-      async markActivity() {
-        // Real implementation arrives in Task 7, alongside the sweep and
-        // execution repositories it stamps activity for.
-        throw new DataError("unavailable", "Not implemented until task 7.");
+      async markActivity(scope, ruleId, input) {
+        const rule = orgRows(store().automationRules, scope).find(
+          (row) => row.id === ruleId,
+        );
+        if (!rule) throw notFound("Automation rule");
+
+        // `greatest`, by string comparison: these are UTC ISO-8601 instants,
+        // which sort lexicographically. A sweep that finishes late must not
+        // drag a rule's activity backwards — "last applied" is a claim about
+        // the rule's history, not about which write landed last.
+        const later = (existing: string | null): string =>
+          existing === null || input.at > existing ? input.at : existing;
+
+        replaceRow(store().automationRules, {
+          ...rule,
+          // Evaluation always advances: a rule that was considered and did not
+          // match was still evaluated, and the screen saying so is the point.
+          lastEvaluatedAt: later(rule.lastEvaluatedAt),
+          lastMatchedAt: input.matched ? later(rule.lastMatchedAt) : rule.lastMatchedAt,
+          lastAppliedAt: input.applied ? later(rule.lastAppliedAt) : rule.lastAppliedAt,
+          // `updatedAt` is deliberately untouched: automation running is not
+          // somebody editing the rule, and the two must not look alike.
+        });
       },
     },
 
     automationSweeps: {
-      async claim() {
-        throw new DataError("unavailable", "Not implemented until task 7.");
+      async claim(scope, input) {
+        const runtime = demoRuntimeStore();
+        const now = Date.now();
+
+        const running = orgRows(runtime.automationSweeps, scope).find(
+          (row) => row.status === "running",
+        );
+
+        if (running) {
+          if (now - Date.parse(running.startedAt) < SWEEP_LEASE_MS) {
+            // Somebody else holds the claim. The caller skips this
+            // organization rather than running a second concurrent sweep.
+            return { sweep: running, claimed: false };
+          }
+
+          // The lease expired, so the holder is gone. Closing the row is what
+          // makes the failure visible instead of silently taking the claim.
+          replaceRow(runtime.automationSweeps, {
+            ...running,
+            status: "failed",
+            completedAt: new Date(now).toISOString(),
+            errorCode: "lease_expired",
+          });
+        }
+
+        const created: AutomationSweep = {
+          id: crypto.randomUUID(),
+          organizationId: scope.organizationId,
+          mode: input.mode,
+          status: "running",
+          // The wall clock, not the seed clock: a lease measured against a
+          // frozen instant never expires, which is the one thing a lease has
+          // to do. Same exception, and the same reason, as invitations.
+          startedAt: realNowIso(),
+          completedAt: null,
+          counters: zeroSweepCounters(),
+          errorCode: null,
+        };
+
+        runtime.automationSweeps.push(created);
+        return { sweep: created, claimed: true };
       },
-      async finalize() {
-        throw new DataError("unavailable", "Not implemented until task 7.");
+
+      async finalize(scope, sweepId, input) {
+        const runtime = demoRuntimeStore();
+        const sweep = orgRows(runtime.automationSweeps, scope).find(
+          (row) => row.id === sweepId,
+        );
+        if (!sweep) throw notFound("Sweep");
+
+        return replaceRow(runtime.automationSweeps, {
+          ...sweep,
+          status: input.status,
+          counters: input.counters,
+          completedAt: realNowIso(),
+          errorCode: input.errorCode ?? null,
+        });
       },
     },
 
     automationRuleExecutions: {
-      async executeUnit() {
-        throw new DataError("unavailable", "Not implemented until task 7.");
+      /**
+       * One rule against one mention, atomically (spec §7).
+       *
+       * The in-memory twin of the G1 RPC. Demo mode has a single writer, so
+       * atomicity costs nothing structurally — but the *rollback* has to be
+       * real, because this is the behaviour the SQL is later held to. It is
+       * real here because the business phase runs entirely against copies:
+       * nothing reaches the store until every action has produced an outcome,
+       * so a failure part-way through leaves no half-applied unit behind.
+       */
+      async executeUnit(scope, input) {
+        const runtime = demoRuntimeStore();
+        const rows = runtime.automationRuleExecutions;
+
+        const existing = rows.find(
+          (row) =>
+            row.organizationId === scope.organizationId &&
+            row.automationRuleId === input.automationRuleId &&
+            row.ruleRevision === input.ruleRevision &&
+            row.mentionId === input.mentionId &&
+            row.triggerAnalysisId === input.triggerAnalysisId &&
+            row.mode === "apply",
+        );
+
+        // Replay: the unit is finished, so this call must have zero effects.
+        // Returning the row unchanged — not re-running, not restamping — is
+        // what makes a re-delivered sweep safe.
+        if (existing && isTerminalExecution(existing)) return existing;
+
+        const mention = mentionsIn(scope).find((row) => row.id === input.mentionId) ?? null;
+
+        const claim = {
+          id: existing?.id ?? crypto.randomUUID(),
+          organizationId: scope.organizationId,
+          sweepId: input.sweepId,
+          automationRuleId: input.automationRuleId,
+          ruleRevision: input.ruleRevision,
+          mentionId: input.mentionId,
+          triggerAnalysisId: input.triggerAnalysisId,
+          // Denormalized from the mention as it is now, so a later move
+          // between locations cannot rewrite where this ran.
+          locationId: mention?.locationId ?? null,
+          mode: "apply" as const,
+          outcomeSchemaVersion: OUTCOME_SCHEMA_VERSION,
+          // A retryable failure under the cap means this call is attempt n+1.
+          attemptCount: existing ? existing.attemptCount + 1 : 1,
+          // The first attempt's instant. A retry continues a unit rather than
+          // starting a new one, so the claim keeps its original start.
+          startedAt: existing?.startedAt ?? realNowIso(),
+        };
+
+        const record = (
+          outcome: Pick<
+            AutomationRuleExecution,
+            "status" | "outcomes" | "errorClass" | "lastErrorCode"
+          >,
+        ): AutomationRuleExecution =>
+          replaceRow(rows, { ...claim, ...outcome, completedAt: realNowIso() });
+
+        // ----- Validation. Nothing below this block has mutated anything. ---
+        const rule = orgRows(store().automationRules, scope).find(
+          (row) => row.id === input.automationRuleId,
+        );
+        if (
+          !rule ||
+          rule.status !== "active" ||
+          rule.archivedAt !== null ||
+          rule.revision !== input.ruleRevision
+        ) {
+          // Terminal: the snapshot this unit was built from no longer
+          // describes the rule, and retrying cannot make it again.
+          return record({
+            status: "failed",
+            outcomes: [],
+            errorClass: "terminal",
+            lastErrorCode: "rule_changed",
+          });
+        }
+
+        const parsed = ruleActionSchema.array().safeParse(input.actions);
+        if (!parsed.success) {
+          return record({
+            status: "failed",
+            outcomes: [],
+            errorClass: "terminal",
+            lastErrorCode: "invalid_action",
+          });
+        }
+
+        if (!mention) {
+          return record({
+            status: "failed",
+            outcomes: [],
+            errorClass: "terminal",
+            lastErrorCode: "mention_missing",
+          });
+        }
+
+        const analysis =
+          analysesIn(scope).find((row) => row.id === input.triggerAnalysisId) ?? null;
+
+        try {
+          // ----- Business phase, on copies. ---------------------------------
+          // `workingStatus` and `pendingEscalation` are this unit's private
+          // view of what the mention would become. Each action decides against
+          // that view, so a second action sees the first one's effect exactly
+          // as it would inside a transaction — and abandoning the view is the
+          // whole of the rollback.
+          const outcomes: ExecutionActionOutcome[] = [];
+          let workingStatus = mention.status;
+          let pendingEscalation: CreateEscalationInput | null = null;
+
+          parsed.data.forEach((action, index) => {
+            if (!ACTION_CAPABILITIES[action.type].executable) {
+              // Authorable but not wired to an effect. Blocked, never silently
+              // treated as done: `activationProblems` stops these reaching an
+              // active rule, and if one arrives anyway it must say so.
+              outcomes.push({
+                index,
+                type: action.type,
+                outcome: "blocked",
+                code: "action_not_executable",
+              });
+              return;
+            }
+
+            if (action.type === "set_status") {
+              const decision = decideSetStatus(
+                workingStatus,
+                action.status,
+                mention.riskLevel,
+              );
+              if (decision.kind === "apply") workingStatus = action.status;
+              outcomes.push({
+                index,
+                type: action.type,
+                outcome: decision.kind === "apply" ? "applied" : decision.kind,
+                code: decision.kind === "blocked" ? decision.code : null,
+              });
+              return;
+            }
+
+            // escalate: eligibility first, then dedupe, then the status change
+            // — the order spec §7 requires, so an ineligible mention is never
+            // escalated on the strength of an escalation that already exists.
+            const decision = decideEscalate(workingStatus);
+            if (decision.kind !== "apply") {
+              outcomes.push({
+                index,
+                type: action.type,
+                outcome: decision.kind,
+                code: decision.kind === "blocked" ? decision.code : null,
+              });
+              return;
+            }
+
+            if (pendingEscalation !== null || escalationFor(scope, mention.id)) {
+              outcomes.push({
+                index,
+                type: action.type,
+                outcome: "no_op",
+                code: "escalation_exists",
+              });
+              return;
+            }
+
+            pendingEscalation = automationEscalationInput(scope, mention, rule, analysis);
+            workingStatus = "escalated";
+            outcomes.push({ index, type: action.type, outcome: "applied", code: null });
+          });
+
+          // ----- Commit. -----------------------------------------------------
+          // Ordering is what makes this atomic: the escalation insert is the
+          // only step that can fail, so it runs before any other row is
+          // touched. Everything after it is an in-memory assignment that
+          // cannot throw, so there is no state in which half the unit landed.
+          if (pendingEscalation !== null) {
+            raiseEscalation(scope, pendingEscalation);
+          }
+
+          if (workingStatus !== mention.status) {
+            replaceRow(store().mentions, {
+              ...mention,
+              status: workingStatus,
+              updatedAt: nowIso(),
+            });
+          }
+
+          return record({
+            status: deriveApplyStatus(outcomes),
+            outcomes,
+            errorClass: null,
+            lastErrorCode: null,
+          });
+        } catch (error) {
+          // The copies are discarded by leaving this scope — that is the
+          // rollback. The attempt record survives it, which is the point:
+          // a failure nobody can see is a failure nobody fixes. Outcomes are
+          // empty because the effects they would describe do not exist.
+          return record({
+            status: "failed",
+            outcomes: [],
+            errorClass: "retryable",
+            lastErrorCode: failureCode(error),
+          });
+        }
       },
-      async recordProjection() {
-        throw new DataError("unavailable", "Not implemented until task 7.");
+
+      async recordProjection(scope, input) {
+        const runtime = demoRuntimeStore();
+        const rows = runtime.automationRuleExecutions;
+
+        const existing = rows.find(
+          (row) =>
+            row.organizationId === scope.organizationId &&
+            row.automationRuleId === input.automationRuleId &&
+            row.ruleRevision === input.ruleRevision &&
+            row.mentionId === input.mentionId &&
+            row.triggerAnalysisId === input.triggerAnalysisId &&
+            row.mode === "dry_run",
+        );
+        // The idempotency key already holds a projection for this analysis
+        // occurrence. A repeated dry run is a no-op rather than an error: it
+        // is a read-only pass, and nothing about it is worth failing a sweep.
+        if (existing) return existing;
+
+        const mention = mentionsIn(scope).find((row) => row.id === input.mentionId);
+        if (!mention) throw notFound("Mention");
+
+        const recordedAt = realNowIso();
+        const created: AutomationRuleExecution = {
+          id: crypto.randomUUID(),
+          organizationId: scope.organizationId,
+          sweepId: input.sweepId,
+          automationRuleId: input.automationRuleId,
+          ruleRevision: input.ruleRevision,
+          mentionId: input.mentionId,
+          triggerAnalysisId: input.triggerAnalysisId,
+          locationId: mention.locationId,
+          mode: "dry_run",
+          status: input.status,
+          outcomes: input.outcomes,
+          outcomeSchemaVersion: OUTCOME_SCHEMA_VERSION,
+          attemptCount: 1,
+          lastErrorCode: null,
+          errorClass: null,
+          startedAt: recordedAt,
+          completedAt: recordedAt,
+        };
+
+        // A projection is a record of what *would* happen. Writing anything
+        // else here — a mention, an escalation, a rule timestamp — would make
+        // dry run a quiet apply, which is the one thing it must never be.
+        rows.push(created);
+        return created;
       },
-      async listForRule() {
-        throw new DataError("unavailable", "Not implemented until task 7.");
+
+      async listForRule(scope, ruleId, limit) {
+        return orgRows(demoRuntimeStore().automationRuleExecutions, scope)
+          .filter((row) => row.automationRuleId === ruleId)
+          .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+          .slice(0, limit);
       },
     },
 
