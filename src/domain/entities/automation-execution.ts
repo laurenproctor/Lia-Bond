@@ -47,6 +47,27 @@ export const sweepCountersSchema = z.object({
 });
 export type SweepCounters = z.infer<typeof sweepCountersSchema>;
 
+/**
+ * A sweep's counters before it has counted anything.
+ *
+ * Here rather than in each caller because the same eight zeros are needed in
+ * three places — the adapter opening a sweep row, the engine accumulating one,
+ * and the cron route describing an organization it never reached — and eight
+ * fields written out three times is three chances to forget one.
+ */
+export function zeroSweepCounters(): SweepCounters {
+  return {
+    mentionsEvaluated: 0,
+    rulesMatched: 0,
+    actionsApplied: 0,
+    actionsBlocked: 0,
+    actionsSkipped: 0,
+    actionsFailed: 0,
+    retryableFailures: 0,
+    terminalFailures: 0,
+  };
+}
+
 export const automationSweepSchema = z
   .object({
     mode: z.enum(AUTOMATION_EXECUTION_MODES),

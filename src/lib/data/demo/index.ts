@@ -55,11 +55,10 @@ import {
   type PlatformProfile,
   type PlatformSyncRun,
   type ResponseDraft,
-  type SweepCounters,
   type UpdateBrandVoiceInput,
   type User,
 } from "@/domain";
-import { canDecideOnDraft, canEditDraft } from "@/domain";
+import { canDecideOnDraft, canEditDraft, zeroSweepCounters } from "@/domain";
 import { DataError, conflict, invalidInput, notFound } from "@/lib/data/errors";
 import {
   computeLocationMetrics,
@@ -253,19 +252,6 @@ const TERMINAL_APPLY_STATUSES: readonly string[] = [
   "blocked",
   "no_op",
 ];
-
-function zeroSweepCounters(): SweepCounters {
-  return {
-    mentionsEvaluated: 0,
-    rulesMatched: 0,
-    actionsApplied: 0,
-    actionsBlocked: 0,
-    actionsSkipped: 0,
-    actionsFailed: 0,
-    retryableFailures: 0,
-    terminalFailures: 0,
-  };
-}
 
 /** Whether an existing row is a replay (return it untouched) or a retry. */
 function isTerminalExecution(row: AutomationRuleExecution): boolean {
