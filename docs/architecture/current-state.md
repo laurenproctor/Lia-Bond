@@ -656,6 +656,7 @@ against real data does not — the Supabase adapter deliberately throws on
 | D155 | The cron route folds a *returned-but-unsuccessful* analysis run into `degraded`, and treats "every attempted organization's analysis failed" and "every attempted execution sweep failed" as two independent triggers for `failed`/503 | `analyzeMentions` can return normally carrying an error code and nothing analyzed — a run that succeeds at returning while succeeding at nothing — so counting only thrown exceptions against status, the route's first reading, rendered a total outage indistinguishable from an organization with no backlog. `analysisRunsWithErrors`/`analysisRunsWithoutProgress` close that gap (closes F8). The 503 clause is a disjunction, not a conjunction — matching the spec's parenthetical — because requiring both halves to fail before paging would leave the execution half structurally unable to report systemic breakage on its own: a sweep is only attempted after its own organization's analysis already succeeded, so it can never independently satisfy an analysis-side conjunct. Accepted consequence for the runbook: while the allowlist holds a single organization, that organization's sweep throwing is the only attempted execution sweep, so it alone satisfies "every attempted sweep failed" and pages the whole invocation — honest paging for a single-tenant rollout, worth revisiting only if the allowlist grows before G2. |
 | D156 | An authorable-but-unwired action executes to `blocked` with the outcome code `action_not_executable`, driven off `ACTION_CAPABILITIES` in both G0 and G1 | `notify` (and anything else D140's registry marks non-executable) parses as a valid action and can be authored, so a unit can legitimately be handed one. Treating it as silently done would report an effect nobody delivered; throwing would classify a configuration fact as a technical failure and burn a retry. `activationProblems` already stops such an action reaching an active rule, so the code is a backstop for the case where one arrives anyway — and it says exactly which case it is. The string is part of the outcome vocabulary the G1 RPC is parity-tested against: the SQL must emit `action_not_executable` for the same actions, and must derive "which actions" from the same capability registry rather than a hand-copied list that could drift from it. |
 | D157 | The executor ignores `escalate`'s `assigneeUserId` by design; the field stays in the rule schema as V1 compatibility only | `ruleActionSchema`'s `escalate` variant carries `assigneeUserId`, but Phase 1 pins it to null for every authorable rule — the builder's `buildDefaultAction` writes null and exposes no editor for it, and every seeded and templated `escalate` action is null too. Meanwhile `createEscalationInputSchema` deliberately has no assignee field at all (an escalation raised without a human has no owner yet; an unassigned item *is* the "somebody must look at this" signal) — there is nowhere for the value to land, and inventing an assignment path would make the executor claim a routing capability the escalation model does not have. So the executor reads the action, drops the field, and records the escalation unassigned. Recorded rather than left implicit because a silent drop is exactly the kind of thing a G1 parity test would otherwise flag as a twin/RPC divergence: the RPC must drop it too. Revisit when escalations gain an assignee — at that point this becomes a real behaviour change, not a schema cleanup. |
+| D158 | Escalation dedupe is open-only, globally: `escalations.create` (analysis path and rule execution alike) blocks a new escalation only while an *open* one exists on the mention, enforced by a partial unique index (at most one open escalation per mention); resolving Q7 after the G0 merge | Never-per-mention permanently capped a mention at one escalation for its lifetime, which breaks the product's "high-risk content must always be escalated" promise the first time content changes after a handled escalation (a review edited to add a legal threat could never resurface). Re-escalation is not a hair trigger: it requires a human to close the old escalation, a human to re-triage the mention off `escalated` (the matrix refuses escalate from `escalated` and permanently from `dismissed`), and a genuinely new analysis occurrence — rule execution's idempotency key already carries the occurrence (`trigger_analysis_id`), and the analysis path's crash-retry safety survives because a just-created escalation is open and therefore still blocks the retry. Applied to both paths at once so the platform keeps one escalation contract, with the invariant in the schema (partial unique index) rather than a read-then-check. Mention-level `dismissed` stays the sole permanent "never again" control; no resolved-versus-dismissed semantic exists at the escalation level. Lands as a G1 task: contract change + index migration, deliberate updates to G0's pinned `escalation_exists` tests, re-escalation coverage for both paths, and false-positive re-escalation recorded as an apply-phase watch item. |
 
 ## Known gaps after workflow 04
 
@@ -965,20 +966,14 @@ New building rule execution (G0):
   (`audit_events_insert` policy, `revoke insert … from authenticated`) is
   also deferred to G1, timed to land in the same migration as the adapter
   change per F16.
-- **Parked: Q7, open-vs-any escalation dedupe.** Spec §7 literally reads
-  "open" when describing what the `escalate` executor dedupes against, but
-  the implementation — in both the analysis path this rule execution
-  engine matches and D152's dry-run projection — dedupes against *any*
-  escalation ever raised for the mention, not only a currently-open one.
-  Ruled platform-consistent for G0 rather than rewritten, because the
-  analysis path already behaved this way and diverging rule execution from
-  it would have meant a dry-run projection lying about what apply would
-  do. Consequence, stated plainly: a mention escalated and later resolved
-  by a human cannot be re-escalated by either analysis or a rule today.
-  This must be decided — reopen dedupe to "open only," or keep "any" and
-  document it as intentional — before the G1 RPC pins the equivalent SQL
-  semantics; changing it after G1 means a migration against live execution
-  history rather than a TypeScript function.
+- **Q7, open-vs-any escalation dedupe: resolved — open-only, globally
+  (D158).** Decided after the G0 merge, before any G1 SQL exists. G0's
+  shipped any-escalation dedupe (shared by the analysis path and pinned by
+  D152's dry-run fidelity) is now the known interim behavior; the G1
+  escalation task replaces it in `escalations.create` for both paths, adds
+  the partial unique index, updates the pinned `escalation_exists` tests
+  deliberately, and adds re-escalation coverage for both paths. See D158
+  for the decision and its safeguards.
 - **P0-2, the reset-verification gate, passed.** `supabase db reset`
   applied all 34 migrations — including this branch's three
   (`20260811000100_tenant_integrity_prereqs`,

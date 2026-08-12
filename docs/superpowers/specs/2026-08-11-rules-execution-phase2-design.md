@@ -591,17 +591,31 @@ The G3 retrofit workstream is acknowledged, gated, and not planned here.
   history page enough for Phase 2? Plan assumes the page is enough.
 - Q4 from v2 stands resolved as specified: automation never reopens
   dismissed mentions.
-- **Q7 — open-vs-any escalation dedupe.** This section (§7) says the
-  `escalate` executor dedupes against an "open" escalation. G0 shipped
-  dedupe against *any* escalation ever raised for the mention — matching
-  the analysis path's existing `escalations.create` behavior, which rule
-  execution reuses, and which the dry-run projection in D152 mirrors for
-  fidelity. Parked rather than silently implemented against the letter of
-  this spec: the consequence is that a mention escalated and later
-  resolved by a human cannot be re-escalated by either analysis or a rule
-  today. Must be decided — reopen to "open only," or keep "any" and amend
-  this section — before the G1 execution RPC pins the equivalent SQL
-  semantics, since changing it after G1 means a migration against live
-  execution history rather than a TypeScript function. (Recorded in
-  `docs/architecture/current-state.md`, "New building rule execution
-  (G0)".)
+- **Q7 — open-vs-any escalation dedupe. RESOLVED 2026-08-11: open-only,
+  applied globally.** Decided after G0 merged (D158 in
+  `docs/architecture/current-state.md`). The decision, in full:
+  - `escalations.create` changes contract for **both** the analysis path
+    and rule execution: only an existing **open** escalation blocks
+    creation. §7's "no open one exists" wording stands as written; G0's
+    shipped any-escalation dedupe is the known interim behavior the G1
+    escalation task replaces.
+  - Backed by a Postgres **partial unique index** — at most one open
+    escalation per mention (`unique (mention_id) where status` is open) —
+    so the invariant is a schema guarantee, not a read-then-check.
+  - **Safeguard:** a mention may re-escalate only from a genuinely new
+    analysis occurrence. Retries and repeated evaluation of the same
+    occurrence stay idempotent: rule execution already carries this in
+    the `execs_idempotent` key (trigger_analysis_id + rule + revision +
+    mode), and the analysis path's crash-retry story survives unchanged —
+    the escalation created just before a crash is *open*, so the retry's
+    dedupe absorbs the repeat exactly as before.
+  - Mention-level `dismissed` remains the permanent "do not escalate this
+    mention again" control (the transition matrix refuses `escalate` from
+    a dismissed mention). No resolved-versus-dismissed middle semantic is
+    added at the escalation level.
+  - G1 tasks this creates: the `escalations.create` contract change +
+    partial index migration; deliberate updates to G0's pinned
+    `escalation_exists` tests; new coverage for analysis-driven and
+    rule-driven re-escalation after close-and-retriage; and
+    **false-positive re-escalation recorded as an apply-phase watch
+    item** for the internal-organization rollout.
