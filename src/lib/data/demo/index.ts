@@ -353,6 +353,33 @@ export function createDemoDataSource(): LiaDataSource {
     orgRows(store().mentionAnalyses, scope);
 
   /**
+   * "Does a run still have something to do with this mention?"
+   *
+   * No analysis row at all, or one whose outcome was never applied. The second
+   * arm is what makes a crash between `recordAnalysisOccurrence` and
+   * `applyAnalysisOccurrence` recoverable: that mention carries a durable
+   * classification and nothing else, and the narrower "has a row" test would
+   * take it out of the queue forever.
+   *
+   * Built once per read rather than per mention — the caller is scanning the
+   * whole organization, and the alternative is a scan of the analyses for
+   * every mention in it.
+   */
+  const needsAnalysisWork = (
+    scope: OrganizationScope,
+  ): ((mention: Mention) => boolean) => {
+    const settled = new Set<string>();
+    const pending = new Set<string>();
+
+    for (const analysis of analysesIn(scope)) {
+      if (analysis.outcomeAppliedAt === null) pending.add(analysis.mentionId);
+      else settled.add(analysis.mentionId);
+    }
+
+    return (mention) => pending.has(mention.id) || !settled.has(mention.id);
+  };
+
+  /**
    * The open case a mention is carrying, if any.
    *
    * "Open" is the three live statuses the database's `escalations_one_open_per_mention`
@@ -2045,12 +2072,10 @@ export function createDemoDataSource(): LiaDataSource {
       },
 
       async listUnanalyzed(scope, limit) {
-        const analyzed = new Set(
-          analysesIn(scope).map((analysis) => analysis.mentionId),
-        );
+        const needsWork = needsAnalysisWork(scope);
 
         return mentionsIn(scope)
-          .filter((mention) => !analyzed.has(mention.id))
+          .filter(needsWork)
           // Oldest first: a backlog should drain in arrival order rather than
           // the newest batch being re-picked while older mentions never surface.
           .sort((a, b) => Date.parse(a.publishedAt) - Date.parse(b.publishedAt))
@@ -2058,11 +2083,8 @@ export function createDemoDataSource(): LiaDataSource {
       },
 
       async countUnanalyzed(scope) {
-        const analyzed = new Set(
-          analysesIn(scope).map((analysis) => analysis.mentionId),
-        );
-        return mentionsIn(scope).filter((mention) => !analyzed.has(mention.id))
-          .length;
+        const needsWork = needsAnalysisWork(scope);
+        return mentionsIn(scope).filter(needsWork).length;
       },
 
       async createAnalysis(scope, input) {
@@ -2235,23 +2257,6 @@ export function createDemoDataSource(): LiaDataSource {
           alreadyApplied: false,
           finalStatus: status,
         };
-      },
-
-      async applyAnalysisOutcome(scope, mentionId, outcome) {
-        const mention = mentionsIn(scope).find((row) => row.id === mentionId);
-        if (!mention) throw notFound("Mention");
-
-        return replaceRow(store().mentions, {
-          ...mention,
-          sentiment: outcome.sentiment,
-          riskLevel: outcome.riskLevel,
-          relevanceScore: outcome.relevanceScore,
-          // Only from `new`. A mention somebody has already escalated,
-          // dismissed, or responded to keeps the state that person set — the
-          // machine does not get to reopen a decision a human made.
-          status: mention.status === "new" ? outcome.status : mention.status,
-          updatedAt: nowIso(),
-        });
       },
 
       async countByProfile(scope, profileIds) {

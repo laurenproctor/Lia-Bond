@@ -329,25 +329,39 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
   }
 
   /** Mention ids that already carry an analysis. One indexed column read. */
-  async function fetchAnalyzedMentionIds(
+  /**
+   * Mentions with no analysis work left — the complement of the backlog.
+   *
+   * Not "mentions with an analysis row": a row whose `outcome_applied_at` is
+   * null is a *pending* occurrence, meaning the classification is durable and
+   * its escalation, transition, and denormalised columns are not. Counting it
+   * as settled is what would hide a crashed apply forever. A mention is
+   * settled when it has at least one applied occurrence and no pending one —
+   * and since the database allows only one pending occurrence per mention, the
+   * pending set is what recovery has to finish.
+   */
+  async function fetchSettledMentionIds(
     scope: OrganizationScope,
   ): Promise<string[]> {
     const { data, error } = await client
       .from("mention_analyses")
-      .select("mention_id")
+      .select("mention_id, outcome_applied_at")
       .eq("organization_id", scope.organizationId);
 
     if (error) fail(error, "load the analyzed mentions");
 
     // Distinct: the table is append-only, so a re-analysed mention appears
     // more than once and would otherwise inflate the backlog arithmetic.
-    return [
-      ...new Set(
-        rows(data).flatMap((row) =>
-          typeof row.mention_id === "string" ? [row.mention_id] : [],
-        ),
-      ),
-    ];
+    const settled = new Set<string>();
+    const pending = new Set<string>();
+
+    for (const row of rows(data)) {
+      if (typeof row.mention_id !== "string") continue;
+      if (row.outcome_applied_at === null) pending.add(row.mention_id);
+      else settled.add(row.mention_id);
+    }
+
+    return [...settled].filter((mentionId) => !pending.has(mentionId));
   }
 
   async function fetchMentions(scope: OrganizationScope): Promise<Mention[]> {
@@ -1968,26 +1982,30 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       /**
-       * The unanalysed backlog, oldest first.
+       * The backlog a run would pick up, oldest first.
+       *
+       * "Needing analysis work" is no analysis row *or* a pending occurrence,
+       * so this excludes only the settled mentions — see
+       * `fetchSettledMentionIds` for why the distinction is load-bearing.
        *
        * Two queries rather than a join: PostgREST has no `not exists`, and
-       * pulling the analysed ids is a single indexed column read against
+       * pulling the settled ids is a two-column read against
        * `mention_analyses_mention_idx`. At the volume a per-organization
        * inbox reaches this is cheap; past that it becomes a view, and the
        * signature does not change.
        */
       async listUnanalyzed(scope, limit) {
-        const analyzedIds = await fetchAnalyzedMentionIds(scope);
+        const settledIds = await fetchSettledMentionIds(scope);
 
         let query = from("mentions", scope).order("published_at", {
           ascending: true,
         });
 
-        if (analyzedIds.length > 0) {
+        if (settledIds.length > 0) {
           query = query.not(
             "id",
             "in",
-            `(${analyzedIds.map((id) => `"${id}"`).join(",")})`,
+            `(${settledIds.map((id) => `"${id}"`).join(",")})`,
           );
         }
 
@@ -1997,8 +2015,8 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       async countUnanalyzed(scope) {
-        const [analyzedIds, total] = await Promise.all([
-          fetchAnalyzedMentionIds(scope),
+        const [settledIds, total] = await Promise.all([
+          fetchSettledMentionIds(scope),
           (async () => {
             const { count, error } = await client
               .from("mentions")
@@ -2010,9 +2028,9 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           })(),
         ]);
 
-        // Analysed ids are distinct per mention, and every analysis belongs to
+        // Settled ids are distinct per mention, and every analysis belongs to
         // a mention in the same organization, so the difference is exact.
-        return Math.max(0, total - analyzedIds.length);
+        return Math.max(0, total - settledIds.length);
       },
 
       async createAnalysis(scope, input) {
@@ -2074,52 +2092,6 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
 
       async applyAnalysisOccurrence(): Promise<never> {
         throw new DataError("unavailable", "Arrives with Task 10's entry-point wiring.");
-      },
-
-      /**
-       * Write the four columns an analysis owns.
-       *
-       * The column list is the guarantee. `content`, `rating`, `author_name`,
-       * `published_at`, and every `source_*` column are absent, so an analysis
-       * cannot overwrite what a sync imported — the mirror of the rule that
-       * keeps a sync out of Lia's workflow state.
-       *
-       * The `status` filter is applied in the query rather than read-then-write:
-       * `eq("status", "new")` means a mention somebody moved in the meantime is
-       * not matched at all, so the race resolves in the person's favour.
-       */
-      async applyAnalysisOutcome(scope, mentionId, outcome) {
-        const sourceUntouched = {
-          sentiment: outcome.sentiment,
-          risk_level: outcome.riskLevel,
-          relevance_score: outcome.relevanceScore,
-        };
-
-        const advanced = await client
-          .from("mentions")
-          .update({ ...sourceUntouched, status: outcome.status })
-          .eq("organization_id", scope.organizationId)
-          .eq("id", mentionId)
-          .eq("status", "new")
-          .select("*")
-          .maybeSingle();
-
-        if (advanced.error) fail(advanced.error, "record the analysis outcome");
-        if (advanced.data) return toMention(advanced.data as Row);
-
-        // Not `new` any more — a person has already moved it. The scores still
-        // apply; the status they chose stands.
-        const { data, error } = await client
-          .from("mentions")
-          .update(sourceUntouched)
-          .eq("organization_id", scope.organizationId)
-          .eq("id", mentionId)
-          .select("*")
-          .maybeSingle();
-
-        if (error) fail(error, "record the analysis outcome");
-        if (!data) throw notFound("Mention");
-        return toMention(data as Row);
       },
 
       async countByProfile(scope, profileIds) {

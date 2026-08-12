@@ -1,12 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { Escalation, IngestMentionInput, Mention } from "@/domain";
+import type {
+  AuditEventType,
+  CreateMentionAnalysisInput,
+  Escalation,
+  IngestMentionInput,
+  Mention,
+  MentionAnalysis,
+} from "@/domain";
 import type { AiProvider, AnalyzeMentionInput } from "@/ai/provider";
 import { aiError, type AiErrorCode } from "@/ai/errors";
 import { analyzeMentions, getAnalysisStatus } from "@/lib/analysis/analyze";
 import type { MentionAnalysisOutput } from "@/lib/analysis/schema";
 import { can } from "@/lib/auth/permissions";
 import { DataError } from "@/lib/data/errors";
-import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
+import type {
+  ApplyAnalysisOccurrenceInput,
+  LiaDataSource,
+  OrganizationScope,
+} from "@/lib/data/types";
 import { demoStore } from "@/lib/data/demo/store";
 import { freshDataSource, harbor, ushg } from "./helpers/scope";
 
@@ -161,6 +172,122 @@ async function ingestFresh(
   return mention;
 }
 
+/**
+ * A pending occurrence, written straight through `createAnalysis`.
+ *
+ * `createAnalysis` is the one repository write that appends an analysis row
+ * without applying it, which makes it the only way to construct the state a
+ * crash between `recordAnalysisOccurrence` and `applyAnalysisOccurrence`
+ * leaves behind: a durable classification whose outcome nobody acted on.
+ *
+ * `analyzedAt` defaults to a minute ahead so the row is unambiguously the
+ * mention's latest — a mention that has already been analysed once carries an
+ * earlier row, and recovery has to find this one.
+ */
+async function seedPendingOccurrence(
+  mentionId: string,
+  overrides: Partial<CreateMentionAnalysisInput> = {},
+): Promise<MentionAnalysis> {
+  return dataSource.mentions.createAnalysis(scope, {
+    mentionId,
+    modelProvider: "fake",
+    modelName: "fake-model",
+    promptVersion: "analysis@test",
+    relevanceScore: 0.9,
+    relevanceExplanation: "Recovered fixture.",
+    sentiment: "negative",
+    sentimentScore: -0.5,
+    riskLevel: "critical",
+    riskCategories: ["injury"],
+    riskExplanation: "Recovered fixture.",
+    topics: ["fixture"],
+    factsNeedingVerification: [],
+    recommendedAction: "escalate",
+    recommendationExplanation: "Recovered fixture.",
+    analyzedAt: new Date(Date.now() + 60_000).toISOString(),
+    analysisRunId: crypto.randomUUID(),
+    inputTokens: null,
+    outputTokens: null,
+    ...overrides,
+  });
+}
+
+/**
+ * A data source whose first `applyAnalysisOccurrence` dies before it writes.
+ *
+ * The crash the occurrence lifecycle exists for: the classification is already
+ * durable and the outcome is not, so the next run must finish that occurrence
+ * rather than pay for a second opinion.
+ */
+function crashOnFirstApply(source: LiaDataSource): LiaDataSource {
+  let crashed = false;
+
+  return {
+    ...source,
+    mentions: {
+      ...source.mentions,
+      async applyAnalysisOccurrence(applyScope, input) {
+        if (!crashed) {
+          crashed = true;
+          throw new DataError("unavailable", "The connection dropped mid-apply.");
+        }
+        return source.mentions.applyAnalysisOccurrence(applyScope, input);
+      },
+    },
+  };
+}
+
+/** A data source that lets a test act in the window before every apply. */
+function actBeforeApply(
+  source: LiaDataSource,
+  act: (input: ApplyAnalysisOccurrenceInput) => Promise<void>,
+): LiaDataSource {
+  return {
+    ...source,
+    mentions: {
+      ...source.mentions,
+      async applyAnalysisOccurrence(applyScope, input) {
+        await act(input);
+        return source.mentions.applyAnalysisOccurrence(applyScope, input);
+      },
+    },
+  };
+}
+
+/**
+ * Every audit event the *service* asks for, by type.
+ *
+ * The contract writes the escalation's own event inside the apply transaction,
+ * where nothing can separate a case from its trail. That is only true if the
+ * service does not also write one — so this records what passes through the
+ * repository from application code, and a test asserts what is missing from it.
+ */
+function auditSpy(source: LiaDataSource): {
+  source: LiaDataSource;
+  recorded: AuditEventType[];
+} {
+  const recorded: AuditEventType[] = [];
+
+  return {
+    recorded,
+    source: {
+      ...source,
+      auditEvents: {
+        ...source.auditEvents,
+        async record(recordScope, input) {
+          recorded.push(input.eventType);
+          return source.auditEvents.record(recordScope, input);
+        },
+      },
+    },
+  };
+}
+
+/** The analysis rows this mention carries, straight from the store. */
+function occurrencesFor(mentionId: string): MentionAnalysis[] {
+  return demoStore().mentionAnalyses.filter((row) => row.mentionId === mentionId);
+}
+
 beforeEach(() => {
   dataSource = freshDataSource();
   scope = ushg.admin();
@@ -212,6 +339,30 @@ describe("selecting the backlog", () => {
 
     expect(result.counts.analyzed + result.counts.heuristic).toBe(3);
     expect(result.counts.remaining).toBe(backlog - 3);
+  });
+
+  it("keeps a mention whose occurrence is still pending in the queue", async () => {
+    // The widened selection. "Needing analysis work" is no analysis row *or* a
+    // latest row whose outcome was never applied — the narrower "no analysis
+    // row" would hide a crashed apply forever, because the classification it
+    // left behind looks, from the outside, exactly like a finished one.
+    const target = await ingestFresh("pending-stays-in-queue");
+    const before = await unanalyzedCount();
+
+    await seedPendingOccurrence(target.id);
+
+    expect(await unanalyzedCount()).toBe(before);
+    expect(
+      (await dataSource.mentions.listUnanalyzed(scope, 500)).map((row) => row.id),
+    ).toContain(target.id);
+
+    await analyzeMentions({ dataSource, scope }, { provider: fakeProvider(), limit: 500 });
+
+    // And a completed one leaves it.
+    expect(
+      (await dataSource.mentions.listUnanalyzed(scope, 500)).map((row) => row.id),
+    ).not.toContain(target.id);
+    expect(await unanalyzedCount()).toBe(0);
   });
 
   it("reports an empty backlog as success, not as an error", async () => {
@@ -588,6 +739,242 @@ describe("escalation", () => {
     // refusal for any other reason — a dismissed mention, say — would have
     // left the status where it was and passed these counts just the same.
     expect((await dataSource.mentions.get(scope, target.id))?.status).toBe("escalated");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The occurrence lifecycle                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Record, then apply — and survive a crash between the two.
+ *
+ * These are the guarantees the escalation contract exists to provide, exercised
+ * through the service rather than through the repository, because the thing
+ * that can go wrong is the order and the recovery, not any single call.
+ */
+describe("the occurrence lifecycle", () => {
+  /** The classification that must produce a case. */
+  const critical = (): Partial<MentionAnalysisOutput> => ({
+    riskLevel: "critical",
+    riskCategories: ["injury"],
+  });
+
+  it("gives the case its occurrence, and leaves the audit event to the contract", async () => {
+    const target = await ingestFresh("lifecycle-provenance");
+    const spy = auditSpy(dataSource);
+
+    await analyzeMentions(
+      { dataSource: spy.source, scope },
+      { provider: fakeProvider({ output: critical() }), limit: 1 },
+    );
+
+    const analysis = await dataSource.mentions.latestAnalysis(scope, target.id);
+    const [escalation] = await dataSource.escalations.list(scope, {
+      mentionId: target.id,
+    });
+
+    // Provenance: the case names the reading of the mention that authorized it.
+    expect(escalation?.triggerAnalysisId).toBe(analysis?.id);
+
+    const events = await dataSource.auditEvents.list(scope, {
+      eventTypes: ["escalation.created_from_analysis"],
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.entityId).toBe(escalation?.id);
+
+    // Exactly one, and the service wrote none of it: the event is part of the
+    // apply transaction, so no failure can separate a case from its trail.
+    // The run's own event proves the spy sees what the service does record.
+    expect(spy.recorded).toContain("mention.analyzed");
+    expect(spy.recorded).not.toContain("escalation.created_from_analysis");
+  });
+
+  it("recovers a crashed apply without classifying the mention twice", async () => {
+    const target = await ingestFresh("lifecycle-crash");
+    const provider = fakeProvider({ output: critical() });
+
+    const first = await analyzeMentions(
+      { dataSource: crashOnFirstApply(dataSource), scope },
+      { provider, limit: 1 },
+    );
+
+    // Nothing durable but the classification itself.
+    expect(first.counts.failed).toBe(1);
+    expect(first.counts.escalated).toBe(0);
+    expect(first.processed).toHaveLength(0);
+
+    const pending = await dataSource.mentions.latestAnalysis(scope, target.id);
+    expect(pending?.outcomeAppliedAt).toBeNull();
+    expect(await dataSource.escalations.list(scope, { mentionId: target.id })).toHaveLength(0);
+    expect((await dataSource.mentions.get(scope, target.id))?.status).toBe("new");
+
+    const second = await analyzeMentions({ dataSource, scope }, { provider, limit: 1 });
+
+    // One model call across both runs. The pending occurrence already holds a
+    // classification; paying for a second one would be spending money to
+    // second-guess a decision that is already durable.
+    expect(provider.calls).toHaveLength(1);
+
+    // Applied under the *original* occurrence's identity, not a new one.
+    expect(occurrencesFor(target.id)).toHaveLength(1);
+    expect(second.processed).toEqual([
+      { mentionId: target.id, analysisId: pending!.id },
+    ]);
+
+    const escalations = await dataSource.escalations.list(scope, { mentionId: target.id });
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]?.triggerAnalysisId).toBe(pending?.id);
+
+    const applied = await dataSource.mentions.latestAnalysis(scope, target.id);
+    expect(applied?.id).toBe(pending?.id);
+    expect(applied?.outcomeAppliedAt).not.toBeNull();
+
+    // Counts honest across the two runs: escalated is incremented by whichever
+    // run actually created the case, exactly once.
+    expect(second.counts.escalated).toBe(1);
+    expect(
+      await dataSource.auditEvents.list(scope, {
+        eventTypes: ["escalation.created_from_analysis"],
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("replaying a completed occurrence has no effects", async () => {
+    const target = await ingestFresh("lifecycle-replay");
+
+    await analyzeMentions(
+      { dataSource, scope },
+      { provider: fakeProvider({ output: critical() }), limit: 1 },
+    );
+
+    const analysis = await dataSource.mentions.latestAnalysis(scope, target.id);
+    const before = await dataSource.mentions.get(scope, target.id);
+    const [escalation] = await dataSource.escalations.list(scope, {
+      mentionId: target.id,
+    });
+
+    // A replay carrying deliberately different scores, so any write would show.
+    const replay = await dataSource.mentions.applyAnalysisOccurrence(scope, {
+      mentionId: target.id,
+      analysisId: analysis!.id,
+      shouldEscalate: true,
+      category: "other",
+      severity: "high",
+      title: "Replayed",
+      summary: null,
+      sentiment: "positive",
+      riskLevel: "low",
+      relevanceScore: 0.1,
+    });
+
+    expect(replay.alreadyApplied).toBe(true);
+    expect(replay.escalationCreated).toBe(false);
+    expect(replay.finalStatus).toBe("escalated");
+    expect(await dataSource.mentions.get(scope, target.id)).toEqual(before);
+    expect(await dataSource.escalations.list(scope, { mentionId: target.id })).toHaveLength(1);
+    expect(
+      (
+        await dataSource.auditEvents.list(scope, {
+          eventTypes: ["escalation.created_from_analysis"],
+        })
+      ).filter((event) => event.entityId === escalation!.id),
+    ).toHaveLength(1);
+
+    // And the pipeline never offers it a replay in the first place: a completed
+    // occurrence takes the mention out of the queue.
+    await analyzeMentions({ dataSource, scope }, { provider: fakeProvider(), limit: 500 });
+    expect(occurrencesFor(target.id)).toHaveLength(1);
+    expect(await dataSource.escalations.list(scope, { mentionId: target.id })).toHaveLength(1);
+  });
+
+  it("completes the occurrence of a dismissed mention without escalating it", async () => {
+    // A person dismissed this; the model then reads it as critical. The
+    // classification still lands, the decision still stands, and the occurrence
+    // is finished — leaving it pending would have recovery re-pick it forever.
+    const target = await ingestFresh("lifecycle-dismissed");
+    await dataSource.mentions.updateStatus(scope, target.id, "dismissed");
+
+    const result = await analyzeMentions(
+      { dataSource, scope },
+      { provider: fakeProvider({ output: critical() }), limit: 1 },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.counts.escalated).toBe(0);
+    expect(await dataSource.escalations.list(scope, { mentionId: target.id })).toHaveLength(0);
+
+    const after = await dataSource.mentions.get(scope, target.id);
+    expect(after?.status).toBe("dismissed");
+    expect(after?.riskLevel).toBe("critical");
+
+    const analysis = await dataSource.mentions.latestAnalysis(scope, target.id);
+    expect(analysis?.outcomeAppliedAt).not.toBeNull();
+    expect(result.processed).toContainEqual({
+      mentionId: target.id,
+      analysisId: analysis!.id,
+    });
+  });
+
+  it("refuses to re-escalate a mention whose only cases are closed", async () => {
+    // Somebody resolved the case but has not re-triaged the mention, so it is
+    // still `escalated`. A pending occurrence recovered into that state must
+    // not re-open work a person deliberately finished.
+    const target = await ingestFresh("lifecycle-retriage");
+
+    await analyzeMentions(
+      { dataSource, scope },
+      { provider: fakeProvider({ output: critical() }), limit: 1 },
+    );
+
+    const [first] = await dataSource.escalations.list(scope, { mentionId: target.id });
+    await dataSource.escalations.updateStatus(scope, first!.id, "resolved", "Handled.");
+
+    const pending = await seedPendingOccurrence(target.id);
+
+    const provider = fakeProvider({ output: critical() });
+    const result = await analyzeMentions({ dataSource, scope }, { provider, limit: 1 });
+
+    // Recovery, so no classification happened at all.
+    expect(provider.calls).toHaveLength(0);
+    expect(result.status).toBe("completed");
+    expect(result.counts.escalated).toBe(0);
+
+    const escalations = await dataSource.escalations.list(scope, { mentionId: target.id });
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]?.status).toBe("resolved");
+    expect((await dataSource.mentions.get(scope, target.id))?.status).toBe("escalated");
+
+    // Finished all the same: it has done everything it will ever do.
+    const stored = occurrencesFor(target.id).find((row) => row.id === pending.id);
+    expect(stored?.outcomeAppliedAt).not.toBeNull();
+  });
+
+  it("preserves a status a person set between the recording and the apply", async () => {
+    const target = await ingestFresh("lifecycle-responded");
+
+    const raced = actBeforeApply(dataSource, async (input) => {
+      if (input.mentionId !== target.id) return;
+      await dataSource.mentions.updateStatus(scope, target.id, "responded");
+    });
+
+    await analyzeMentions(
+      { dataSource: raced, scope },
+      {
+        provider: fakeProvider({
+          output: { sentiment: "negative", riskLevel: "medium" },
+        }),
+        limit: 1,
+      },
+    );
+
+    const after = await dataSource.mentions.get(scope, target.id);
+    // The person's decision stands; the analysis's own fields still land.
+    expect(after?.status).toBe("responded");
+    expect(after?.sentiment).toBe("negative");
+    expect(after?.riskLevel).toBe("medium");
+    expect((await dataSource.mentions.latestAnalysis(scope, target.id))?.outcomeAppliedAt)
+      .not.toBeNull();
   });
 });
 

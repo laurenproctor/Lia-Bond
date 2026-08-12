@@ -4,6 +4,7 @@ import {
   EMPTY_ANALYSIS_COUNTS,
   HEURISTIC_MODEL_NAME,
   HEURISTIC_MODEL_PROVIDER,
+  isHeuristicAnalysis,
   isSuccessfulAnalysisRun,
   type AnalysisCounts,
   type AnalysisRun,
@@ -23,7 +24,7 @@ import {
 } from "@/lib/data/types";
 import { analysisBatchSize } from "@/lib/env";
 import { analyzeByRating, isRatingOnly } from "@/lib/analysis/heuristic";
-import { toAnalysisInput, toEscalationInput } from "@/lib/analysis/normalize";
+import { toAnalysisInput, toEscalationDecision } from "@/lib/analysis/normalize";
 import { ANALYSIS_PROMPT_VERSION } from "@/lib/analysis/prompt";
 
 /**
@@ -36,11 +37,15 @@ import { ANALYSIS_PROMPT_VERSION } from "@/lib/analysis/prompt";
  *
  * Four properties the rest of the product depends on:
  *
- * 1. **It never overwrites a person's decision.** The mention update advances
- *    `status` only from `new`, and touches no source-owned column at all.
- * 2. **It is safe to re-run.** Selection is "mentions with no analysis", and
- *    the analysis insert is the commit point, so a crash costs a repeated call
- *    rather than a silently unanalysed mention.
+ * 1. **It never overwrites a person's decision.** The final status is derived
+ *    inside the escalation contract from the mention's current state, not
+ *    supplied from here, and no source-owned column is reachable at all.
+ * 2. **It is safe to re-run.** Every classification is recorded as an
+ *    occurrence keyed on (organization, run, mention) and applied in one
+ *    transaction. Selection is "no analysis row **or** a pending one", so a
+ *    crash between the two is recovered without a second model call, and a
+ *    replay after success has no effects. See `analyzeOne` for the crash
+ *    matrix.
  * 3. **It never hides a backlog.** A capped run records what it left.
  * 4. **It writes no customer-facing text.** Analysis produces classifications;
  *    drafting is workflow 05, and there is no code here that could generate a
@@ -81,9 +86,10 @@ export interface AnalyzeMentionsResult {
   errorMessage: string | null;
   errorCode: string | null;
   /**
-   * One entry per mention whose analysis row was written this run — both the
-   * `analyzed` (model) and `heuristic` outcomes create one; `failed` mentions
-   * do not appear, since no row was written for them.
+   * One entry per occurrence this run **applied** — including one it recovered
+   * from an earlier run, whose analysis id is that earlier occurrence's.
+   * `failed` mentions do not appear: whatever they left behind, this run did
+   * not finish it, so there is nothing a rule may act on yet.
    *
    * The rule engine's input: each pair is a (mention, trigger occurrence) a
    * rule run can evaluate against.
@@ -96,31 +102,61 @@ export interface AnalyzeMentionsResult {
 /* -------------------------------------------------------------------------- */
 
 type ItemOutcome =
-  | { kind: "analyzed"; escalated: boolean; mentionId: string; analysisId: string }
-  | { kind: "heuristic"; mentionId: string; analysisId: string }
+  | {
+      kind: "applied";
+      mentionId: string;
+      analysisId: string;
+      /** From the stored row's own provenance, not from what this run did. */
+      heuristic: boolean;
+      /** Whether this run actually spent a provider call on this mention. */
+      calledModel: boolean;
+      /** True only when this application is what brought the case into being. */
+      escalationCreated: boolean;
+    }
   | { kind: "failed"; code: string; message: string; fatal: boolean };
 
 /**
- * Classify and persist one mention.
+ * Take one mention through the occurrence lifecycle.
  *
- * The write order is:
+ *   record (insert-or-load on the event key) -> apply (one transaction)
  *
- *   analysis insert -> escalation -> mention update
+ * This replaces the old write-order reasoning entirely. That version ordered
+ * three independent writes to make the last one recoverable, which is the best
+ * anyone can do without a transaction and is not good enough: whichever write
+ * goes last, some crash leaves a mention that looks finished and never comes
+ * back. The lifecycle removes the choice instead of optimising it.
  *
- * and it is **interim**. The old order put the escalation first and made the
- * analysis insert the commit point, because selection is "mentions with no
- * analysis row" and there is no transaction to lean on (D17). The escalation
- * contract ends that arrangement: a case now names the occurrence that
- * authorized it, so the occurrence has to exist first.
+ * A *logical analysis event* is (organization, run, mention). Recording it is
+ * idempotent on that key, so a repeated recorder is handed the stored row and
+ * discards its own output. The recording is pending until
+ * `applyAnalysisOccurrence` stamps it, and the escalation, the mention
+ * transition, the denormalised columns, the completion stamp, and the
+ * escalation's audit event all happen inside that one call — in Postgres, one
+ * transaction. Selection is "no analysis row **or** a pending one", so a
+ * pending occurrence is re-picked rather than skipped.
  *
- * That leaves this function with a real gap in the meantime — a failure between
- * the insert and the mention update leaves a mention that looks analysed and is
- * never re-selected. It is closed by the occurrence lifecycle, not by an
- * ordering trick: a recorded occurrence is pending until `applyAnalysisOccurrence`
- * stamps it, selection widens to include mentions whose latest occurrence is
- * pending, and the escalation, the transition, and the completion stamp become
- * one transaction. This whole function is replaced by that lifecycle in the
- * step that rewires the service.
+ * What each crash costs:
+ *
+ * - **Before the recording** — nothing durable exists. The mention is still in
+ *   the queue and there is nothing to duplicate; the next run classifies it.
+ * - **Between recording and apply** — the classification is durable and the
+ *   outcome is not. The next run re-picks the mention, finds its latest
+ *   occurrence pending, skips classification entirely (the model call is
+ *   already paid for and its answer is stored), and applies that occurrence
+ *   under its original id. The case, if any, is created once.
+ * - **Mid-apply** — the transaction rolls back whole. There is no state where
+ *   the escalation exists and the transition does not, or where the occurrence
+ *   is stamped and the case is missing. The occurrence stays pending and is
+ *   recoverable exactly as above.
+ * - **After apply** — replaying answers `alreadyApplied` with zero effects and
+ *   zero events, whatever a person has done to the mention since.
+ *
+ * One deliberate cosmetic difference on the recovery path: `mention_analyses`
+ * stores no escalation title, so a case raised from a recovered occurrence
+ * carries the derived title rather than the model's phrasing.
+ *
+ * The escalation's audit event is **not** written here. It belongs to the apply
+ * transaction, so no failure can separate a case from its trail.
  */
 async function analyzeOne(
   context: AnalysisContext,
@@ -130,86 +166,94 @@ async function analyzeOne(
   runId: string,
   analyzedAt: string,
 ): Promise<ItemOutcome> {
-  const heuristic = isRatingOnly(mention);
-
   try {
-    // Null on the heuristic path rather than a fabricated provider result:
-    // token counts feed a cost record, and a plausible-looking zero from a
-    // call that never happened is worse than an honest absence.
-    const called = heuristic
-      ? null
-      : await provider.analyzeMention({ mention, location });
-
-    const output = called ? called.analysis : analyzeByRating(mention);
-
-    // Interim ordering, replaced by the occurrence lifecycle in the step that
-    // rewires this service: the escalation contract requires the occurrence id
-    // that authorizes the case, so the analysis row has to exist before the
-    // escalation rather than after it. That inverts the crash-safety ordering
-    // this comment block describes, and the inversion is what the lifecycle
-    // fixes properly — a recorded occurrence is pending until its outcome is
-    // applied, and a pending occurrence is re-picked rather than skipped.
-    const analysis = await context.dataSource.mentions.createAnalysis(
-      context.scope,
-      toAnalysisInput({
-        output,
-        mentionId: mention.id,
-        analysisRunId: runId,
-        modelProvider: called ? called.modelProvider : HEURISTIC_MODEL_PROVIDER,
-        modelName: called ? called.modelName : HEURISTIC_MODEL_NAME,
-        inputTokens: called?.inputTokens ?? null,
-        outputTokens: called?.outputTokens ?? null,
-        analyzedAt,
-        // The heuristic uses no prompt, so claiming a prompt version would put
-        // a fiction into the field a later comparison relies on.
-        promptVersion: heuristic ? null : ANALYSIS_PROMPT_VERSION,
-      }),
-    );
-
-    const escalationInput = toEscalationInput(output, mention, location, analysis.id);
-    let escalated = false;
-
-    if (escalationInput) {
-      const { escalation, created } = await context.dataSource.escalations.create(
-        context.scope,
-        escalationInput,
-      );
-      escalated = created;
-
-      if (created && escalation) {
-        await recordAuditEvent(context, {
-          eventType: "escalation.created_from_analysis",
-          entityType: "escalation",
-          entityId: escalation.id,
-          previousState: null,
-          // Category and severity only. The title can quote the review, so it
-          // is deliberately not carried into the audit trail.
-          newState: {
-            category: escalation.category,
-            severity: escalation.severity,
-          },
-          metadata: { mentionId: mention.id, analysisRunId: runId },
-          actorType: "ai",
-        });
-      }
-    }
-
-    await context.dataSource.mentions.applyAnalysisOutcome(
+    // Recovery check, before any spending. A mention reaches this function
+    // because it needs analysis work, which is either "never classified" or
+    // "classified but never applied" — and only the second has a row to read.
+    //
+    // A mention has at most one pending occurrence, and nothing records a new
+    // one while that is true, so "the latest row is pending" is the whole
+    // recovery condition. If the read is ambiguous under a tie and returns an
+    // applied row instead, the recorder below still hands back the pending one
+    // (`created: false`): the cost is one wasted classification, never a
+    // duplicate occurrence.
+    const latest = await context.dataSource.mentions.latestAnalysis(
       context.scope,
       mention.id,
+    );
+
+    let stored = latest?.outcomeAppliedAt === null ? latest : null;
+    let calledModel = false;
+    // The model's own case title, which is not a stored column. Null on every
+    // path that reads a stored row, including a recorder that lost the race.
+    let escalationTitle: string | null = null;
+
+    if (!stored) {
+      const heuristic = isRatingOnly(mention);
+
+      // Null on the heuristic path rather than a fabricated provider result:
+      // token counts feed a cost record, and a plausible-looking zero from a
+      // call that never happened is worse than an honest absence.
+      const called = heuristic
+        ? null
+        : await provider.analyzeMention({ mention, location });
+
+      calledModel = called !== null;
+      const output = called ? called.analysis : analyzeByRating(mention);
+
+      const recorded = await context.dataSource.mentions.recordAnalysisOccurrence(
+        context.scope,
+        toAnalysisInput({
+          output,
+          mentionId: mention.id,
+          analysisRunId: runId,
+          modelProvider: called ? called.modelProvider : HEURISTIC_MODEL_PROVIDER,
+          modelName: called ? called.modelName : HEURISTIC_MODEL_NAME,
+          inputTokens: called?.inputTokens ?? null,
+          outputTokens: called?.outputTokens ?? null,
+          analyzedAt,
+          // The heuristic uses no prompt, so claiming a prompt version would
+          // put a fiction into the field a later comparison relies on.
+          promptVersion: heuristic ? null : ANALYSIS_PROMPT_VERSION,
+        }),
+      );
+
+      stored = recorded.analysis;
+      // `created: false` means this event was already recorded, or an older
+      // event is still pending for this mention. Either way the stored row is
+      // the authority and this run's fresh output is discarded — including its
+      // title, which is why this is set only on the created branch.
+      if (recorded.created) escalationTitle = output.escalationTitle ?? null;
+    }
+
+    // Computed from the stored row, never from the fresh output: on the
+    // recovery and the lost-race paths there is no fresh output, and on the
+    // created path the two are the same reading.
+    const decision = toEscalationDecision(stored, location, escalationTitle);
+
+    const applied = await context.dataSource.mentions.applyAnalysisOccurrence(
+      context.scope,
       {
-        sentiment: output.sentiment,
-        riskLevel: output.riskLevel,
-        relevanceScore: output.relevanceScore,
-        // An escalated mention says so in the queue rather than reading as
-        // routine triage.
-        status: escalationInput ? "escalated" : "analyzed",
+        mentionId: mention.id,
+        analysisId: stored.id,
+        ...decision,
+        sentiment: stored.sentiment,
+        riskLevel: stored.riskLevel,
+        relevanceScore: stored.relevanceScore,
       },
     );
 
-    return heuristic
-      ? { kind: "heuristic", mentionId: mention.id, analysisId: analysis.id }
-      : { kind: "analyzed", escalated, mentionId: mention.id, analysisId: analysis.id };
+    return {
+      kind: "applied",
+      mentionId: mention.id,
+      analysisId: stored.id,
+      heuristic: isHeuristicAnalysis(stored),
+      calledModel,
+      // Only a creation counts. A refusal (an open case already, a dismissed
+      // mention, one awaiting re-triage) and a replay each leave the number
+      // where it was, because neither of them raised anything.
+      escalationCreated: applied.escalationCreated,
+    };
   } catch (error) {
     return {
       kind: "failed",
@@ -283,15 +327,19 @@ export async function analyzeMentions(
     const analyzedAt = new Date().toISOString();
 
     const apply = (outcome: ItemOutcome): void => {
-      if (outcome.kind === "heuristic") {
-        counts.heuristic += 1;
-        processed.push({ mentionId: outcome.mentionId, analysisId: outcome.analysisId });
-        return;
-      }
-      if (outcome.kind === "analyzed") {
-        counts.analyzed += 1;
-        usedModel = true;
-        if (outcome.escalated) counts.escalated += 1;
+      if (outcome.kind === "applied") {
+        // Which bucket comes from the occurrence's own provenance, so a
+        // recovered occurrence is reported as the kind of analysis it actually
+        // is rather than as whatever this run would have done.
+        if (outcome.heuristic) counts.heuristic += 1;
+        else counts.analyzed += 1;
+
+        // Separately from the bucket: a recovery applies a model analysis
+        // without calling a model, and naming a model this run never invoked
+        // would put a fiction into the run's provenance.
+        if (outcome.calledModel) usedModel = true;
+
+        if (outcome.escalationCreated) counts.escalated += 1;
         processed.push({ mentionId: outcome.mentionId, analysisId: outcome.analysisId });
         return;
       }
@@ -429,7 +477,11 @@ export async function analyzeMentions(
 /* -------------------------------------------------------------------------- */
 
 export interface AnalysisStatus {
-  /** Mentions with no analysis at all. */
+  /**
+   * Mentions a run would pick up: no analysis row, or one whose outcome was
+   * never applied. The card says "waiting on analysis", and a mention whose
+   * apply crashed is still waiting.
+   */
   unanalyzedCount: number;
   latest: AnalysisRun | null;
   lastSuccessful: AnalysisRun | null;

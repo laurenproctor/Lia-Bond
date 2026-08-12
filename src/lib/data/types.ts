@@ -102,22 +102,6 @@ export interface MentionIngestResult {
 }
 
 /**
- * The four columns an analysis is allowed to write on a mention.
- *
- * Narrow on purpose. These are the denormalised fields the inbox filters on,
- * the risk index sorts by, and every chart buckets over — they have to move
- * when an analysis lands, or the analysis is invisible to the product. Nothing
- * else is reachable from here.
- */
-export interface MentionAnalysisOutcome {
-  sentiment: Mention["sentiment"];
-  riskLevel: Mention["riskLevel"];
-  relevanceScore: number | null;
-  /** Applied only when the mention is still `new`. */
-  status: Extract<MentionStatus, "analyzed" | "escalated">;
-}
-
-/**
  * What one analysis occurrence asks the contract to apply.
  *
  * The parameter list of `apply_analysis_occurrence`, field for field. Note
@@ -128,6 +112,13 @@ export interface MentionAnalysisOutcome {
  *
  * The escalation fields are supplied whether or not `shouldEscalate` is set —
  * as they are in SQL — and are simply unread when it is false.
+ *
+ * Note what else is absent: `content`, `rating`, `author_name`, `published_at`,
+ * and every source-owned column. An analysis owns three denormalised fields —
+ * the ones the inbox filters on, the risk index sorts by, and the charts bucket
+ * over — and may not touch what a sync imported. That is the mirror of the rule
+ * workflow 03 established for syncs, enforced by this type rather than by care
+ * at the call site.
  */
 export interface ApplyAnalysisOccurrenceInput {
   mentionId: string;
@@ -296,12 +287,23 @@ export interface OrganizationRepository {
    */
   update(scope: OrganizationScope, input: UpdateOrganizationInput): Promise<Organization>;
   /**
-   * Ids of organizations with at least one mention `analyzeMentions` would
-   * pick up — the same "no analysis row" selection `MentionRepository.
-   * listUnanalyzed` uses, not merely `status = 'new'`: a mention whose status
-   * was already advanced but whose analysis insert never landed (a crash
-   * between the two, per the ordering note on `analyzeOne`) must still count,
-   * or that organization silently stops being swept for it.
+   * Ids of organizations with at least one mention with no analysis row —
+   * deliberately not `status = 'new'`, since a mention whose status advanced
+   * without an analysis landing must still count, or that organization
+   * silently stops being swept for it.
+   *
+   * **Narrower than `MentionRepository.listUnanalyzed`, which is a known gap.**
+   * That selection widened to include mentions whose latest occurrence is
+   * pending; this one has not, because its Supabase implementation is the
+   * `organizations_with_unanalyzed_mentions` database function and widening it
+   * means a migration this branch's migration set does not contain. The
+   * consequence is bounded and stated rather than hidden: an organization
+   * whose *only* remaining work is a pending occurrence is not offered to the
+   * cron sweep until some other mention arrives with no analysis at all — at
+   * which point the widened `listUnanalyzed` picks the pending one up in the
+   * same run. A manual run is unaffected. The fix is one predicate:
+   * `not exists (… where a.mention_id = m.id and a.outcome_applied_at is not null)`,
+   * in the function and in the demo twin together.
    *
    * The one deliberately unscoped read on this repository — mirrors
    * `MonitoringQueryRepository.listDue`. Cron holds no membership and cannot
@@ -596,7 +598,21 @@ export interface MentionRepository {
     profileIds: string[],
   ): Promise<Record<string, number>>;
   /**
-   * Mentions that have never been analysed, oldest first.
+   * Mentions needing analysis work, oldest first.
+   *
+   * "Needing analysis work" is **no analysis row, or a latest row whose
+   * outcome was never applied** — not simply "never analysed". A recorded
+   * occurrence is pending until `applyAnalysisOccurrence` stamps it, so a
+   * crash in that window leaves a durable classification whose escalation,
+   * transition, and denormalised columns never happened. From the outside that
+   * row is indistinguishable from a finished one, and the narrower selection
+   * would drop the mention out of the queue forever. Widening here is what
+   * makes recovery a property of the system rather than of an operator
+   * noticing.
+   *
+   * A mention carries at most one pending occurrence (the database enforces
+   * it), so "the latest row is pending" and "some row is pending" are the same
+   * set, and recovery always has exactly one thing to finish.
    *
    * Oldest-first so a backlog drains in arrival order rather than the newest
    * batch being re-analysed while older mentions never surface.
@@ -607,7 +623,14 @@ export interface MentionRepository {
   listUnanalyzed(scope: OrganizationScope, limit: number): Promise<Mention[]>;
   countUnanalyzed(scope: OrganizationScope): Promise<number>;
   /**
-   * Record an analysis.
+   * Record an analysis, unconditionally — **not the pipeline's path.**
+   *
+   * A raw append with no event key and no lifecycle: it leaves the row pending
+   * and takes no part in the one-pending-per-mention invariant, so two calls
+   * for one mention produce a state the database's `mention_analyses_one_pending`
+   * index forbids. `recordAnalysisOccurrence` is what the analysis service uses
+   * and what anything writing a new occurrence should use. This survives as the
+   * seam tests use to construct a pending occurrence deliberately.
    *
    * Append-only: re-analysing inserts a new row rather than overwriting, so a
    * prompt or model change stays auditable and readers take the latest.
@@ -653,23 +676,6 @@ export interface MentionRepository {
     scope: OrganizationScope,
     input: ApplyAnalysisOccurrenceInput,
   ): Promise<ApplyAnalysisOccurrenceResult>;
-  /**
-   * Write the fields an analysis owns.
-   *
-   * Deliberately not `create`, and deliberately not a general update. An
-   * analysis owns exactly these four columns; it may not touch content,
-   * rating, author, or any source-owned field. That is the mirror of the rule
-   * workflow 03 established for syncs, and like that one it is enforced by the
-   * input type rather than by care at the call site.
-   *
-   * `status` advances only from `new`, so a mention somebody has already
-   * escalated, dismissed, or responded to keeps the state that person set.
-   */
-  applyAnalysisOutcome(
-    scope: OrganizationScope,
-    mentionId: string,
-    outcome: MentionAnalysisOutcome,
-  ): Promise<Mention>;
   updateStatus(
     scope: OrganizationScope,
     mentionId: string,
