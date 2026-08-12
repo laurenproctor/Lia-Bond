@@ -82,6 +82,31 @@ interface SweepTotals {
   mentionsFailed: number;
   /** Organizations where the call threw something other than a lock conflict. */
   erroredOrganizations: number;
+  /**
+   * Runs that returned *normally* carrying an `errorCode`.
+   *
+   * `analyzeMentions` has a run-level catch of its own: a repository read that
+   * fails outside the per-mention path is recorded on the analysis run and
+   * returned, not thrown. Such a run can report zero counts and a status of
+   * `completed` — nothing failed per mention because nothing was ever
+   * attempted — so reading `counts` alone, as this route first did, renders a
+   * total analysis outage indistinguishable from an organization that simply
+   * had no backlog. This counter is what keeps that honest.
+   */
+  analysisRunsWithErrors: number;
+  /**
+   * Of those, the runs that also got nothing through: no mention analysed, no
+   * heuristic fallback. They are the ones that did not succeed at anything and
+   * so count against the 503 clause.
+   *
+   * Deliberately not in the response body: it is a decision input, and a
+   * second, nearly identical number next to `analysisRunsWithErrors` would
+   * invite being read as an additional class of failure rather than a subset
+   * of one. A partial run — an error code and some mentions through — is
+   * counted above and not here, which is what keeps it `degraded` and not
+   * `failed`.
+   */
+  analysisRunsWithoutProgress: number;
 }
 
 /**
@@ -192,6 +217,10 @@ function executionReason(
  * its organization's analysis succeeded — so without the disjunction the
  * execution half could never report systemic breakage at all.
  *
+ * "Succeeded" is not the same as "returned": a run that came back with an
+ * error code and nothing analysed did not succeed, however politely it
+ * returned, and counts against the analysis clause exactly as a throw does.
+ *
  * The 500 row (the loop could not run) is not decided here: it is the outer
  * catch, which has no totals to reason about.
  */
@@ -200,7 +229,8 @@ function resolveStatus(
   execution: ExecutionTotals,
 ): "ok" | "degraded" | "failed" {
   const analysisAttempted = totals.organizations + totals.erroredOrganizations;
-  const analysisAllFailed = analysisAttempted > 0 && totals.organizations === 0;
+  const analysisSucceeded = totals.organizations - totals.analysisRunsWithoutProgress;
+  const analysisAllFailed = analysisAttempted > 0 && analysisSucceeded === 0;
   const executionAllFailed =
     execution.organizationsAttempted > 0 && execution.organizationsCompleted === 0;
 
@@ -208,6 +238,7 @@ function resolveStatus(
 
   const materialFailure =
     totals.erroredOrganizations > 0 ||
+    totals.analysisRunsWithErrors > 0 ||
     totals.mentionsFailed > 0 ||
     execution.sweeps.some(sweepHadFailures);
 
@@ -234,6 +265,8 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
     escalated: 0,
     mentionsFailed: 0,
     erroredOrganizations: 0,
+    analysisRunsWithErrors: 0,
+    analysisRunsWithoutProgress: 0,
   };
 
   const execution: ExecutionTotals = {
@@ -289,6 +322,16 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
         // Returned, not swallowed — see the field's own doc comment above.
         totals.mentionsFailed += result.counts.failed;
 
+        if (result.errorCode !== null) {
+          totals.analysisRunsWithErrors += 1;
+          // Heuristic outcomes count as progress: the mention was classified
+          // and a row written, model or no model. Only a run that got nothing
+          // at all through is treated as having failed outright.
+          if (result.counts.analyzed + result.counts.heuristic === 0) {
+            totals.analysisRunsWithoutProgress += 1;
+          }
+        }
+
         if (!executionEnabled) continue;
         if (!allowlist.has(organizationId)) {
           execution.organizationsNotAllowlisted += 1;
@@ -314,13 +357,28 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
             mentionsSkipped: sweep.mentionsSkipped,
             budgetExhausted: sweep.budgetExhausted,
           });
-        } catch {
+        } catch (error) {
+          // Logged, name only, exactly as the outer catch does: an error
+          // message here can carry driver detail, and the redaction posture is
+          // the same wherever it is written. The organization id is safe — the
+          // response already names it.
+          //
+          // Logged *at all* because the sweep row is not guaranteed to exist:
+          // a throw from `listActiveForExecution` or from the claim happens
+          // before any row is written, and a throw from the terminal
+          // `finalize` leaves one stuck in `running`. Swallowing those
+          // silently would leave the failure recorded nowhere at all.
+          console.error(
+            "[cron:analyze-mentions] sweep failed",
+            organizationId,
+            error instanceof Error ? error.name : "unknown",
+          );
           // `executeRules` rethrows only after finalizing its sweep row as
-          // failed, so the durable record already exists; what is lost is the
-          // id, which the throw does not carry. Counters are reported as zero
-          // and every handed-over mention as unreached — this summary states
-          // what it can verify rather than inventing progress. The row in
-          // `automation_sweeps` remains the authority on how far it got.
+          // failed, so where that row exists the durable record already does;
+          // what is lost is the id, which the throw does not carry. Counters
+          // are reported as zero and every handed-over mention as unreached —
+          // this summary states what it can verify rather than inventing
+          // progress.
           execution.sweeps.push({
             organizationId,
             sweepId: null,
@@ -357,6 +415,7 @@ async function handleAnalyzeMentions(request: Request): Promise<Response> {
           escalated: totals.escalated,
           mentionsFailed: totals.mentionsFailed,
           erroredOrganizations: totals.erroredOrganizations,
+          analysisRunsWithErrors: totals.analysisRunsWithErrors,
         },
         execution: {
           mode,

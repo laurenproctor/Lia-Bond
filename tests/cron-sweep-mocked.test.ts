@@ -147,6 +147,7 @@ describe("POST /api/cron/analyze-mentions: per-organization isolation", () => {
         escalated: 1,
         mentionsFailed: 3, // result.counts.failed, carried through rather than dropped
         erroredOrganizations: 1, // org-broken
+        analysisRunsWithErrors: 0, // org-clean's run returned with no error code
       },
       execution: {
         mode: "off",
@@ -204,6 +205,7 @@ describe("POST /api/cron/analyze-mentions: per-organization isolation", () => {
         escalated: 0,
         mentionsFailed: 0,
         erroredOrganizations: 0,
+        analysisRunsWithErrors: 0,
       },
       execution: {
         mode: "off",

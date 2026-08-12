@@ -103,6 +103,29 @@ function analysisResult(
   };
 }
 
+/**
+ * A run that came back *normally* carrying an error code.
+ *
+ * `analyzeMentions` catches a failure outside the per-mention path — a
+ * repository read, most likely — records it on the analysis run, and returns.
+ * With nothing ever attempted, `counts.failed` stays 0 and the run's status
+ * computes to `completed`: a total analysis outage that looks, to anything
+ * reading `counts` alone, exactly like an organization with no backlog.
+ */
+function erroredRunResult(
+  countOverrides: Parameters<typeof counts>[0] = {},
+  processed: { mentionId: string; analysisId: string }[] = [],
+) {
+  return {
+    analysisRunId: "run-outage",
+    status: "completed" as const,
+    counts: counts(countOverrides),
+    errorMessage: "The mentions could not be read.",
+    errorCode: "unavailable",
+    processed,
+  };
+}
+
 function sweepResult(overrides: Partial<ExecuteRulesResult> = {}): ExecuteRulesResult {
   return {
     sweepId: "sweep-1",
@@ -157,6 +180,7 @@ describe("analyze-mentions route: execution gating", () => {
       escalated: 0,
       mentionsFailed: 0,
       erroredOrganizations: 0,
+      analysisRunsWithErrors: 0,
     });
   });
 
@@ -411,6 +435,72 @@ describe("analyze-mentions route: status table (spec §10)", () => {
     expect(body.analysis).toMatchObject({ organizations: 1, mentionsFailed: 2 });
   });
 
+  it("is degraded at 200 when one analysis run returned an error code", async () => {
+    // The run did not throw, so `erroredOrganizations` stays 0, and it failed
+    // no individual mention, so `mentionsFailed` stays 0 too. Reading counts
+    // alone this is a clean sweep; it is not one.
+    listWithUnanalyzedMentions.mockResolvedValue(["org-good", "org-outage"]);
+    analyzeMentionsMock.mockImplementation(async (context: { scope: OrganizationScope }) =>
+      context.scope.organizationId === "org-outage"
+        ? erroredRunResult()
+        : analysisResult([{ mentionId: "m-1", analysisId: "a-1" }]),
+    );
+
+    const { status, body } = await callRoute();
+
+    expect(status).toBe(200);
+    expect(body.status).toBe("degraded");
+    expect(body.analysis).toMatchObject({
+      organizations: 2,
+      erroredOrganizations: 0,
+      mentionsFailed: 0,
+      analysisRunsWithErrors: 1,
+    });
+  });
+
+  it("is failed at 503 when every analysis run returned an error code and got nothing through", async () => {
+    // A returned failure is still a failure: two organizations, both analysed
+    // nothing, both carrying an error code. Nothing succeeded.
+    listWithUnanalyzedMentions.mockResolvedValue(["org-a", "org-b"]);
+    analyzeMentionsMock.mockResolvedValue(erroredRunResult());
+
+    const { status, body } = await callRoute();
+
+    expect(status).toBe(503);
+    expect(body.status).toBe("failed");
+    expect(body.analysis).toMatchObject({
+      organizations: 2,
+      analysisRunsWithErrors: 2,
+    });
+  });
+
+  it("is degraded, not failed, when an erroring run still got mentions through", async () => {
+    // A partial run — some mentions analysed, then a read failed — succeeded
+    // at something, so it must not count toward the all-failed 503 clause even
+    // when it is the only organization in the sweep.
+    listWithUnanalyzedMentions.mockResolvedValue(["org-partial"]);
+    analyzeMentionsMock.mockResolvedValue(
+      erroredRunResult({ analyzed: 1, remaining: 4 }, [{ mentionId: "m-1", analysisId: "a-1" }]),
+    );
+
+    const { status, body } = await callRoute();
+
+    expect(status).toBe(200);
+    expect(body.status).toBe("degraded");
+  });
+
+  it("counts a heuristic-only run that errored as progress", async () => {
+    // The mention was classified and a row written; no model was involved.
+    // That is progress, and the sweep is degraded rather than failed.
+    listWithUnanalyzedMentions.mockResolvedValue(["org-heuristic"]);
+    analyzeMentionsMock.mockResolvedValue(erroredRunResult({ heuristic: 2 }));
+
+    const { status, body } = await callRoute();
+
+    expect(status).toBe(200);
+    expect(body.status).toBe("degraded");
+  });
+
   it("is degraded at 200 when a sweep failed actions", async () => {
     vi.stubEnv("RULES_EXECUTION_MODE", "dry_run");
     vi.stubEnv("RULES_EXECUTION_ORG_ALLOWLIST", "org-a");
@@ -479,7 +569,16 @@ describe("analyze-mentions route: status table (spec §10)", () => {
     expect(body.execution.organizationsAttempted).toBe(2);
     expect(body.execution.organizationsCompleted).toBe(0);
     expect(text).not.toContain(LEAK_MARKER);
+    // Both swallowed throws are logged — a sweep that throws before its row is
+    // written exists nowhere else — and both logs carry the error's *name*
+    // only, never the message the marker is hiding in.
+    expect(consoleSpy).toHaveBeenCalledTimes(2);
     for (const call of consoleSpy.mock.calls) {
+      expect(call).toEqual([
+        "[cron:analyze-mentions] sweep failed",
+        expect.stringMatching(/^org-[ab]$/),
+        "Error",
+      ]);
       for (const arg of call) expect(String(arg)).not.toContain(LEAK_MARKER);
     }
     consoleSpy.mockRestore();
@@ -555,6 +654,14 @@ describe("analyze-mentions route: per-organization execution isolation", () => {
       },
     ]);
     expect(text).not.toContain(LEAK_MARKER);
+    // Named, and named only: the failing organization is identified (the
+    // response already names it) and the error's name given, with no message
+    // and no stack.
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "[cron:analyze-mentions] sweep failed",
+      "org-broken",
+      "Error",
+    );
     for (const call of consoleSpy.mock.calls) {
       for (const arg of call) expect(String(arg)).not.toContain(LEAK_MARKER);
     }
