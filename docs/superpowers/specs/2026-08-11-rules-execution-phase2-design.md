@@ -462,7 +462,7 @@ locally.
    the claim/replay/retry semantics in TypeScript) — done (Tasks 6–7);
    engine loop with `dry_run` + `off` only — done (Task 10); route
    contract — done (Task 11); dry-run UI states — done (Task 12).
-   *Releasable: dry run internally.* Decision-ledger entries D148–D154 in
+   *Releasable: dry run internally.* Decision-ledger entries D148–D155 in
    `docs/architecture/current-state.md` record what shipped and why;
    `apply` is not enabled anywhere by this block.
 2. **G1 block — not started:** migration 4 (RPC) + Supabase adapter;
@@ -587,7 +587,7 @@ The G3 retrofit workstream is acknowledged, gated, and not planned here.
   `escalate` executor dedupes against an "open" escalation. G0 shipped
   dedupe against *any* escalation ever raised for the mention — matching
   the analysis path's existing `escalations.create` behavior, which rule
-  execution reuses, and which the dry-run projection in D151 mirrors for
+  execution reuses, and which the dry-run projection in D152 mirrors for
   fidelity. Parked rather than silently implemented against the letter of
   this spec: the consequence is that a mention escalated and later
   resolved by a human cannot be re-escalated by either analysis or a rule
