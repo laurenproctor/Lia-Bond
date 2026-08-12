@@ -29,6 +29,13 @@ export const escalationSchema = z
     dueAt: timestampSchema.nullable(),
     resolvedAt: timestampSchema.nullable(),
     resolutionNote: z.string().max(2000).nullable(),
+    /**
+     * The analysis occurrence that authorized this escalation. Required
+     * non-null for every escalation raised by `raise_escalation` from the
+     * escalation contract migration onward; null only on historical rows
+     * that predate it.
+     */
+    triggerAnalysisId: uuidSchema.nullable(),
   })
   .extend(organizationOwnedSchema.shape)
   .extend(timestampsSchema.shape);
@@ -54,9 +61,54 @@ export const createEscalationInputSchema = z.object({
   title: z.string().min(1).max(240),
   summary: z.string().nullable(),
   dueAt: timestampSchema.nullable(),
+  /**
+   * The analysis occurrence authorizing this escalation. Required and
+   * non-null: `raise_escalation` refuses a null occurrence id (22004) and the
+   * composite foreign key proves the occurrence is an analysis of this
+   * escalation's own mention. Nullable on the entity, because rows written
+   * before the contract carry none; never nullable on the way in.
+   */
+  triggerAnalysisId: uuidSchema,
 });
 
 export type CreateEscalationInput = z.infer<typeof createEscalationInputSchema>;
+
+/**
+ * Why the contract declined to create an escalation.
+ *
+ * The exact vocabulary `raise_escalation` returns, in the order the ladder
+ * tests them. They are internal reasons: the automation execution surface maps
+ * them into its own pinned outcome vocabulary rather than leaking them.
+ *
+ * - `occurrence_replayed` — this occurrence already produced an escalation.
+ *   That row comes back whatever its status, and nothing is mutated.
+ * - `mention_dismissed` — the mention is dismissed; no row, no transition.
+ * - `escalation_exists` — the mention already carries an open case, which is
+ *   the row that comes back.
+ * - `awaiting_retriage` — every case is closed but the mention is still
+ *   `escalated`, so a person has not re-triaged it yet. No row.
+ */
+export const ESCALATION_REFUSAL_REASONS = [
+  "occurrence_replayed",
+  "mention_dismissed",
+  "escalation_exists",
+  "awaiting_retriage",
+] as const;
+
+export type EscalationRefusalReason = (typeof ESCALATION_REFUSAL_REASONS)[number];
+
+/**
+ * What the ladder did, and the row it is talking about.
+ *
+ * `escalation` is null exactly when the reason is a hard refusal
+ * (`mention_dismissed`, `awaiting_retriage`) — the contract never answers a
+ * refusal with somebody else's case.
+ */
+export interface RaiseEscalationResult {
+  escalation: Escalation | null;
+  created: boolean;
+  reason: EscalationRefusalReason | null;
+}
 
 export const escalationFilterSchema = z.object({
   mentionId: uuidSchema.optional(),
@@ -90,6 +142,16 @@ export type AssignEscalationInput = z.infer<typeof assignEscalationInputSchema>;
 
 /** Statuses that mean the case is finished. */
 export const CLOSED_ESCALATION_STATUSES = ["resolved", "dismissed"] as const;
+
+/**
+ * Statuses that mean the case is still somebody's problem.
+ *
+ * The complement of `CLOSED_ESCALATION_STATUSES`, and the exact set the
+ * database's `escalations_one_open_per_mention` partial index covers — a
+ * mention may carry only one case in these statuses at a time. Named here so
+ * the adapters, the index, and the contract's dedupe cannot drift apart.
+ */
+export const OPEN_ESCALATION_STATUSES = ["open", "in_progress", "pending_approval"] as const;
 
 export function isEscalationClosed(status: Escalation["status"]): boolean {
   return (CLOSED_ESCALATION_STATUSES as readonly string[]).includes(status);

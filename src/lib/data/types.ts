@@ -18,6 +18,7 @@ import type {
   DryRunExecutionStatus,
   Escalation,
   EscalationFilter,
+  EscalationRefusalReason,
   ExecutionActionOutcome,
   FinishAnalysisRunInput,
   FinishSyncRunInput,
@@ -49,11 +50,11 @@ import type {
   PlatformConnection,
   PlatformProfile,
   PlatformSyncRun,
+  RaiseEscalationResult,
   RecordAuditEventInput,
   ResponseDraft,
   ResponseDraftFilter,
   RiskLevel,
-  RuleAction,
   Sentiment,
   StartAnalysisRunInput,
   StartSyncRunInput,
@@ -100,19 +101,57 @@ export interface MentionIngestResult {
 }
 
 /**
- * The four columns an analysis is allowed to write on a mention.
+ * What one analysis occurrence asks the contract to apply.
  *
- * Narrow on purpose. These are the denormalised fields the inbox filters on,
- * the risk index sorts by, and every chart buckets over — they have to move
- * when an analysis lands, or the analysis is invisible to the product. Nothing
- * else is reachable from here.
+ * The parameter list of `apply_analysis_occurrence`, field for field. Note
+ * what is absent: a status. The final status is derived inside the entry point
+ * from the mention's current state and the escalation result, so a decision a
+ * person made between the recording and the application cannot be overwritten
+ * by a caller passing the status it expected.
+ *
+ * The escalation fields are supplied whether or not `shouldEscalate` is set —
+ * as they are in SQL — and are simply unread when it is false.
+ *
+ * Note what else is absent: `content`, `rating`, `author_name`, `published_at`,
+ * and every source-owned column. An analysis owns three denormalised fields —
+ * the ones the inbox filters on, the risk index sorts by, and the charts bucket
+ * over — and may not touch what a sync imported. That is the mirror of the rule
+ * workflow 03 established for syncs, enforced by this type rather than by care
+ * at the call site.
  */
-export interface MentionAnalysisOutcome {
+export interface ApplyAnalysisOccurrenceInput {
+  mentionId: string;
+  analysisId: string;
+  shouldEscalate: boolean;
+  category: Escalation["category"];
+  severity: Escalation["severity"];
+  title: string;
+  summary: string | null;
   sentiment: Mention["sentiment"];
   riskLevel: Mention["riskLevel"];
   relevanceScore: number | null;
-  /** Applied only when the mention is still `new`. */
-  status: Extract<MentionStatus, "analyzed" | "escalated">;
+}
+
+/**
+ * What the contract did with the occurrence.
+ *
+ * `alreadyApplied` is the replay-after-success answer: zero effects, zero
+ * events, and `finalStatus` is simply what the mention says now. `escalationId`
+ * is null on a hard refusal and on a replay of a non-escalating occurrence;
+ * `reason` names which arm of the ladder answered.
+ */
+export interface ApplyAnalysisOccurrenceResult {
+  escalationId: string | null;
+  escalationCreated: boolean;
+  reason: EscalationRefusalReason | null;
+  alreadyApplied: boolean;
+  finalStatus: MentionStatus;
+}
+
+/** Insert-or-load on the event key. `created: false` means "this already was". */
+export interface RecordAnalysisOccurrenceResult {
+  analysis: MentionAnalysis;
+  created: boolean;
 }
 
 /** Bundles a mention with everything the workspaces render alongside it. */
@@ -247,12 +286,25 @@ export interface OrganizationRepository {
    */
   update(scope: OrganizationScope, input: UpdateOrganizationInput): Promise<Organization>;
   /**
-   * Ids of organizations with at least one mention `analyzeMentions` would
-   * pick up — the same "no analysis row" selection `MentionRepository.
-   * listUnanalyzed` uses, not merely `status = 'new'`: a mention whose status
-   * was already advanced but whose analysis insert never landed (a crash
-   * between the two, per the ordering note on `analyzeOne`) must still count,
-   * or that organization silently stops being swept for it.
+   * Ids of organizations with at least one mention with no analysis row —
+   * deliberately not `status = 'new'`, since a mention whose status advanced
+   * without an analysis landing must still count, or that organization
+   * silently stops being swept for it.
+   *
+   * Matches `MentionRepository.listUnanalyzed`'s selection exactly: no
+   * analysis row, or a mention carrying a pending (outcome not yet applied)
+   * row regardless of any settled history. Widened in migration
+   * 20260812000600 — before that, the Supabase implementation (the
+   * `organizations_with_unanalyzed_mentions` database function) only checked
+   * "no analysis row", so an organization whose *only* remaining work was a
+   * pending occurrence was not offered to the cron sweep until some other
+   * mention arrived with no analysis at all. The two arms are independent,
+   * not one predicate with a single `not exists`: a mention can hold an
+   * older settled row and a newer pending one at once (re-analysis is
+   * schema-legal for an already-settled mention), so "no settled row exists"
+   * alone would miss it. The function and the demo twin both check
+   * `not exists (settled) or exists (pending)` — never `not exists (settled)`
+   * by itself.
    *
    * The one deliberately unscoped read on this repository — mirrors
    * `MonitoringQueryRepository.listDue`. Cron holds no membership and cannot
@@ -547,7 +599,21 @@ export interface MentionRepository {
     profileIds: string[],
   ): Promise<Record<string, number>>;
   /**
-   * Mentions that have never been analysed, oldest first.
+   * Mentions needing analysis work, oldest first.
+   *
+   * "Needing analysis work" is **no analysis row, or a latest row whose
+   * outcome was never applied** — not simply "never analysed". A recorded
+   * occurrence is pending until `applyAnalysisOccurrence` stamps it, so a
+   * crash in that window leaves a durable classification whose escalation,
+   * transition, and denormalised columns never happened. From the outside that
+   * row is indistinguishable from a finished one, and the narrower selection
+   * would drop the mention out of the queue forever. Widening here is what
+   * makes recovery a property of the system rather than of an operator
+   * noticing.
+   *
+   * A mention carries at most one pending occurrence (the database enforces
+   * it), so "the latest row is pending" and "some row is pending" are the same
+   * set, and recovery always has exactly one thing to finish.
    *
    * Oldest-first so a backlog drains in arrival order rather than the newest
    * batch being re-analysed while older mentions never surface.
@@ -558,7 +624,14 @@ export interface MentionRepository {
   listUnanalyzed(scope: OrganizationScope, limit: number): Promise<Mention[]>;
   countUnanalyzed(scope: OrganizationScope): Promise<number>;
   /**
-   * Record an analysis.
+   * Record an analysis, unconditionally — **not the pipeline's path.**
+   *
+   * A raw append with no event key and no lifecycle: it leaves the row pending
+   * and takes no part in the one-pending-per-mention invariant, so two calls
+   * for one mention produce a state the database's `mention_analyses_one_pending`
+   * index forbids. `recordAnalysisOccurrence` is what the analysis service uses
+   * and what anything writing a new occurrence should use. This survives as the
+   * seam tests use to construct a pending occurrence deliberately.
    *
    * Append-only: re-analysing inserts a new row rather than overwriting, so a
    * prompt or model change stays auditable and readers take the latest.
@@ -568,22 +641,42 @@ export interface MentionRepository {
     input: CreateMentionAnalysisInput,
   ): Promise<MentionAnalysis>;
   /**
-   * Write the fields an analysis owns.
+   * Record an analysis occurrence, or load the one already recorded.
    *
-   * Deliberately not `create`, and deliberately not a general update. An
-   * analysis owns exactly these four columns; it may not touch content,
-   * rating, author, or any source-owned field. That is the mirror of the rule
-   * workflow 03 established for syncs, and like that one it is enforced by the
-   * input type rather than by care at the call site.
+   * The mirror of `record_analysis_occurrence`. A logical analysis event is
+   * (organization, run, mention): every pipeline recording happens inside a
+   * run, so the run id is the identity every recorder of the same event
+   * carries. Recording is therefore idempotent under every arrival order,
+   * including a recorder arriving after the event already completed —
+   * `created: false` with the stored row, whose output the caller uses instead
+   * of its own.
    *
-   * `status` advances only from `new`, so a mention somebody has already
-   * escalated, dismissed, or responded to keeps the state that person set.
+   * Separately, a mention may have only one *pending* occurrence (one whose
+   * outcome has not been applied), so recovery always has exactly one thing to
+   * finish. A later event arriving while one is pending is handed the pending
+   * row, and the caller completes that first.
    */
-  applyAnalysisOutcome(
+  recordAnalysisOccurrence(
     scope: OrganizationScope,
-    mentionId: string,
-    outcome: MentionAnalysisOutcome,
-  ): Promise<Mention>;
+    input: CreateMentionAnalysisInput,
+  ): Promise<RecordAnalysisOccurrenceResult>;
+  /**
+   * Apply one occurrence's outcome: the atomic analysis entry point.
+   *
+   * The mirror of `apply_analysis_occurrence`. Eligibility, the escalation
+   * decision, the mention transition, the denormalised columns, the
+   * occurrence's completion stamp, and the escalation's audit event are one
+   * unit. Replaying a completed occurrence has zero effects.
+   *
+   * Together with `AutomationRuleExecutionRepository.executeUnit` this is one
+   * of the only two ways an escalation is created. In Postgres that is
+   * enforced by grant — `raise_escalation` is executable by neither the
+   * application role nor anything it can call directly.
+   */
+  applyAnalysisOccurrence(
+    scope: OrganizationScope,
+    input: ApplyAnalysisOccurrenceInput,
+  ): Promise<ApplyAnalysisOccurrenceResult>;
   updateStatus(
     scope: OrganizationScope,
     mentionId: string,
@@ -646,18 +739,26 @@ export interface EscalationRepository {
   list(scope: OrganizationScope, filter?: EscalationFilter): Promise<Escalation[]>;
   get(scope: OrganizationScope, escalationId: string): Promise<Escalation | null>;
   /**
-   * Raise an escalation.
+   * The escalation ladder — **not a production path**.
    *
-   * Refuses when the mention already has one, rather than creating a second.
-   * A restaurant with two open cases for one review is a queue nobody trusts,
-   * and re-running an analysis must not produce that. Returns the existing
-   * escalation instead, so the caller can tell "already raised" from "raised
-   * now" by comparing ids.
+   * Escalations are created by exactly two entry points: `applyAnalysisOccurrence`
+   * (analysis) and `executeUnit` (automation). Both reach the ladder internally;
+   * nothing else may. The Supabase adapter enforces that by refusing this method
+   * outright (`unavailable`), which matches the database, where `raise_escalation`
+   * is executable by no application role and INSERT on `escalations` is revoked.
+   *
+   * The demo adapter keeps it working as the in-memory twin's seam — it has no
+   * privilege system to enforce anything with, and its tests need a way to seed
+   * a case — and it runs the exact ladder: provenance → occurrence replay →
+   * dismissed → open dedupe → awaiting re-triage → create.
+   *
+   * The result names which arm answered. `escalation` is null exactly on a hard
+   * refusal; a refusal never answers with somebody else's case.
    */
   create(
     scope: OrganizationScope,
     input: CreateEscalationInput,
-  ): Promise<{ escalation: Escalation; created: boolean }>;
+  ): Promise<RaiseEscalationResult>;
   updateStatus(
     scope: OrganizationScope,
     escalationId: string,
@@ -682,16 +783,31 @@ export interface FinalizeSweepInput {
   errorCode?: string | null;
 }
 
+/**
+ * A unit of execution: which rule, at which revision, against which mention,
+ * on the authority of which analysis occurrence.
+ *
+ * Five identifiers and no actions. What runs is whatever the *stored* revision
+ * says — the caller names a unit, it never defines one — so a sweep cannot
+ * execute a list of actions the rule does not currently hold, and a snapshot
+ * that has gone stale fails the unit (`rule_changed`) instead of quietly
+ * applying yesterday's configuration.
+ */
 export interface ExecuteUnitInput {
+  /**
+   * The sweep making this attempt — the **attemptSweepId**. The row keeps the
+   * sweep that first claimed the unit (its **originSweepId**), so a retry from
+   * a later sweep leaves the two different, and both are recorded in the audit
+   * trail.
+   */
   sweepId: string;
   automationRuleId: string;
   ruleRevision: number;
   mentionId: string;
   triggerAnalysisId: string;
-  /** The revision snapshot's actions, in order. */
-  actions: RuleAction[];
 }
 
+/** The same unit key, plus what the dry run projected for it. */
 export interface RecordProjectionInput extends ExecuteUnitInput {
   status: DryRunExecutionStatus;
   outcomes: ExecutionActionOutcome[];

@@ -92,7 +92,7 @@ analyzeMentions(context, { limit, trigger })
   |- rating-only mentions first        <- free, no model call, cannot fail on the provider
   |- first model call alone            <- writes the prompt cache
   |- remaining, 4 at a time            <- read the cache
-  |- per mention: escalation -> mention update -> analysis insert
+  |- per mention: record the occurrence (or recover a pending one) -> apply in one transaction
   |- finish the run + audit event
 ```
 
@@ -137,24 +137,51 @@ queue with cases nobody can act on, which is how a queue stops being read.
 
 ## 5. What a successful analysis writes
 
-Three writes per mention, in this order:
+Every mention goes through the **occurrence lifecycle** (landed with G1,
+D160/D161), which replaced the old three-independent-writes reasoning
+below rather than merely reordering it. `analyzeOne` in
+`src/lib/analysis/analyze.ts` is the source of truth this section restates;
+its own doc comment carries the full crash matrix.
 
-1. **Escalation** — only at `high`/`critical` risk, and only when the mention
-   has none. Created `open` and **unassigned**.
-2. **Mention update** — `sentiment`, `risk_level`, `relevance_score`, and
-   `status` advanced **only from `new`**.
-3. **`mention_analyses` insert** — append-only. **This is the commit point.**
+```text
+record (insert-or-load on the event key) -> apply (one Postgres transaction)
+```
 
-Selection is "mentions with no analysis row", so the insert is what makes a
-mention done. There is no transaction available (decision D17: the demo adapter
-has none and PostgREST exposes none), so this ordering is what makes a partial
-failure safe — die before the insert and the mention is simply picked up again,
-where the escalation dedupe and the idempotent mention update absorb the repeat.
-The cost of a mid-item crash is one repeated model call.
+1. **Record.** `record_analysis_occurrence` inserts the classification —
+   sentiment, risk, topics, recommended action, token counts — keyed on the
+   *logical event* `(organization, analysis run, mention)`. Recording is
+   idempotent on that key: a repeated recorder for the same event is handed
+   back the row that already exists and discards its own output. The row is
+   **pending** until applied.
+2. **Apply.** `apply_analysis_occurrence` applies the escalation decision —
+   only at `high`/`critical` risk, and only when the mention has no *open*
+   escalation already (§6: closed cases no longer block, D158); created
+   `open` and **unassigned** — together with the mention's status
+   transition, the denormalised `sentiment`/`risk_level`/`relevance_score`
+   columns, the completion stamp, and the escalation's own audit event, all
+   inside **one Postgres transaction**. There is no window in which one of
+   these exists without the rest.
 
-The reverse order is the tempting one and it is wrong: analysis-first means a
-failure at step 2 leaves a mention that *looks* analysed, never receives its
-risk level, and is never selected again — the guardrail failing silently.
+Selection is "no analysis row **or** a pending one" — a mention whose
+occurrence was recorded but never applied is picked up again, not skipped —
+so a mention is done only once `outcome_applied_at` is set.
+
+### What each crash costs
+
+| When | Cost |
+| --- | --- |
+| Before recording | Nothing durable exists. The mention is still in the queue; the next run classifies it. |
+| Between recording and apply | The classification is durable, the outcome is not. The next run re-picks the mention, finds its latest occurrence pending, skips classification entirely — the model call is already paid for and its answer stored — and applies that same occurrence under its original id. |
+| Mid-apply | The transaction rolls back whole: no state exists where the escalation is created and the mention transition is not, or the reverse. The occurrence stays pending and recovers exactly as above. |
+| After apply | A replay reports the occurrence already applied, with zero further effects and zero further events, whatever a person has done to the mention since. |
+
+This gets to the same place the old ordering (escalation → mention update →
+analysis insert, D42) was reaching for without a transaction available at
+the repository layer (decision D17): a crash that costs at most one
+repeated model call, never a mention that looks analysed and never gets its
+risk level. The lifecycle gets there by removing the ordering choice
+instead of optimising it — see D160–D161 in
+`docs/architecture/current-state.md`.
 
 ### The ownership line
 
@@ -162,14 +189,29 @@ Workflow 03 established that **a sync may not write Lia state**. This workflow
 establishes the mirror: **an analysis may not write source state.**
 
 Analysis never touches `content`, `rating`, `author_name`, `published_at`, or
-any `source_*` column. `MentionAnalysisOutcome` has fields for exactly four
-columns, so the guarantee is structural rather than a rule a call site has to
-remember.
+any `source_*` column. `MentionAnalysisOutcome` (workflow 04) had fields for
+exactly four columns, so the guarantee was structural rather than a rule a
+call site has to remember. Its successor since the G1 occurrence lifecycle,
+`ApplyAnalysisOccurrenceInput` (the parameter list of
+`apply_analysis_occurrence` — see `docs/architecture/current-state.md`
+D160/D161), carries the same four columns and nothing else — and now also
+has no `status` field: the final mention status is derived inside the
+database from current state and the escalation contract's result, never
+supplied by the caller. The structural guarantee this section describes now
+covers both what an analysis may write and what it may decide.
 
-Advancing status only from `new` means a mention somebody has escalated,
-dismissed, or responded to keeps the state that person set. In Postgres this is
-`eq("status", "new")` in the update itself rather than a read-then-write, so a
-race resolves in the person's favour.
+The status a mention advances to is no longer a call site's conditional
+update. `apply_analysis_occurrence` derives it inside the same transaction
+from the mention's *current* status and the escalation ladder's own result
+(D161): a `new` mention with no escalation becomes `analyzed`; a mention
+that gets an escalation — freshly created or already existing — becomes
+`escalated`; every other current status is preserved outright, including
+`dismissed` and anything a person already set. That preservation is what
+keeps a mention somebody has escalated, dismissed, or responded to holding
+the state that person set — the same promise an application-level
+`eq("status", "new")` update once made, now made by the database inside the
+transaction that also decides the escalation, so there is no longer a race
+between the two to resolve.
 
 ## 6. Escalation
 
@@ -179,9 +221,18 @@ spec's promise that high-risk content is always escalated.
 - **`open` and unassigned.** An unowned item in the escalations centre is
   precisely the "somebody must look at this" signal; a default owner would make
   it look handled. Assignment stays a human decision.
-- **One per mention.** A mention that already has an escalation gets none —
-  two open cases for one review is a queue nobody trusts, and a re-run must not
-  produce that.
+- **One *open* escalation per mention, not one ever.** A mention that already
+  has an open escalation gets none — two open cases for one review is a queue
+  nobody trusts, and a re-run must not produce that. A **closed** case no
+  longer blocks: re-escalation is possible, but only through a human closing
+  the old escalation, a human re-triaging the mention off `escalated` (the
+  transition matrix refuses `escalate` from `escalated`, and permanently from
+  `dismissed`), and a genuinely new analysis occurrence recording a change.
+  This is the G1 escalation contract (D158/D159 in
+  `docs/architecture/current-state.md`), enforced by a partial unique index
+  — at most one *open* escalation per mention — rather than a read-then-check;
+  it superseded an earlier any-escalation dedupe that permanently capped a
+  mention at one case for its lifetime.
 - **No due date.** Inventing an SLA the organization never agreed to would put
   a deadline in the queue that nobody set and nobody owns.
 - **Title derived when the model omits one.** `escalations.title` is `not null`
@@ -249,7 +300,7 @@ database.
 | --- | --- |
 | `analyzed` | Classified by the model. |
 | `heuristic` | Classified by the rating heuristic, with no model call. |
-| `escalated` | Escalations **this run** raised. A mention that already had one is not counted. |
+| `escalated` | Escalations **this run** raised. A mention that already has an *open* escalation is not counted; one whose only escalation is closed can be. |
 | `failed` | Could not be classified. Still unanalysed, so a later run retries. |
 | `remaining` | Backlog left after the cap, plus anything a fatal error stopped it reaching. |
 

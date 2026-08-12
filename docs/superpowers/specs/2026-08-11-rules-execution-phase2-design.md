@@ -458,6 +458,24 @@ metadata, and log lines.
 All applied to the hosted project only after P0-2 (reset + harness) passes
 locally.
 
+**As implemented, six migrations landed for G1** (`20260812000100` through
+`20260812000600`), not a literal renumbering of items 4–6 above: Q7's
+resolution (D158) was decided *after* this plan's migration list was
+written, so the shared escalation contract and the occurrence-identity
+lifecycle it depends on — `record_analysis_occurrence`,
+`apply_analysis_occurrence`, `raise_escalation`, the open-only partial
+unique index — landed as its own migration
+(`20260812000300_escalation_contract.sql`), a piece of scope this list did
+not anticipate. The order also differs from the sequence above: audit
+vocabulary and audit hardening (items 5–6 here) landed first
+(`20260812000100`–`000200`), then the escalation contract
+(`20260812000300`), then the transition matrix in SQL and the execution RPC
+(`20260812000400`–`000500`, item 4 here), then atomic sweep claiming
+(`20260812000600`, not named above at all). See D159–D165 in
+`docs/architecture/current-state.md` for what each does and why; the
+Internal-apply runbook there (same document) records the push order and
+pre-push gates.
+
 ### Implementation order
 
 1. **G0 block — implemented (worktree `rules-execution-g0`, Tasks 1–13):**
@@ -473,10 +491,28 @@ locally.
    *Releasable: dry run internally.* Decision-ledger entries D148–D155 in
    `docs/architecture/current-state.md` record what shipped and why;
    `apply` is not enabled anywhere by this block.
-2. **G1 block — not started:** migration 4 (RPC) + Supabase adapter;
-   migration 5; migration 6 + audit adapter change; P0-4 location-scoping
-   action fixes; full §11 test suite; `apply` for the internal organization
-   via allowlist.
+2. **G1 block — implemented (this worktree, Tasks 1–13):** migration 5
+   (audit vocabulary, `20260812000100`) — done (Task 1); migration 6 + audit
+   adapter change (`20260812000200`) — done (Task 2); P0-4 location-scoping
+   action fixes — done (Task 3); the shared escalation contract and
+   occurrence-identity lifecycle (`20260812000300`, scope Q7's resolution
+   added after this list was written — see the migrations note above) —
+   done, SQL (Task 4) + TypeScript contract mirror and scenario matrix (Task
+   5) + the analysis service rebuilt on the lifecycle (Task 6); the
+   transition matrix restated in SQL with the generated parity file
+   (`20260812000400`) — done (Task 7); migration 4, the execution RPC
+   (`20260812000500`) — done, SQL (Task 8) + Supabase adapter entry points
+   (Task 10); atomic sweep claiming and activity support
+   (`20260812000600`, not named in the original migration list) — done
+   (Task 9); full §11 test suite — done, the DB harness and concurrency
+   proofs (Task 11) plus the CI database job running it on every PR (Task
+   12); `apply` for the internal organization via allowlist — **not enabled
+   by this worktree.** Turning it on for the founder/test organization is an
+   operator action against the runbook in `docs/architecture/current-state.md`
+   ("Internal-apply runbook (G1)"), gated on the hosted project receiving
+   these six migrations and passing that runbook's pre-push checks — neither
+   of which this worktree does. Decision-ledger entries D159–D165 record
+   what shipped and why.
 3. **G2 block (its own plan) — not started:** F17 inventory
    re-verification; per-path transactional RPCs for the overlapping
    mutations; database-level location authorization for mention/escalation
@@ -487,7 +523,10 @@ locally.
    mode-aware empty states) — lands with block 1 for dry-run visibility —
    done (Task 12).
 5. Docs: decision-ledger entries; current-state updates; this plan marked
-   implemented per gate — done (Task 13, this update).
+   implemented per gate — done for G0 (worktree `rules-execution-g0`, Task
+   13); done for G1 (this worktree, Task 13, this update) — D159–D165, the
+   Internal-apply runbook, the D39 trail amendment, and this section's own
+   per-line marks.
 
 ### Tests
 
@@ -619,3 +658,31 @@ The G3 retrofit workstream is acknowledged, gated, and not planned here.
     rule-driven re-escalation after close-and-retriage; and
     **false-positive re-escalation recorded as an apply-phase watch
     item** for the internal-organization rollout.
+  - **Occurrence-lifecycle addendum (landed with G1, D160):** when this
+    resolution was written, `escalations` carried no `trigger_analysis_id`
+    column at all, so "the analysis path's crash-retry story survives
+    unchanged" above was a statement about intended behavior, not a
+    mechanism that existed yet. This addendum adds the mechanism: an
+    explicit event-keyed identity, the logical event key
+    `(organization_id, analysis_run_id, mention_id)` — unique in the
+    database regardless of lifecycle state — carried on `escalations` as
+    `trigger_analysis_id`, composite-FK-validated against its own mention
+    and organization. The column itself is **nullable** (historical rows
+    predating `20260812000300` are legitimately null); non-nullness for
+    every *new* escalation is not a column constraint but a procedural
+    guarantee: `raise_escalation` — the sole creator of escalation rows,
+    per D159 — raises `22004` outright when handed a null occurrence id,
+    and the grant posture backs that up structurally, not just by
+    convention: `insert` on `escalations` is revoked from every role
+    including `service_role`, and `raise_escalation` itself is granted to
+    nobody, not even `service_role`, so the only path to a new escalation
+    row is through `apply_analysis_occurrence` or `execute_automation_rule`
+    — both `security definer`, both always supplying a non-null occurrence
+    id. Pending (`outcome_applied_at is null`) remains a real,
+    separately-enforced invariant (`mention_analyses_one_pending`), but it
+    answers a different question — "what does recovery finish next" — and
+    was never the identity a re-escalation or a retry is keyed against.
+    This is what makes the safeguard above load-bearing rather than
+    aspirational: a genuinely new analysis occurrence is a new, durable
+    event key, provably distinct from the occurrence any prior escalation
+    already carries.

@@ -8,7 +8,7 @@ import {
 import {
   requiresEscalation,
   toAnalysisInput,
-  toEscalationInput,
+  toEscalationDecision,
 } from "@/lib/analysis/normalize";
 import { renderMention } from "@/lib/analysis/prompt";
 import type { MentionAnalysisOutput } from "@/lib/analysis/schema";
@@ -25,6 +25,8 @@ import { SEED_DATASET } from "@/lib/seed/dataset";
  */
 
 const MENTION = SEED_DATASET.mentions[0]!;
+/** The run a recording belongs to: identity the contract now requires. */
+const RUN_ID = "3f1a6f6c-9a1e-4b5e-8f3a-1d2c3b4a5e6f";
 
 function mention(overrides: Partial<Mention> = {}): Mention {
   return { ...MENTION, ...overrides };
@@ -119,7 +121,9 @@ describe("the rating heuristic", () => {
 describe("normalising an analysis", () => {
   const base = {
     mentionId: MENTION.id,
-    analysisRunId: null,
+    // Non-null since the escalation contract: the run id is half the identity
+    // of the analysis event, so a recording without one has none.
+    analysisRunId: RUN_ID,
     modelProvider: "anthropic",
     modelName: "claude-opus-5",
     inputTokens: 1200,
@@ -209,66 +213,102 @@ describe("deriving an escalation", () => {
     expect(requiresEscalation("high")).toBe(true);
   });
 
-  it("raises none for medium and low", () => {
+  it("escalates nothing below the threshold", () => {
     // The decision lives in the normaliser so a call site cannot escalate a
     // low-risk mention by mistake.
     expect(requiresEscalation("medium")).toBe(false);
     expect(requiresEscalation("low")).toBe(false);
     expect(
-      toEscalationInput(output({ riskLevel: "medium" }), mention(), location),
-    ).toBeNull();
+      toEscalationDecision(output({ riskLevel: "medium" }), location, null)
+        .shouldEscalate,
+    ).toBe(false);
   });
 
-  it("uses the model's title when it gave one", () => {
-    const result = toEscalationInput(
-      output({
-        riskLevel: "critical",
-        riskCategories: ["food_safety"],
-        escalationTitle: "Allergic reaction after shellfish dish",
-      }),
-      mention(),
+  it("still fills the escalation fields when it is not escalating", () => {
+    // The contract's entry point takes them either way, as its SQL twin does,
+    // and simply does not read them. A caller that filled them in only "when
+    // escalating" would be taking the decision the contract owns.
+    const result = toEscalationDecision(
+      output({ riskLevel: "low", riskCategories: [] }),
       location,
+      null,
     );
 
-    expect(result?.title).toBe("Allergic reaction after shellfish dish");
-    expect(result?.category).toBe("food_safety");
-    expect(result?.severity).toBe("critical");
+    expect(result.shouldEscalate).toBe(false);
+    expect(result.severity).toBe("low");
+    expect(result.title).toBeTruthy();
   });
 
-  it("derives a title when the model omitted one", () => {
-    // escalations.title is NOT NULL with a length check, so an empty title
-    // would fail the insert and the escalation would silently not exist.
-    const result = toEscalationInput(
+  it("uses the model's title when this run produced one", () => {
+    const result = toEscalationDecision(
+      output({ riskLevel: "critical", riskCategories: ["food_safety"] }),
+      location,
+      "Allergic reaction after shellfish dish",
+    );
+
+    expect(result.title).toBe("Allergic reaction after shellfish dish");
+    expect(result.category).toBe("food_safety");
+    expect(result.severity).toBe("critical");
+    expect(result.shouldEscalate).toBe(true);
+  });
+
+  it("derives a title when there is none to use", () => {
+    // Either the model omitted one, or this is a recovered occurrence, whose
+    // title was never a stored column. `escalations.title` is NOT NULL with a
+    // length check, so an empty title would fail the insert and the escalation
+    // would silently not exist.
+    const result = toEscalationDecision(
       output({ riskLevel: "high", riskCategories: ["injury"] }),
-      mention(),
       location,
+      null,
     );
 
-    expect(result?.title).toContain("Injury risk");
-    expect(result?.title).toContain(location.name);
+    expect(result.title).toContain("Injury risk");
+    expect(result.title).toContain(location.name);
+  });
+
+  it("reads a stored occurrence exactly as it reads fresh output", () => {
+    // Recovery's whole premise: the row is all that is left, and the case it
+    // authorizes must come out the same.
+    const stored = {
+      riskLevel: "critical" as const,
+      riskCategories: ["food_safety"],
+      riskExplanation: "A guest reported an allergic reaction.",
+    };
+
+    const result = toEscalationDecision(stored, location, null);
+
+    expect(result.shouldEscalate).toBe(true);
+    expect(result.category).toBe("food_safety");
+    expect(result.summary).toBe("A guest reported an allergic reaction.");
+    expect(result.title).toContain("Food safety risk");
   });
 
   it("falls back to `other` when the model named no category", () => {
-    const result = toEscalationInput(
+    const result = toEscalationDecision(
       output({ riskLevel: "critical", riskCategories: [] }),
-      mention(),
       location,
+      null,
     );
 
-    expect(result?.category).toBe("other");
-    expect(result?.title).toBeTruthy();
+    expect(result.category).toBe("other");
+    expect(result.title).toBeTruthy();
   });
 
-  it("sets no due date", () => {
-    // Inventing an SLA the organization never agreed to would put a deadline
-    // in the escalations centre that nobody set and nobody owns.
-    const result = toEscalationInput(
-      output({ riskLevel: "critical" }),
-      mention(),
+  it("ignores a category outside the vocabulary", () => {
+    // A model that invented one must not put a value the database would
+    // reject into a case, and must not lose the escalation over it either.
+    const result = toEscalationDecision(
+      {
+        riskLevel: "critical",
+        riskCategories: ["kitchen_fire", "injury"],
+        riskExplanation: null,
+      },
       location,
+      null,
     );
 
-    expect(result?.dueAt).toBeNull();
+    expect(result.category).toBe("injury");
   });
 });
 

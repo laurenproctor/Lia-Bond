@@ -6,7 +6,6 @@ import {
   BRAND_VOICE_AXIS_KEYS,
   canDecideOnDraft,
   canEditDraft,
-  createEscalationInputSchema,
   createLocationInputSchema,
   createMentionAnalysisInputSchema,
   createMentionInputSchema,
@@ -19,6 +18,7 @@ import {
   isSuccessfulSyncRun,
   isSyncRunStale,
   firstIncompleteStep,
+  OPEN_ESCALATION_STATUSES,
   recordAuditEventInputSchema,
   requiresResolutionNote,
   sourceFieldsChanged,
@@ -30,10 +30,12 @@ import {
   type AnalysisRun,
   type Approval,
   type BrandVoiceProfile,
+  type EscalationRefusalReason,
   type Invitation,
   type InvitationPreview,
   type Mention,
   type MentionAnalysis,
+  type MentionStatus,
   type OrganizationOnboarding,
   type PlatformSyncRun,
   type ResponseDraft,
@@ -58,6 +60,7 @@ import {
 } from "@/lib/data/types";
 import {
   mapAutomationRuleExecution,
+  mapAutomationSweep,
   toAnalysisRun,
   toApproval,
   toAuditEvent,
@@ -100,6 +103,26 @@ type Row = Record<string, unknown>;
 
 function rows(data: unknown): Row[] {
   return Array.isArray(data) ? (data as Row[]) : [];
+}
+
+/**
+ * The one row an RPC returned, whichever shape PostgREST chose to send it in.
+ *
+ * A `returns table (...)` function is SETOF under the hood, so PostgREST
+ * answers with a JSON array even when exactly one row comes back
+ * (`record_analysis_occurrence`, `apply_analysis_occurrence`,
+ * `claim_automation_sweep`). A function declared `returns <composite type>`
+ * with no `SETOF` — `execute_automation_rule` — is not a set, so PostgREST
+ * answers with that row's JSON object directly, unwrapped. Both call sites
+ * want "the row, or null if none came back," so this normalises the two
+ * shapes rather than each call site guessing which one its function uses.
+ */
+function singleRow(data: unknown): Row | null {
+  if (Array.isArray(data)) {
+    const first = data[0];
+    return first && typeof first === "object" ? (first as Row) : null;
+  }
+  return data && typeof data === "object" ? (data as Row) : null;
 }
 
 function isoOrNull(value: unknown): string | null {
@@ -158,6 +181,22 @@ function fail(error: { message: string; code?: string }, action: string): never 
   }
   if (error.code === "42501" || error.code === "PGRST301") {
     throw new DataError("forbidden", "You don't have permission to do that.");
+  }
+  // P0002 is a Postgres `raise ... using errcode = 'P0002'` from inside a
+  // function — every entry-point RPC in this adapter raises it for "the row
+  // this call named isn't there" (a mention, an occurrence, a sweep). That is
+  // permanent, not transient: retrying with the same id fails the same way
+  // every time, so it is not `unavailable`.
+  if (error.code === "P0002") {
+    throw notFound("That record");
+  }
+  // 23503 is a foreign-key violation. Every FK this adapter's RPCs check at
+  // that errcode is a same-tenant/same-parent composite (a mention's
+  // organization, an occurrence's mention) — the caller named two things
+  // that do not belong together. Retrying unchanged fails the same way every
+  // time, so this is a caller mistake (`invalid_input`), not `unavailable`.
+  if (error.code === "23503") {
+    throw invalidInput("That reference does not belong together.");
   }
   throw new DataError("unavailable", `Could not ${action}. Please try again.`);
 }
@@ -329,25 +368,39 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
   }
 
   /** Mention ids that already carry an analysis. One indexed column read. */
-  async function fetchAnalyzedMentionIds(
+  /**
+   * Mentions with no analysis work left — the complement of the backlog.
+   *
+   * Not "mentions with an analysis row": a row whose `outcome_applied_at` is
+   * null is a *pending* occurrence, meaning the classification is durable and
+   * its escalation, transition, and denormalised columns are not. Counting it
+   * as settled is what would hide a crashed apply forever. A mention is
+   * settled when it has at least one applied occurrence and no pending one —
+   * and since the database allows only one pending occurrence per mention, the
+   * pending set is what recovery has to finish.
+   */
+  async function fetchSettledMentionIds(
     scope: OrganizationScope,
   ): Promise<string[]> {
     const { data, error } = await client
       .from("mention_analyses")
-      .select("mention_id")
+      .select("mention_id, outcome_applied_at")
       .eq("organization_id", scope.organizationId);
 
     if (error) fail(error, "load the analyzed mentions");
 
     // Distinct: the table is append-only, so a re-analysed mention appears
     // more than once and would otherwise inflate the backlog arithmetic.
-    return [
-      ...new Set(
-        rows(data).flatMap((row) =>
-          typeof row.mention_id === "string" ? [row.mention_id] : [],
-        ),
-      ),
-    ];
+    const settled = new Set<string>();
+    const pending = new Set<string>();
+
+    for (const row of rows(data)) {
+      if (typeof row.mention_id !== "string") continue;
+      if (row.outcome_applied_at === null) pending.add(row.mention_id);
+      else settled.add(row.mention_id);
+    }
+
+    return [...settled].filter((mentionId) => !pending.has(mentionId));
   }
 
   async function fetchMentions(scope: OrganizationScope): Promise<Mention[]> {
@@ -1715,29 +1768,59 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         const mention = await this.get(scope, mentionId);
         if (!mention) return null;
 
-        const [analysis, draftResult, escalationResult, locationResult, connectionResult] =
-          await Promise.all([
-            this.latestAnalysis(scope, mentionId),
-            from("response_drafts", scope)
-              .eq("mention_id", mentionId)
-              .order("created_at", { ascending: false }),
-            from("escalations", scope).eq("mention_id", mentionId).maybeSingle(),
-            mention.locationId
-              ? from("locations", scope).eq("id", mention.locationId).maybeSingle()
-              : Promise.resolve({ data: null, error: null }),
-            from("platform_connections", scope)
-              .eq("id", mention.platformConnectionId)
-              .maybeSingle(),
-          ]);
+        const [
+          analysis,
+          draftResult,
+          openEscalationResult,
+          latestEscalationResult,
+          locationResult,
+          connectionResult,
+        ] = await Promise.all([
+          this.latestAnalysis(scope, mentionId),
+          from("response_drafts", scope)
+            .eq("mention_id", mentionId)
+            .order("created_at", { ascending: false }),
+          // The case a reader is looking for: the open one if there is one,
+          // otherwise the most recent piece of history. A mention carries at
+          // most one *open* case but may have carried several over its life
+          // — a resolved one, then a new occurrence raising another — so
+          // this is two bounded reads with an explicit preference between
+          // them, not a `maybeSingle()` that would error the moment a second
+          // case exists. They run in parallel, so the fallback costs no
+          // extra round trip. The demo adapter's `currentEscalationFor`
+          // orders the same way.
+          from("escalations", scope)
+            .eq("mention_id", mentionId)
+            .in("status", [...OPEN_ESCALATION_STATUSES])
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
+            .limit(1)
+            .maybeSingle(),
+          from("escalations", scope)
+            .eq("mention_id", mentionId)
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
+            .limit(1)
+            .maybeSingle(),
+          mention.locationId
+            ? from("locations", scope).eq("id", mention.locationId).maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+          from("platform_connections", scope)
+            .eq("id", mention.platformConnectionId)
+            .maybeSingle(),
+        ]);
 
         if (draftResult.error) fail(draftResult.error, "load responses");
+
+        const currentEscalation =
+          openEscalationResult.data ?? latestEscalationResult.data;
 
         return {
           mention,
           analysis,
           drafts: rows(draftResult.data).map(toResponseDraft),
-          escalation: escalationResult.data
-            ? toEscalation(escalationResult.data as Row)
+          escalation: currentEscalation
+            ? toEscalation(currentEscalation as Row)
             : null,
           location: locationResult.data ? toLocation(locationResult.data as Row) : null,
           connection: connectionResult.data
@@ -1938,26 +2021,30 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       /**
-       * The unanalysed backlog, oldest first.
+       * The backlog a run would pick up, oldest first.
+       *
+       * "Needing analysis work" is no analysis row *or* a pending occurrence,
+       * so this excludes only the settled mentions — see
+       * `fetchSettledMentionIds` for why the distinction is load-bearing.
        *
        * Two queries rather than a join: PostgREST has no `not exists`, and
-       * pulling the analysed ids is a single indexed column read against
+       * pulling the settled ids is a two-column read against
        * `mention_analyses_mention_idx`. At the volume a per-organization
        * inbox reaches this is cheap; past that it becomes a view, and the
        * signature does not change.
        */
       async listUnanalyzed(scope, limit) {
-        const analyzedIds = await fetchAnalyzedMentionIds(scope);
+        const settledIds = await fetchSettledMentionIds(scope);
 
         let query = from("mentions", scope).order("published_at", {
           ascending: true,
         });
 
-        if (analyzedIds.length > 0) {
+        if (settledIds.length > 0) {
           query = query.not(
             "id",
             "in",
-            `(${analyzedIds.map((id) => `"${id}"`).join(",")})`,
+            `(${settledIds.map((id) => `"${id}"`).join(",")})`,
           );
         }
 
@@ -1967,8 +2054,8 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       async countUnanalyzed(scope) {
-        const [analyzedIds, total] = await Promise.all([
-          fetchAnalyzedMentionIds(scope),
+        const [settledIds, total] = await Promise.all([
+          fetchSettledMentionIds(scope),
           (async () => {
             const { count, error } = await client
               .from("mentions")
@@ -1980,9 +2067,9 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           })(),
         ]);
 
-        // Analysed ids are distinct per mention, and every analysis belongs to
+        // Settled ids are distinct per mention, and every analysis belongs to
         // a mention in the same organization, so the difference is exact.
-        return Math.max(0, total - analyzedIds.length);
+        return Math.max(0, total - settledIds.length);
       },
 
       async createAnalysis(scope, input) {
@@ -2031,49 +2118,97 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
       },
 
       /**
-       * Write the four columns an analysis owns.
+       * Record an occurrence, or load the one already recorded.
        *
-       * The column list is the guarantee. `content`, `rating`, `author_name`,
-       * `published_at`, and every `source_*` column are absent, so an analysis
-       * cannot overwrite what a sync imported — the mirror of the rule that
-       * keeps a sync out of Lia's workflow state.
-       *
-       * The `status` filter is applied in the query rather than read-then-write:
-       * `eq("status", "new")` means a mention somebody moved in the meantime is
-       * not matched at all, so the race resolves in the person's favour.
+       * The mirror of `record_analysis_occurrence`: idempotent on the event key
+       * (organization, run, mention), and handed the pending row instead when a
+       * *different* event is still unapplied for this mention. Runs under the
+       * service role — this is called from the analysis pipeline, a background
+       * job with no user session — and the confirming read that follows uses
+       * the service role too, for the same reason, scoped by `organization_id`
+       * exactly like every other query in this adapter.
        */
-      async applyAnalysisOutcome(scope, mentionId, outcome) {
-        const sourceUntouched = {
-          sentiment: outcome.sentiment,
-          risk_level: outcome.riskLevel,
-          relevance_score: outcome.relevanceScore,
+      async recordAnalysisOccurrence(scope, input) {
+        const value = createMentionAnalysisInputSchema.parse(input);
+
+        const { data, error } = await serviceClient().rpc("record_analysis_occurrence", {
+          p_organization_id: scope.organizationId,
+          p_mention_id: value.mentionId,
+          p_analysis_run_id: value.analysisRunId,
+          p_model_provider: value.modelProvider,
+          p_model_name: value.modelName,
+          p_prompt_version: value.promptVersion,
+          p_relevance_score: value.relevanceScore,
+          p_relevance_explanation: value.relevanceExplanation,
+          p_sentiment: value.sentiment,
+          p_sentiment_score: value.sentimentScore,
+          p_risk_level: value.riskLevel,
+          p_risk_categories: value.riskCategories,
+          p_risk_explanation: value.riskExplanation,
+          p_topics: value.topics,
+          p_facts_needing_verification: value.factsNeedingVerification,
+          p_recommended_action: value.recommendedAction,
+          p_recommendation_explanation: value.recommendationExplanation,
+          p_analyzed_at: value.analyzedAt,
+        });
+
+        if (error) fail(error, "record the analysis");
+        const row = singleRow(data);
+        if (!row || typeof row.analysis_id !== "string") {
+          throw new DataError("unavailable", "Could not record the analysis. Please try again.");
+        }
+
+        // The function returns only the id and whether this call created it —
+        // the full row (needed either way, since a replay hands back the
+        // OTHER caller's output) is read back by that id.
+        const { data: analysisRow, error: readError } = await serviceClient()
+          .from("mention_analyses")
+          .select("*")
+          .eq("organization_id", scope.organizationId)
+          .eq("id", row.analysis_id)
+          .single();
+
+        if (readError) fail(readError, "load the recorded analysis");
+        return { analysis: toMentionAnalysis(analysisRow as Row), created: Boolean(row.created) };
+      },
+
+      /**
+       * Apply one occurrence's outcome: the atomic analysis entry point.
+       *
+       * The mirror of `apply_analysis_occurrence`. Everything — eligibility,
+       * the escalation decision, the mention transition, the denormalised
+       * columns, the occurrence's completion stamp, and the escalation's audit
+       * event — happens inside that one function call; this method only maps
+       * parameters in and the result row out.
+       */
+      async applyAnalysisOccurrence(scope, input) {
+        const { data, error } = await serviceClient().rpc("apply_analysis_occurrence", {
+          p_organization_id: scope.organizationId,
+          p_mention_id: input.mentionId,
+          p_analysis_id: input.analysisId,
+          p_should_escalate: input.shouldEscalate,
+          p_category: input.category,
+          p_severity: input.severity,
+          p_title: input.title,
+          p_summary: input.summary,
+          p_sentiment: input.sentiment,
+          p_risk_level: input.riskLevel,
+          p_relevance_score: input.relevanceScore,
+        });
+
+        if (error) fail(error, "apply the analysis");
+        const row = singleRow(data);
+        if (!row) {
+          throw new DataError("unavailable", "Could not apply the analysis. Please try again.");
+        }
+
+        return {
+          escalationId: (row.escalation_id as string | null) ?? null,
+          escalationCreated: Boolean(row.escalation_created),
+          reason: (row.reason as EscalationRefusalReason | null) ?? null,
+          alreadyApplied: Boolean(row.already_applied),
+          finalStatus: row.final_status as MentionStatus,
         };
-
-        const advanced = await client
-          .from("mentions")
-          .update({ ...sourceUntouched, status: outcome.status })
-          .eq("organization_id", scope.organizationId)
-          .eq("id", mentionId)
-          .eq("status", "new")
-          .select("*")
-          .maybeSingle();
-
-        if (advanced.error) fail(advanced.error, "record the analysis outcome");
-        if (advanced.data) return toMention(advanced.data as Row);
-
-        // Not `new` any more — a person has already moved it. The scores still
-        // apply; the status they chose stands.
-        const { data, error } = await client
-          .from("mentions")
-          .update(sourceUntouched)
-          .eq("organization_id", scope.organizationId)
-          .eq("id", mentionId)
-          .select("*")
-          .maybeSingle();
-
-        if (error) fail(error, "record the analysis outcome");
-        if (!data) throw notFound("Mention");
-        return toMention(data as Row);
       },
 
       async countByProfile(scope, profileIds) {
@@ -2315,51 +2450,24 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return data ? toEscalation(data as Row) : null;
       },
 
-      async create(scope, input) {
-        const value = createEscalationInputSchema.parse(input);
-
-        // Confirmed under the caller's own scope, so an escalation cannot be
-        // attached to another organization's mention.
-        const { data: mention, error: mentionError } = await from("mentions", scope)
-          .eq("id", value.mentionId)
-          .maybeSingle();
-
-        if (mentionError) fail(mentionError, "raise the escalation");
-        if (!mention) throw notFound("Mention");
-
-        // One per mention. Two open cases for one review is a queue nobody
-        // trusts, and a re-run must not produce that.
-        const { data: existing, error: existingError } = await from(
-          "escalations",
-          scope,
-        )
-          .eq("mention_id", value.mentionId)
-          .maybeSingle();
-
-        if (existingError) fail(existingError, "raise the escalation");
-        if (existing) {
-          return { escalation: toEscalation(existing as Row), created: false };
-        }
-
-        const { data, error } = await client
-          .from("escalations")
-          .insert({
-            organization_id: scope.organizationId,
-            mention_id: value.mentionId,
-            category: value.category,
-            severity: value.severity,
-            status: "open",
-            title: value.title,
-            summary: value.summary,
-            // Unassigned on purpose — see the domain schema's note.
-            assigned_user_id: null,
-            due_at: value.dueAt,
-          })
-          .select("*")
-          .single();
-
-        if (error) fail(error, "raise the escalation");
-        return { escalation: toEscalation(data as Row), created: true };
+      /**
+       * Closed. Escalations have exactly two creators.
+       *
+       * `20260812000300_escalation_contract.sql` revokes INSERT on
+       * `escalations` from every role and makes `raise_escalation` executable
+       * by none, so this method could no longer do what its name says: a
+       * PostgREST insert here returns a permission error from the database,
+       * which is a confusing way to state a deliberate rule. It states it
+       * instead. The paths that do create escalations are
+       * `mentions.applyAnalysisOccurrence` and
+       * `automationRuleExecutions.executeUnit`, each of which reaches
+       * `raise_escalation` from inside a single transactional entry point.
+       */
+      async create() {
+        throw new DataError(
+          "unavailable",
+          "Escalations are created only through analysis application or rule execution.",
+        );
       },
 
       async updateStatus(scope, escalationId, status, resolutionNote) {
@@ -2628,44 +2736,188 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return rows(data).map(toAutomationRule);
       },
 
-      async markActivity() {
-        // The G1 execution RPC writes this alongside the sweep it belongs to;
-        // no standalone write exists yet.
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+      /**
+       * Apply-mode activity stamps, monotonic (`greatest()` on the database
+       * side — not expressible through PostgREST, hence the RPC rather than a
+       * plain update). Silent on an unknown rule id, matching the SQL: the
+       * function's `where id = ... and organization_id = ...` simply touches
+       * zero rows, and the caller here is a sweep that already resolved the
+       * rule id from `listActiveForExecution` in the same organization.
+       */
+      async markActivity(scope, ruleId, input) {
+        const { error } = await serviceClient().rpc("automation_mark_activity", {
+          p_organization_id: scope.organizationId,
+          p_rule_id: ruleId,
+          p_at: input.at,
+          p_matched: input.matched,
+          p_applied: input.applied,
+        });
+
+        if (error) fail(error, "record rule activity");
       },
     },
 
     automationSweeps: {
-      async claim() {
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+      /**
+       * Claim the organization's sweep.
+       *
+       * `claim_automation_sweep` returns `table (sweep automation_sweeps,
+       * claimed boolean)` — a SETOF composite, so PostgREST answers with a
+       * one-element array whose `sweep` column nests as a JSON object (see
+       * `singleRow`'s doc comment). Rather than trust that nested shape in
+       * full, only its `id` is read out of the payload and the sweep row is
+       * then read back in full by that id — one extra indexed read per claim,
+       * cheap next to a sweep's own work, and it keeps this method correct
+       * even if PostgREST's composite-column representation ever changes.
+       */
+      async claim(scope, input) {
+        const { data, error } = await serviceClient().rpc("claim_automation_sweep", {
+          p_organization_id: scope.organizationId,
+          p_mode: input.mode,
+        });
+
+        if (error) fail(error, "claim the sweep");
+        const row = singleRow(data);
+        const sweepPayload = row?.sweep;
+        const sweepId =
+          sweepPayload && typeof sweepPayload === "object"
+            ? (sweepPayload as Row).id
+            : sweepPayload;
+
+        if (!row || typeof sweepId !== "string") {
+          throw new DataError("unavailable", "Could not claim the sweep. Please try again.");
+        }
+
+        const { data: sweepRow, error: sweepError } = await serviceClient()
+          .from("automation_sweeps")
+          .select("*")
+          .eq("organization_id", scope.organizationId)
+          .eq("id", sweepId)
+          .single();
+
+        if (sweepError) fail(sweepError, "claim the sweep");
+        return { sweep: mapAutomationSweep(sweepRow as Row), claimed: Boolean(row.claimed) };
       },
-      async finalize() {
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+
+      async finalize(scope, sweepId, input) {
+        const { data, error } = await serviceClient()
+          .from("automation_sweeps")
+          .update({
+            status: input.status,
+            completed_at: new Date().toISOString(),
+            mentions_evaluated: input.counters.mentionsEvaluated,
+            rules_matched: input.counters.rulesMatched,
+            actions_applied: input.counters.actionsApplied,
+            actions_blocked: input.counters.actionsBlocked,
+            actions_skipped: input.counters.actionsSkipped,
+            actions_failed: input.counters.actionsFailed,
+            retryable_failures: input.counters.retryableFailures,
+            terminal_failures: input.counters.terminalFailures,
+            error_code: input.errorCode ?? null,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", sweepId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "finalize the sweep");
+        if (!data) throw notFound("Sweep");
+        return mapAutomationSweep(data as Row);
       },
     },
 
     automationRuleExecutions: {
-      async executeUnit() {
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+      /**
+       * One rule against one mention, atomically (spec §7). The mirror of
+       * `execute_automation_rule`: claim, validate, apply via the transition
+       * matrix, record, audit, all inside that one function call. Unlike
+       * `record_analysis_occurrence` and `claim_automation_sweep`,
+       * `execute_automation_rule` is declared `returns
+       * public.automation_rule_executions` with no `SETOF` — not a set — so
+       * PostgREST answers with that row's JSON object directly, unwrapped.
+       * `singleRow` accepts either shape.
+       */
+      async executeUnit(scope, input) {
+        const { data, error } = await serviceClient().rpc("execute_automation_rule", {
+          p_organization_id: scope.organizationId,
+          p_sweep_id: input.sweepId,
+          p_rule_id: input.automationRuleId,
+          p_revision: input.ruleRevision,
+          p_mention_id: input.mentionId,
+          p_analysis_id: input.triggerAnalysisId,
+        });
+
+        if (error) fail(error, "execute the rule");
+        const row = singleRow(data);
+        if (!row) {
+          throw new DataError("unavailable", "Could not execute the rule. Please try again.");
+        }
+        return mapAutomationRuleExecution(row);
       },
-      async recordProjection() {
-        throw new DataError(
-          "unavailable",
-          "Rule execution writes arrive with the G1 execution RPC.",
-        );
+
+      /**
+       * Dry run: insert a projection row, no business mutation. There is no
+       * RPC for this arm — a dry run touches only this one table, so a
+       * transaction has nothing to coordinate — so this does the
+       * insert-or-load itself: an insert with `ignoreDuplicates` against
+       * `execs_idempotent` (the same unique key `execute_automation_rule`
+       * claims against for apply mode), then a read-back by that key. The
+       * read-back is what returns the STORED row on a replay rather than the
+       * caller's own (discarded) projection, matching `recordProjection`'s
+       * contract: a repeated dry run is a no-op, not an error.
+       */
+      async recordProjection(scope, input) {
+        const { data: mention, error: mentionError } = await serviceClient()
+          .from("mentions")
+          .select("location_id")
+          .eq("organization_id", scope.organizationId)
+          .eq("id", input.mentionId)
+          .maybeSingle();
+
+        if (mentionError) fail(mentionError, "record the projection");
+        if (!mention) throw notFound("Mention");
+
+        const stampedAt = new Date().toISOString();
+        const { error: insertError } = await serviceClient()
+          .from("automation_rule_executions")
+          .upsert(
+            {
+              organization_id: scope.organizationId,
+              sweep_id: input.sweepId,
+              automation_rule_id: input.automationRuleId,
+              rule_revision: input.ruleRevision,
+              mention_id: input.mentionId,
+              trigger_analysis_id: input.triggerAnalysisId,
+              location_id: (mention as Row).location_id ?? null,
+              mode: "dry_run",
+              status: input.status,
+              outcomes: input.outcomes,
+              started_at: stampedAt,
+              completed_at: stampedAt,
+            },
+            {
+              onConflict: "automation_rule_id,rule_revision,mention_id,trigger_analysis_id,mode",
+              ignoreDuplicates: true,
+            },
+          );
+
+        if (insertError) fail(insertError, "record the projection");
+
+        const { data, error } = await serviceClient()
+          .from("automation_rule_executions")
+          .select("*")
+          .eq("organization_id", scope.organizationId)
+          .eq("automation_rule_id", input.automationRuleId)
+          .eq("rule_revision", input.ruleRevision)
+          .eq("mention_id", input.mentionId)
+          .eq("trigger_analysis_id", input.triggerAnalysisId)
+          .eq("mode", "dry_run")
+          .single();
+
+        if (error) fail(error, "record the projection");
+        return mapAutomationRuleExecution(data as Row);
       },
+
       async listForRule(scope, ruleId, limit) {
         const { data, error } = await from("automation_rule_executions", scope)
           .eq("automation_rule_id", ruleId)
@@ -2759,7 +3011,17 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         }
         const value = parsed.data;
 
-        const { data, error } = await client
+        // Service client, not `client`: the paired migration revokes INSERT
+        // on `audit_events` from `authenticated` entirely, so the caller's
+        // session client cannot write here anymore, by design. This method
+        // is trusted to write anyway because every call site reaches it only
+        // after `getOrganizationContext()` has already established the scope
+        // in hand, this module is `server-only`, and the RLS change above
+        // removes the client-credentialed path rather than narrowing it —
+        // there is no longer an authenticated insert for this to widen back
+        // open. Reads keep the user client; RLS still governs who can list
+        // events for an organization.
+        const { data, error } = await serviceClient()
           .from("audit_events")
           .insert({
             organization_id: scope.organizationId,

@@ -1,0 +1,44 @@
+# Merge gate: `verify` runs lint/typecheck/test/build; `database` runs the migration +
+# execution-verification harness against a freshly started local Supabase instance.
+# Runbook (owner action, tracked separately): once this workflow is green on `master`,
+# mark the `database` job a required status check in branch protection so a TypeScript
+# matrix change can never merge with stale SQL behavior.
+name: verify
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run verify
+  database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      # This exact combination (Postgres 17.6, Supabase CLI 2.101.0) DOES segfault the whole
+      # local cluster on an EXECUTE-denied call of a non-immutable function after `set role` —
+      # the same shape as an unauthorized PostgREST RPC call (Task 11). The pin is not "verified
+      # safe"; it is a known-quantity image whose crash the harness is written to route around,
+      # not one it fixes. db:verify-execution proves "service_role cannot execute
+      # raise_escalation directly" via a static pg_catalog.has_function_privilege check rather
+      # than by attempting the denied call, because attempting it would take the harness's own
+      # database down mid-run. Bumping this pin requires a local `npm run db:verify-execution`
+      # run first — a different image could change the segfault behavior in either direction,
+      # and nothing here would notice without that run.
+      - uses: supabase/setup-cli@v1
+        with: { version: "2.101.0" }
+      - run: npm ci
+      - run: supabase start
+      - name: Run the database harness against freshly migrated Postgres
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+          npm run db:verify-execution

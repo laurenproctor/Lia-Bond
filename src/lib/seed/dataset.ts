@@ -1247,6 +1247,14 @@ function analysis(seed: AnalysisSeed): MentionAnalysis {
     analysisRunId: null,
     inputTokens: null,
     outputTokens: null,
+    // Occurrence lifecycle (the escalation contract migration). Every
+    // seeded mention's status already reflects this analysis having been
+    // applied — leaving this null would claim these 13 occurrences are
+    // still pending, wedging recovery and occupying the one-pending slot
+    // for mentions that are not actually awaiting anything. Set to
+    // analyzedAt, matching the migration's own backfill posture for rows
+    // that predate the lifecycle (`outcome_applied_at = created_at`).
+    outcomeAppliedAt: minutesAgo(5),
     createdAt: minutesAgo(5),
   };
 }
@@ -1708,6 +1716,11 @@ function escalation(seed: EscalationSeed): Escalation {
     dueAt: seed.dueAt,
     resolvedAt: seed.resolvedAt ?? null,
     resolutionNote: seed.resolutionNote ?? null,
+    // Occurrence provenance (the escalation contract migration). These
+    // fixtures are hand-written history with no analysis occurrence behind
+    // them; inventing one would fabricate a mention_analyses row purely to
+    // satisfy this FK, which is a bigger lie than leaving it null.
+    triggerAnalysisId: null,
     createdAt: seed.openedAt,
     updatedAt: seed.openedAt,
   };

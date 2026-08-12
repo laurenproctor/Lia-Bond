@@ -7,12 +7,20 @@ import {
   saveResponseDraftInputSchema,
   type ResponseDraft,
 } from "@/domain";
-import { authorize } from "@/lib/actions/guard";
+import { assertPermissionForLocation, authorize, mutationContext } from "@/lib/actions/guard";
 import { runAction, type ActionResult } from "@/lib/actions/result";
 import { diff, recordAuditEvent } from "@/lib/audit/record";
 import { notFound } from "@/lib/data/errors";
 
-/** Assign a response draft to a person. */
+/**
+ * Assign a response draft to a person.
+ *
+ * Location-scoped, following `updateMentionStatusAction`'s pattern: a
+ * location manager may assign drafts for their own restaurants only. The
+ * draft's own record carries no location, so its mention is loaded
+ * explicitly and checked — never optional-chained, so a missing mention
+ * fails closed instead of silently granting access.
+ */
 export async function assignResponseDraftAction(
   input: unknown,
 ): Promise<ActionResult<ResponseDraft>> {
@@ -20,13 +28,18 @@ export async function assignResponseDraftAction(
     const { responseDraftId, assignedUserId } =
       assignResponseDraftInputSchema.parse(input);
 
-    const context = await authorize("response.assign");
+    const context = await mutationContext();
 
     const existing = await context.dataSource.responseDrafts.get(
       context.scope,
       responseDraftId,
     );
     if (!existing) throw notFound("Response draft");
+
+    const mention = await context.dataSource.mentions.get(context.scope, existing.mentionId);
+    if (!mention) throw notFound("Mention");
+
+    await assertPermissionForLocation(context, "response.assign", mention.locationId);
 
     const updated = await context.dataSource.responseDrafts.assign(
       context.scope,

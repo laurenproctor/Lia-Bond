@@ -90,6 +90,12 @@ export const SEED_TABLE_COLUMNS = {
     // real, non-defaulted-to-anything-but-null columns, and the day a fixture
     // wants to claim a real run, this is what makes that value reach the SQL.
     "analysisRunId", "inputTokens", "outputTokens",
+    // Occurrence lifecycle (the escalation contract migration). Written
+    // rather than excluded: the seed dataset's `analysis()` factory sets a
+    // real, non-null value (mirroring the migration's own backfill posture
+    // for historical rows) so seeded occurrences are not permanently
+    // pending — see the comment there.
+    "outcomeAppliedAt",
     "createdAt",
   ],
   response_drafts: [
@@ -107,7 +113,14 @@ export const SEED_TABLE_COLUMNS = {
   escalations: [
     "id", "organizationId", "mentionId", "category", "severity", "status",
     "title", "summary", "assignedUserId", "dueAt", "resolvedAt",
-    "resolutionNote", "createdAt", "updatedAt",
+    "resolutionNote",
+    // Occurrence provenance (the escalation contract migration). Written as
+    // null, following this file's own precedent for nullable provenance
+    // columns (e.g. mention_analyses' analysisRunId above): seeded
+    // escalations are hand-written fixtures with no real analysis
+    // occurrence behind them, so null is the honest value, not an omission.
+    "triggerAnalysisId",
+    "createdAt", "updatedAt",
   ],
   automation_rules: [
     "id", "organizationId", "name", "description", "status", "priority",

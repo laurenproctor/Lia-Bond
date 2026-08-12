@@ -2,7 +2,6 @@ import type {
   CreateEscalationInput,
   CreateMentionAnalysisInput,
   Location,
-  Mention,
   RiskLevel,
 } from "@/domain";
 import { ESCALATION_CATEGORIES } from "@/domain";
@@ -75,7 +74,14 @@ function normalizeCategories(
 export interface NormalizeAnalysisInput {
   output: MentionAnalysisOutput;
   mentionId: string;
-  analysisRunId: string | null;
+  /**
+   * The run this recording belongs to.
+   *
+   * Non-null since the escalation contract: (organization, run, mention) is the
+   * identity of a logical analysis event, and a recording with no run id cannot
+   * be deduplicated against the recorder that arrives after it.
+   */
+  analysisRunId: string;
   modelProvider: string;
   modelName: string;
   inputTokens: number | null;
@@ -121,35 +127,65 @@ export function toAnalysisInput(
 }
 
 /**
- * The escalation an analysis raises.
+ * The risk an occurrence carries, whatever it is stored in.
  *
- * Returns null below the threshold, so a caller cannot escalate a low-risk
- * mention by mistake — the decision lives here rather than at the call site.
- *
- * The title is derived when the model omitted one. A missing string must never
- * be what stops a critical review reaching somebody: `escalations.title` is
- * `not null` with a length check, so an empty title would fail the insert and
- * the escalation would silently not exist.
+ * Structural rather than a named entity so the same function reads a stored
+ * `MentionAnalysis` row and a fresh `MentionAnalysisOutput` — which is exactly
+ * what recovery needs. A recovered occurrence has no model output left to
+ * consult, only the row, and the escalation it authorizes must come out the
+ * same either way.
  */
-export function toEscalationInput(
-  output: MentionAnalysisOutput,
-  mention: Mention,
-  location: Location | null,
-): CreateEscalationInput | null {
-  if (!requiresEscalation(output.riskLevel)) return null;
+export interface EscalationFacts {
+  riskLevel: RiskLevel;
+  riskCategories: readonly string[];
+  riskExplanation: string | null;
+}
 
-  const categories = normalizeCategories(output.riskCategories);
+/**
+ * What one occurrence asks the escalation contract to do.
+ *
+ * `shouldEscalate` is false below the threshold, so a caller cannot escalate a
+ * low-risk mention by mistake — the decision lives here rather than at the call
+ * site. The remaining fields are supplied regardless and simply unread when it
+ * is false, matching `apply_analysis_occurrence`'s parameter list: the contract
+ * decides what to do with them, and a caller that only filled them in
+ * "when escalating" would be making that decision itself.
+ */
+export interface EscalationDecision {
+  shouldEscalate: boolean;
+  category: CreateEscalationInput["category"];
+  severity: CreateEscalationInput["severity"];
+  title: string;
+  summary: string | null;
+}
+
+/**
+ * The escalation decision an analysis occurrence carries.
+ *
+ * The title is derived when there is no model title to use — either because
+ * the model omitted one, or because this is a recovered occurrence, whose
+ * output was never stored (`mention_analyses` has no `escalation_title`
+ * column). That difference is cosmetic and deliberate: a missing string must
+ * never be what stops a critical review reaching somebody, since
+ * `escalations.title` is `not null` with a length check and an empty title
+ * would fail the insert, leaving the escalation silently non-existent.
+ */
+export function toEscalationDecision(
+  facts: EscalationFacts,
+  location: Location | null,
+  /** The model's own title, when this run produced one and it was kept. */
+  escalationTitle: string | null,
+): EscalationDecision {
+  const categories = normalizeCategories([...facts.riskCategories]);
   const category = categories[0] ?? "other";
 
   return {
-    mentionId: mention.id,
+    shouldEscalate: requiresEscalation(facts.riskLevel),
     category,
-    severity: output.riskLevel,
-    title: text(output.escalationTitle, 240) ?? derivedTitle(category, location),
-    summary: text(output.riskExplanation, 2000),
-    // No due date. Inventing an SLA the organization never agreed to would put
-    // a deadline in the escalations centre that nobody set and nobody owns.
-    dueAt: null,
+    severity: facts.riskLevel,
+    title:
+      text(escalationTitle ?? undefined, 240) ?? derivedTitle(category, location),
+    summary: text(facts.riskExplanation ?? undefined, 2000),
   };
 }
 

@@ -6,7 +6,7 @@ import {
   updateEscalationStatusInputSchema,
   type Escalation,
 } from "@/domain";
-import { authorize } from "@/lib/actions/guard";
+import { assertPermissionForLocation, authorize, mutationContext } from "@/lib/actions/guard";
 import { runAction, type ActionResult } from "@/lib/actions/result";
 import { diff, recordAuditEvent } from "@/lib/audit/record";
 import { notFound } from "@/lib/data/errors";
@@ -16,6 +16,12 @@ import { notFound } from "@/lib/data/errors";
  *
  * Resolving requires a note; the repository refuses without one, so a case
  * cannot be closed silently.
+ *
+ * Location-scoped, following `updateMentionStatusAction`'s pattern: a
+ * location manager may move the status of escalations for their own
+ * restaurants only. The escalation's own record carries no location, so its
+ * mention is loaded explicitly and checked — never optional-chained, so a
+ * missing mention fails closed instead of silently granting access.
  */
 export async function updateEscalationStatusAction(
   input: unknown,
@@ -24,10 +30,19 @@ export async function updateEscalationStatusAction(
     const { escalationId, status, resolutionNote } =
       updateEscalationStatusInputSchema.parse(input);
 
-    const context = await authorize("escalation.update_status");
+    const context = await mutationContext();
 
     const existing = await context.dataSource.escalations.get(context.scope, escalationId);
     if (!existing) throw notFound("Escalation");
+
+    const mention = await context.dataSource.mentions.get(context.scope, existing.mentionId);
+    if (!mention) throw notFound("Mention");
+
+    await assertPermissionForLocation(
+      context,
+      "escalation.update_status",
+      mention.locationId,
+    );
 
     const updated = await context.dataSource.escalations.updateStatus(
       context.scope,
