@@ -1327,4 +1327,38 @@ describe("the cron sweep's organization scan", () => {
     // and applied — so the widened predicate must still leave it out.
     expect(swept).not.toContain(harborScope.organizationId);
   });
+
+  it("still sees a mention carrying both a settled row and a newer pending one", async () => {
+    // The case a single `not exists (settled)` predicate would miss: a
+    // mention re-analysed after its first occurrence already settled has
+    // *two* rows, one settled and one pending. "No settled row exists" is
+    // false for that mention — a settled row does exist — so a predicate
+    // without the independent "a pending row exists" arm would drop the
+    // organization from the sweep while unapplied work still sits on it.
+    const harborScope = harbor.owner();
+    await analyzeMentions({ dataSource, scope }, { provider: fakeProvider(), limit: 500 });
+    await analyzeMentions(
+      { dataSource, scope: harborScope },
+      { provider: fakeProvider(), limit: 500 },
+    );
+    expect(await unanalyzedCount()).toBe(0);
+    expect(await unanalyzedCount(harborScope)).toBe(0);
+
+    // Settle a fresh USHG mention through the ordinary flow first...
+    const target = await ingestFresh("sweep-settled-then-pending");
+    await analyzeMentions({ dataSource, scope }, { provider: fakeProvider(), limit: 500 });
+    const settled = await dataSource.mentions.latestAnalysis(scope, target.id);
+    expect(settled?.outcomeAppliedAt).not.toBeNull();
+
+    // ...then re-analyse it: schema-legal (the one-pending-per-mention index
+    // only forbids two pending rows, not a pending row beside a settled
+    // one), and exactly how this shape arises in production.
+    await seedPendingOccurrence(target.id);
+    expect(occurrencesFor(target.id)).toHaveLength(2);
+
+    const swept = await dataSource.organizations.listWithUnanalyzedMentions();
+
+    expect(swept).toContain(scope.organizationId);
+    expect(swept).not.toContain(harborScope.organizationId);
+  });
 });

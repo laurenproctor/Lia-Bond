@@ -292,14 +292,19 @@ export interface OrganizationRepository {
    * silently stops being swept for it.
    *
    * Matches `MentionRepository.listUnanalyzed`'s selection exactly: no
-   * analysis row, or a latest row whose outcome was never applied. Widened in
-   * migration 20260812000600 — before that, the Supabase implementation (the
+   * analysis row, or a mention carrying a pending (outcome not yet applied)
+   * row regardless of any settled history. Widened in migration
+   * 20260812000600 — before that, the Supabase implementation (the
    * `organizations_with_unanalyzed_mentions` database function) only checked
    * "no analysis row", so an organization whose *only* remaining work was a
    * pending occurrence was not offered to the cron sweep until some other
-   * mention arrived with no analysis at all. The predicate is
-   * `not exists (… where a.mention_id = m.id and a.outcome_applied_at is not null)`,
-   * in the function and in the demo twin together.
+   * mention arrived with no analysis at all. The two arms are independent,
+   * not one predicate with a single `not exists`: a mention can hold an
+   * older settled row and a newer pending one at once (re-analysis is
+   * schema-legal for an already-settled mention), so "no settled row exists"
+   * alone would miss it. The function and the demo twin both check
+   * `not exists (settled) or exists (pending)` — never `not exists (settled)`
+   * by itself.
    *
    * The one deliberately unscoped read on this repository — mirrors
    * `MonitoringQueryRepository.listDue`. Cron holds no membership and cannot

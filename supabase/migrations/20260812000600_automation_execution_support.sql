@@ -85,9 +85,17 @@ grant execute on function public.automation_mark_activity(uuid, uuid, timestampt
 -- organization whose only remaining work is a pending occurrence was not
 -- offered to the cron sweep until some unrelated mention arrived with no
 -- analysis row at all, silently deferring recovery from a crash that already
--- happened. `not exists (… and outcome_applied_at is not null)` is the same
--- predicate `listUnanalyzed` uses — a mention counts as needing work unless
--- it has a settled (applied) analysis row.
+-- happened. The predicate is a disjunction, not `not exists (… outcome_applied_at
+-- is not null)` alone: a mention can carry an older SETTLED row and a newer
+-- PENDING one at once — schema-legal, since automation_sweeps_one_running's
+-- sibling (the one-pending-per-mention index) only forbids two pending rows,
+-- not a pending row alongside a settled one, and re-analysis is exactly how
+-- that shape arises. `not exists (settled)` alone is false for that mention
+-- (a settled row exists), so it would drop an organization from the sweep
+-- while unapplied work still sits on it. The second `exists (pending)` arm
+-- catches that mention independently of its settled history — the same
+-- independence the demo twin's `pending.has(id) || !settled.has(id)` already
+-- has.
 -- ---------------------------------------------------------------------------
 
 create or replace function public.organizations_with_unanalyzed_mentions()
@@ -99,16 +107,24 @@ set search_path = public, pg_temp
 as $$
   select distinct m.organization_id
   from public.mentions m
-  where not exists (
-    select 1
-    from public.mention_analyses a
-    where a.mention_id = m.id
-      and a.outcome_applied_at is not null
+  where (
+    not exists (
+      select 1
+      from public.mention_analyses a
+      where a.mention_id = m.id
+        and a.outcome_applied_at is not null
+    )
+    or exists (
+      select 1
+      from public.mention_analyses a
+      where a.mention_id = m.id
+        and a.outcome_applied_at is null
+    )
   );
 $$;
 
 comment on function public.organizations_with_unanalyzed_mentions is
-  'Ids of organizations with at least one mention needing analysis work: no analysis row, or a latest row whose outcome was never applied. Widened in migration 20260812000600 to mirror MentionRepository.listUnanalyzed''s post-lifecycle selection exactly (see the doc comment on OrganizationRepository.listWithUnanalyzedMentions in types.ts) — an organization whose only remaining work is a pending occurrence (a crash between recordAnalysisOccurrence and applyAnalysisOccurrence) must still be swept, or that recovery never happens on its own. The one deliberately unscoped cross-tenant read behind the analyse-mentions cron sweep (Task 12) — mirrors monitoring_queries.listDue''s justification exactly. Never callable from a request path; the EXECUTE revoke below reasserts 20260807000400''s posture for this replaced definition.';
+  'Ids of organizations with at least one mention needing analysis work: no analysis row, or a mention that carries a pending (outcome not yet applied) row regardless of any settled history. Widened in migration 20260812000600 to mirror MentionRepository.listUnanalyzed''s post-lifecycle selection exactly (see the doc comment on OrganizationRepository.listWithUnanalyzedMentions in types.ts) — an organization whose only remaining work is a pending occurrence (a crash between recordAnalysisOccurrence and applyAnalysisOccurrence, or an ordinary re-analysis of an already-settled mention) must still be swept, or that recovery never happens on its own. The predicate is a disjunction, not "no settled row exists" alone: a mention can hold both an older settled row and a newer pending one, and the pending arm has to be checked independently of the settled one to catch that case. The one deliberately unscoped cross-tenant read behind the analyse-mentions cron sweep (Task 12) — mirrors monitoring_queries.listDue''s justification exactly. Never callable from a request path; the EXECUTE revoke below reasserts 20260807000400''s posture for this replaced definition.';
 
 -- Same posture as the original definition (20260807000400): the implicit
 -- PUBLIC grant and Supabase's default-privileges grant to anon/authenticated
