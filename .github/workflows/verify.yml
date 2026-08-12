@@ -24,13 +24,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: npm }
-      # Pin verified against the harness's known-safe image (Postgres 17.6, Supabase CLI 2.101.0).
-      # That combination is known NOT to segfault on EXECUTE-denied non-immutable function calls
-      # after `set role` — a fault seen on other CLI/image combinations during Task 11. The
-      # db:verify-execution harness deliberately checks privileges via catalog queries rather
-      # than attempted calls, which is what makes it safe here, but the pin still matters: bumping
-      # it requires a local `npm run db:verify-execution` run first to confirm the new image is
-      # still safe.
+      # This exact combination (Postgres 17.6, Supabase CLI 2.101.0) DOES segfault the whole
+      # local cluster on an EXECUTE-denied call of a non-immutable function after `set role` —
+      # the same shape as an unauthorized PostgREST RPC call (Task 11). The pin is not "verified
+      # safe"; it is a known-quantity image whose crash the harness is written to route around,
+      # not one it fixes. db:verify-execution proves "service_role cannot execute
+      # raise_escalation directly" via a static pg_catalog.has_function_privilege check rather
+      # than by attempting the denied call, because attempting it would take the harness's own
+      # database down mid-run. Bumping this pin requires a local `npm run db:verify-execution`
+      # run first — a different image could change the segfault behavior in either direction,
+      # and nothing here would notice without that run.
       - uses: supabase/setup-cli@v1
         with: { version: "2.101.0" }
       - run: npm ci

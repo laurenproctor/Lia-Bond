@@ -661,22 +661,28 @@ The G3 retrofit workstream is acknowledged, gated, and not planned here.
   - **Occurrence-lifecycle addendum (landed with G1, D160):** when this
     resolution was written, `escalations` carried no `trigger_analysis_id`
     column at all, so "the analysis path's crash-retry story survives
-    unchanged" above was a statement about intended behavior — the interim
-    reading was that trigger provenance was simply null/absent today, and
-    that "pending" (an occurrence not yet applied) was itself the mechanism
-    an idempotency scheme would key on. Both interim statements are
-    superseded by an explicit event-keyed identity: `trigger_analysis_id`
-    is a mandatory, non-null column on every escalation created from
-    `20260812000300` onward (composite-FK-validated against its own
-    mention and organization; null survives only on rows predating the
-    migration), and identity is the logical event key
+    unchanged" above was a statement about intended behavior, not a
+    mechanism that existed yet. This addendum adds the mechanism: an
+    explicit event-keyed identity, the logical event key
     `(organization_id, analysis_run_id, mention_id)` — unique in the
-    database regardless of lifecycle state, not "whatever is currently
-    pending." Pending (`outcome_applied_at is null`) remains a real,
+    database regardless of lifecycle state — carried on `escalations` as
+    `trigger_analysis_id`, composite-FK-validated against its own mention
+    and organization. The column itself is **nullable** (historical rows
+    predating `20260812000300` are legitimately null); non-nullness for
+    every *new* escalation is not a column constraint but a procedural
+    guarantee: `raise_escalation` — the sole creator of escalation rows,
+    per D159 — raises `22004` outright when handed a null occurrence id,
+    and the grant posture backs that up structurally, not just by
+    convention: `insert` on `escalations` is revoked from every role
+    including `service_role`, and `raise_escalation` itself is granted to
+    nobody, not even `service_role`, so the only path to a new escalation
+    row is through `apply_analysis_occurrence` or `execute_automation_rule`
+    — both `security definer`, both always supplying a non-null occurrence
+    id. Pending (`outcome_applied_at is null`) remains a real,
     separately-enforced invariant (`mention_analyses_one_pending`), but it
     answers a different question — "what does recovery finish next" — and
     was never the identity a re-escalation or a retry is keyed against.
     This is what makes the safeguard above load-bearing rather than
-    aspirational: a genuinely new analysis occurrence is a new, durable,
-    non-null event key, provably distinct from the occurrence any prior
-    escalation already carries.
+    aspirational: a genuinely new analysis occurrence is a new, durable
+    event key, provably distinct from the occurrence any prior escalation
+    already carries.

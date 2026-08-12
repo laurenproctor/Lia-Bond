@@ -1077,6 +1077,28 @@ New building rule execution (G1):
 
 ## Internal-apply runbook (G1)
 
+> **Deploy-vs-migration-push ordering — read this before merging or
+> deploying this branch.** This branch's application code unconditionally
+> calls `record_analysis_occurrence` and `apply_analysis_occurrence` on
+> every scheduled analysis (`analyzeOne` in `src/lib/analysis/analyze.ts`
+> has no fallback for a hosted database that predates them) and reads
+> `mention_analyses.outcome_applied_at`, a column those migrations add.
+> None of the six migrations below has reached the hosted project yet.
+> **Merging and deploying this branch before `supabase db push` runs breaks
+> every scheduled analysis, for every organization** — not just the
+> founder/test organization this runbook otherwise scopes `apply` to — the
+> moment the deployed code makes its first cron call against RPCs and a
+> column that do not exist on hosted. The failure is loud and non-
+> destructive, never silent or corrupting: the call fails before writing
+> anything, every attempted organization's analysis fails, and
+> `/api/cron/analyze-mentions` answers `503` until the push happens — no
+> partial writes, no mixed-schema state. The fix is ordering, not code:
+> **the six migrations must be pushed to the hosted project immediately
+> before, or at the moment of, deploying this branch — never after.** This
+> is a merge-time coordination requirement between whoever merges/deploys
+> and whoever holds hosted `supabase db push` access; nothing in CI
+> enforces it.
+
 Human-executed; nothing here is automated by this worktree. Scope is
 strictly the founder/test organization via allowlist (the spec's G1 gate,
 §3) — this is not a path to customer-facing `apply`, which is G2 and
@@ -1093,21 +1115,40 @@ requires its own, separate work (see the G1 gaps above).
 | `20260812000500` | `execute_automation_rule_rpc.sql` | The transactional execution RPC (D163). |
 | `20260812000600` | `automation_execution_support.sql` | `claim_automation_sweep`, `automation_mark_activity`, and the widened `organizations_with_unanalyzed_mentions`. |
 
-### Pre-push gates (all must hold before `supabase db push` touches the hosted project)
+### Rollout sequence
 
-1. **Local harness green, at the pinned CLI.** `npm run db:verify-execution`
-   passes against a freshly `supabase db reset` local stack, using the CLI
-   version pinned in `.github/workflows/verify.yml` (`2.101.0` at time of
-   writing) — not merely "some recent CLI." The `database` CI job running
-   this on every PR is the ongoing form of this gate; a manual local run
-   before pushing is the one-time form of it for the push itself.
-2. **Probe the hosted build for the segfault finding before enabling
-   anything.** Task 11 found that the *local* Postgres 17.6 image crashes
-   (`SIGSEGV`, whole cluster into recovery) on an EXECUTE-denied call of a
-   non-immutable function after `set role` — the same shape as an
-   unauthorized PostgREST RPC call. After the six migrations reach the
-   hosted project (and before `RULES_EXECUTION_MODE` is set to anything but
-   `off` there), make an unauthorized RPC call against the hosted
+Each step gates the next, in this order. Earlier drafts of this runbook
+filed the hosted segfault probe as a "pre-push" gate even though it needs
+the migrations already on hosted to have anything to probe — a
+contradiction. It is sequenced here as what it actually is: the first
+post-push gate, run before enabling anything.
+
+1. **Local harness green, at the pinned CLI (the actual pre-push gate).**
+   `SUPABASE_DB_URL` is not set anywhere in the repository or `.env`;
+   export it, then run the harness, against a freshly `supabase db reset`
+   local stack, using the CLI version pinned in
+   `.github/workflows/verify.yml` (`2.101.0` at time of writing) — not
+   merely "some recent CLI":
+
+   ```bash
+   export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+   npm run db:verify-execution
+   ```
+
+   The `database` CI job running this on every PR is the ongoing form of
+   this gate; a manual local run before pushing is the one-time form of it
+   for the push itself.
+2. **Push the six migrations, coordinated with deploy.** `supabase db
+   push` against the hosted project, timed immediately before or upon
+   deploying this branch — see the deploy-ordering note at the top of this
+   section. Do not let a push and the matching deploy drift apart in time.
+3. **Probe the hosted build for the segfault finding, post-push, before
+   enabling anything.** Task 11 found that the *local* Postgres 17.6 image
+   crashes (`SIGSEGV`, whole cluster into recovery) on an EXECUTE-denied
+   call of a non-immutable function after `set role` — the same shape as
+   an unauthorized PostgREST RPC call. Now that the six migrations are on
+   hosted (step 2) and before `RULES_EXECUTION_MODE` is set to anything but
+   `off` there, make an unauthorized RPC call against the hosted
    PostgREST endpoint — for example, call `raise_escalation` or
    `organizations_with_unanalyzed_mentions` as an `authenticated` (non
    service-role) client — and confirm the response is `403`/`42501`, not a
@@ -1115,13 +1156,11 @@ requires its own, separate work (see the G1 gaps above).
    response means the hosted image shares the local finding and nothing
    past this point should proceed until that is resolved with Supabase
    support or a different image/CLI pin.
-3. **Owner marks `database` a required status check.** Branch protection
+4. **Owner marks `database` a required status check.** Branch protection
    does not enforce the CI harness until a human adds it; `verify.yml`'s own
    comment records this as the intended next step. Do this before treating
    a green PR as sufficient evidence the harness ran — an optional check that
    nobody looks at is not a gate.
-4. Only after 1–3 hold: push the six migrations
-   (`supabase db push`) to the hosted project.
 
 ### Turning `apply` on, internal organization only
 
@@ -1149,18 +1188,25 @@ requires its own, separate work (see the G1 gaps above).
    or noisy grounds during the rollout window, since this is the first time
    the open-only contract runs against anything but a test suite.
 5. **Cron response-shape note, for whoever wires external monitoring on
-   this:** the `/api/cron/analyze-mentions` response's `execution` block
-   carries per-sweep rows keyed by `sweep_id`, with organization counts,
-   evaluation counts, action outcomes, and retryable-vs-terminal failure
-   counts (spec §10). `status: "degraded"`/HTTP 200 is normal operation
-   under real-world partial failure and must not page; `status:
-   "failed"`/HTTP 503 — every attempted unit of work failed — is the actual
-   page condition. While the allowlist holds exactly one organization
-   (true for the whole of this rollout), that organization's sweep failing
-   is, by itself, "every attempted execution sweep failed," so it alone
-   satisfies the 503 condition (D155's accepted consequence, restated here
-   because it is exactly what a monitor watching this endpoint needs to
-   know going in).
+   this:** the `/api/cron/analyze-mentions` response's `execution.sweeps`
+   field is an **array** of `SweepSummary` objects, one per organization
+   the sweep attempted execution for — not rows keyed by `sweep_id`. Each
+   object is camelCase: `organizationId`, `sweepId` (**null** for
+   `not_claimed` and for `failed` — neither an idle return nor a throw
+   carries a sweep id back), `status` (`"completed" | "not_claimed" |
+   "failed"`), `claimed`, `counters` (the eight-field `SweepCounters` —
+   `mentionsEvaluated`, `rulesMatched`, `actionsApplied`, `actionsBlocked`,
+   `actionsSkipped`, `actionsFailed`, `retryableFailures`,
+   `terminalFailures`), `mentionsSkipped`, and `budgetExhausted` (spec
+   §10). `status: "degraded"`/HTTP 200 is normal operation under
+   real-world partial failure and must not page; `status: "failed"`/HTTP
+   503 — every attempted unit of work failed — is the actual page
+   condition. While the allowlist holds exactly one organization (true for
+   the whole of this rollout), that organization's sweep failing is, by
+   itself, "every attempted execution sweep failed," so it alone satisfies
+   the 503 condition (D155's accepted consequence, restated here because it
+   is exactly what a monitor watching this endpoint needs to know going
+   in).
 
 ## Closed by the first live run
 
