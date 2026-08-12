@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  assignResponseDraftAction,
   decideResponseDraftAction,
   saveResponseDraftAction,
 } from "@/app/actions/responses";
-import { canDecideOnDraft, canEditDraft } from "@/domain";
+import { canDecideOnDraft, canEditDraft, type Mention, type ResponseDraft } from "@/domain";
 import { can } from "@/lib/auth/permissions";
+import { demoStore } from "@/lib/data/demo/store";
 import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
+import { LOC_SOHO, LOC_UES, USER_NAOMI } from "@/lib/seed/dataset";
 import { freshDataSource, ushg } from "./helpers/scope";
 
 /**
@@ -20,13 +23,29 @@ import { freshDataSource, ushg } from "./helpers/scope";
  * `monitoring-actions.test.ts` mocks it, so this runs with no `next/headers`
  * session machinery while the mocked context still carries a real demo
  * `dataSource`.
+ *
+ * `assignResponseDraftAction` (below) is location-scoped instead (P0-4):
+ * `response.assign` is granted to `location_manager` in the permission
+ * matrix "only where scoping constrains them", so it goes through
+ * `mutationContext()` + `assertPermissionForLocation` rather than
+ * `authorize()`. `mutationContext` is mocked the same controllable way as
+ * `authorize` above; `assertPermissionForLocation`/`assertPermission` pass
+ * through to their real implementations via `importOriginal`, so the
+ * location-scoping tests exercise the genuine role/location matrix against a
+ * real demo `dataSource`, not a test-only shortcut.
  */
 
 const authorizeMock = vi.fn();
+const mutationContextMock = vi.fn();
 
-vi.mock("@/lib/actions/guard", () => ({
-  authorize: (permission: string) => authorizeMock(permission),
-}));
+vi.mock("@/lib/actions/guard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/actions/guard")>();
+  return {
+    ...actual,
+    authorize: (permission: string) => authorizeMock(permission),
+    mutationContext: () => mutationContextMock(),
+  };
+});
 
 // `revalidatePath` requires a live Next.js request scope that does not exist
 // under Vitest; every action under test calls it on the success path, so it
@@ -51,9 +70,42 @@ function contextFor(scope: OrganizationScope) {
   };
 }
 
+/** The first response draft whose mention has exactly this location (or null). */
+async function draftAtLocation(
+  scope: OrganizationScope,
+  locationId: string | null,
+): Promise<ResponseDraft> {
+  const drafts = await dataSource.responseDrafts.list(scope);
+  for (const draft of drafts) {
+    const mention = await dataSource.mentions.get(scope, draft.mentionId);
+    if (mention && mention.locationId === locationId) return draft;
+  }
+  throw new Error(`Fixture expected a response draft at location ${String(locationId)}.`);
+}
+
+/** A response draft whose mention belongs to a real location Priya does not manage. */
+async function draftAtOtherManagedLocation(
+  scope: OrganizationScope,
+): Promise<ResponseDraft> {
+  const drafts = await dataSource.responseDrafts.list(scope);
+  for (const draft of drafts) {
+    const mention = await dataSource.mentions.get(scope, draft.mentionId);
+    if (
+      mention &&
+      mention.locationId !== null &&
+      mention.locationId !== LOC_SOHO &&
+      mention.locationId !== LOC_UES
+    ) {
+      return draft;
+    }
+  }
+  throw new Error("Fixture expected a response draft at a location outside Priya's assignment.");
+}
+
 beforeEach(() => {
   dataSource = freshDataSource();
   authorizeMock.mockReset();
+  mutationContextMock.mockReset();
 });
 
 describe("response.edit permission", () => {
@@ -183,5 +235,98 @@ describe("decideResponseDraftAction with finalText", () => {
     const eventTypes = events.map((event) => event.eventType);
     expect(eventTypes).toContain("response.approved");
     expect(eventTypes).not.toContain("response.edited");
+  });
+});
+
+describe("assignResponseDraftAction location scoping", () => {
+  it("refuses a location manager acting on a draft whose mention belongs to another location", async () => {
+    const scope = ushg.locationManager();
+    mutationContextMock.mockResolvedValue(contextFor(scope));
+
+    const draft = await draftAtOtherManagedLocation(scope);
+
+    const result = await assignResponseDraftAction({
+      responseDraftId: draft.id,
+      assignedUserId: USER_NAOMI,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/only act on records for the locations you manage/);
+
+    const unchanged = await dataSource.responseDrafts.get(scope, draft.id);
+    expect(unchanged?.assignedUserId).toBe(draft.assignedUserId);
+  });
+
+  it("lets a location manager assign a draft whose mention belongs to their own location", async () => {
+    const scope = ushg.locationManager();
+    mutationContextMock.mockResolvedValue(contextFor(scope));
+
+    const draft = await draftAtLocation(scope, LOC_SOHO);
+
+    const result = await assignResponseDraftAction({
+      responseDraftId: draft.id,
+      assignedUserId: USER_NAOMI,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.assignedUserId).toBe(USER_NAOMI);
+  });
+
+  it("refuses a location manager when the draft's mention has no location (organization-wide)", async () => {
+    const scope = ushg.locationManager();
+    mutationContextMock.mockResolvedValue(contextFor(scope));
+
+    const draft = await draftAtLocation(scope, null);
+
+    const result = await assignResponseDraftAction({
+      responseDraftId: draft.id,
+      assignedUserId: USER_NAOMI,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/only act on records for the locations you manage/);
+  });
+
+  it("fails closed with 'Mention was not found' when the draft's mention is missing", async () => {
+    const scope = ushg.locationManager();
+    mutationContextMock.mockResolvedValue(contextFor(scope));
+
+    const draft = await draftAtLocation(scope, LOC_SOHO);
+
+    // Store surgery: the mention this draft points at is gone, e.g. a
+    // data-integrity gap. The action must not treat "no mention" as
+    // "no restriction" — it has to fail closed with a typed not-found error.
+    const mentions = demoStore().mentions;
+    const index = mentions.findIndex((row: Mention) => row.id === draft.mentionId);
+    expect(index).toBeGreaterThanOrEqual(0);
+    mentions.splice(index, 1);
+
+    const result = await assignResponseDraftAction({
+      responseDraftId: draft.id,
+      assignedUserId: USER_NAOMI,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("Mention was not found.");
+  });
+
+  it("lets an owner assign any response draft regardless of location", async () => {
+    const scope = ushg.owner();
+    mutationContextMock.mockResolvedValue(contextFor(scope));
+
+    const draft = await draftAtOtherManagedLocation(scope);
+
+    const result = await assignResponseDraftAction({
+      responseDraftId: draft.id,
+      assignedUserId: USER_NAOMI,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.assignedUserId).toBe(USER_NAOMI);
   });
 });
