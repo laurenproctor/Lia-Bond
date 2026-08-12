@@ -64,6 +64,23 @@ describe("decideResponseDraftInputSchema", () => {
     });
     expect(parsed.finalText).toBe("Amended before approval.");
   });
+
+  it("accepts changes_requested", () => {
+    const parsed = decideResponseDraftInputSchema.parse({
+      responseDraftId: DRAFT_ID,
+      decision: "changes_requested",
+    });
+    expect(parsed.decision).toBe("changes_requested");
+  });
+
+  it("rejects the old rejected literal", () => {
+    expect(() =>
+      decideResponseDraftInputSchema.parse({
+        responseDraftId: DRAFT_ID,
+        decision: "rejected",
+      }),
+    ).toThrow();
+  });
 });
 
 describe("audit vocabulary", () => {

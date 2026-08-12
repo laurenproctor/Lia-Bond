@@ -727,7 +727,7 @@ export interface ResponseDraftRepository {
   decide(
     scope: OrganizationScope,
     draftId: string,
-    decision: "approved" | "rejected",
+    decision: "approved" | "changes_requested",
     decidedByUserId: string,
     decisionNote?: string,
     finalText?: string,

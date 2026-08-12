@@ -236,6 +236,35 @@ describe("decideResponseDraftAction with finalText", () => {
     expect(eventTypes).toContain("response.approved");
     expect(eventTypes).not.toContain("response.edited");
   });
+
+  it("records response.changes_requested and returns the draft to draft status", async () => {
+    const scope = ushg.admin();
+    authorizeMock.mockResolvedValue(contextFor(scope));
+
+    const drafts = await dataSource.responseDrafts.list(scope);
+    const editable = drafts.find((draft) => canDecideOnDraft(draft.status));
+    if (!editable) throw new Error("Fixture expected a decidable draft.");
+
+    const result = await decideResponseDraftAction({
+      responseDraftId: editable.id,
+      decision: "changes_requested",
+      decisionNote: "Please soften the tone.",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.status).toBe("draft");
+    expect(result.data.approvedByUserId).toBeNull();
+
+    const events = await dataSource.auditEvents.list(scope, {
+      entityType: "response_draft",
+      entityId: editable.id,
+    });
+    const eventTypes = events.map((event) => event.eventType);
+    expect(eventTypes).toContain("response.changes_requested");
+    expect(eventTypes).not.toContain("response.rejected");
+    expect(eventTypes).not.toContain("response.approved");
+  });
 });
 
 describe("assignResponseDraftAction location scoping", () => {

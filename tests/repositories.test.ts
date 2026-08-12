@@ -212,20 +212,20 @@ describe("response draft approval transitions", () => {
     expect(approval?.status).toBe("approved");
   });
 
-  it("returns a rejected draft to draft status with no approver", async () => {
+  it("returns a draft with requested changes to draft status with no approver", async () => {
     const draft = await draftAwaitingApproval();
 
     const { draft: updated, approval } = await data.responseDrafts.decide(
       ushg.approver(),
       draft.id,
-      "rejected",
+      "changes_requested",
       USER_MARCUS,
       "Resolve the refund first.",
     );
 
     expect(updated.status).toBe("draft");
     expect(updated.approvedByUserId).toBeNull();
-    expect(approval?.status).toBe("rejected");
+    expect(approval?.status).toBe("changes_requested");
     expect(approval?.decisionNote).toBe("Resolve the refund first.");
   });
 
@@ -234,7 +234,7 @@ describe("response draft approval transitions", () => {
     await data.responseDrafts.decide(ushg.approver(), draft.id, "approved", USER_MARCUS);
 
     await expect(
-      data.responseDrafts.decide(ushg.approver(), draft.id, "rejected", USER_MARCUS),
+      data.responseDrafts.decide(ushg.approver(), draft.id, "changes_requested", USER_MARCUS),
     ).rejects.toThrow(/cannot be decided again/i);
   });
 
@@ -244,7 +244,7 @@ describe("response draft approval transitions", () => {
     });
 
     await expect(
-      data.responseDrafts.decide(ushg.approver(), published!.id, "rejected", USER_MARCUS),
+      data.responseDrafts.decide(ushg.approver(), published!.id, "changes_requested", USER_MARCUS),
     ).rejects.toThrow(/cannot be decided again/i);
   });
 

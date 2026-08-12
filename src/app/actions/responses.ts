@@ -102,11 +102,13 @@ export async function saveResponseDraftAction(
 }
 
 /**
- * Approve or reject a response draft.
+ * Approve a response draft, or send it back with requested changes.
  *
  * Restricted to owners, admins, and approvers. Writing a draft and signing it
  * off are separate jobs, so a communications lead cannot approve their own
- * work — see the permission matrix.
+ * work — see the permission matrix. `changes_requested` is not terminal: it
+ * returns the draft to editable `draft` status rather than ending its
+ * lifecycle.
  */
 export async function decideResponseDraftAction(
   input: unknown,
@@ -135,7 +137,7 @@ export async function decideResponseDraftAction(
 
     const changes = diff(existing, draft, ["status", "approvedByUserId", "approvedAt"]);
     await recordAuditEvent(context, {
-      eventType: decision === "approved" ? "response.approved" : "response.rejected",
+      eventType: decision === "approved" ? "response.approved" : "response.changes_requested",
       entityType: "response_draft",
       entityId: responseDraftId,
       previousState: changes.previousState,

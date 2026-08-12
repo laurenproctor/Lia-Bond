@@ -70,7 +70,10 @@ export type AssignResponseDraftInput = z.infer<
 
 export const decideResponseDraftInputSchema = z.object({
   responseDraftId: uuidSchema,
-  decision: z.enum(["approved", "rejected"]),
+  // changes_requested replaces the old terminal decision value: choosing it
+  // returns the draft to editable `draft` status rather than ending its
+  // lifecycle (Task 1 of the response-generation plan).
+  decision: z.enum(["approved", "changes_requested"]),
   decisionNote: z.string().max(1000).optional(),
   finalText: z.string().min(1).max(5000).optional(),
 });

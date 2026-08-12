@@ -282,10 +282,20 @@ export type GeneratedBy = z.infer<typeof generatedBySchema>;
 /* Approvals                                                                   */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * `changes_requested` is the live decision outcome (Task 1 of the
+ * response-generation plan): choosing "changes_requested" returns a draft to
+ * editable `draft` status instead of terminating it, which "rejected" never
+ * did. `rejected` stays in this vocabulary for history — existing rows and
+ * the SQL enum still carry it — but nothing writes it going forward. The SQL
+ * `approval_status` enum gains `changes_requested` in Task 4; until then only
+ * the demo (in-memory) adapter can write it.
+ */
 export const APPROVAL_STATUSES = [
   "pending",
   "approved",
   "rejected",
+  "changes_requested",
   "canceled",
 ] as const;
 export const approvalStatusSchema = vocabulary(APPROVAL_STATUSES).schema;
@@ -420,6 +430,14 @@ export const AUDIT_EVENT_TYPES = [
   "response.assigned",
   "response.approved",
   "response.rejected",
+  // Generation. Metadata carries counts, a model name, a prompt version, and
+  // a normalised error/failure category — never review text, never the
+  // response text, and never the prompt.
+  "response.generated",
+  // The live decision outcome for "not approved" (Task 1): a draft returned
+  // to the writer with a decision note, as opposed to the old terminal
+  // `response.rejected`, which nothing emits anymore.
+  "response.changes_requested",
   // A person changed a draft's final text. `previousState`/`newState` carry
   // text lengths only — response text embeds customer situations, and the
   // trail records that an edit happened, not the prose.
