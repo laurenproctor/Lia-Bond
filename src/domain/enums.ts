@@ -437,6 +437,14 @@ export const AUDIT_EVENT_TYPES = [
   "automation_rule.archived",
   "automation_rule.simulated",
   "automation_rule.activation_refused",
+  // Rule execution (G1). These are written by the automation execution
+  // functions and subsume the rule's effect on a mention batch, as
+  // opposed to rule edits.
+  "automation_rule.executed",
+  "automation_rule.execution_failed",
+  // Sweep lifecycle: recording that an execution pass ran (once per hour,
+  // typically), regardless of whether any rules executed.
+  "automation_sweep.completed",
   "location.manager_changed",
   // A location somebody typed in, as opposed to one discovered through an
   // integration. Kept apart from `location.created_from_integration` because
