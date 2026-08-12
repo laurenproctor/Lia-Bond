@@ -71,8 +71,13 @@ cleanup() {
   [ -n "$WATCHDOG" ] && kill "$WATCHDOG" 2>/dev/null
   # Closing the write end lets each psql see EOF and exit; a session still
   # inside a transaction has it aborted by the backend when the client goes.
-  exec 7>&- 2>/dev/null
-  exec 8>&- 2>/dev/null
+  #
+  # The braces are load-bearing. `exec 7>&- 2>/dev/null` is `exec` with
+  # redirections and no command, which applies BOTH to the shell permanently —
+  # so it would silence stderr for the whole of the rest of cleanup, including
+  # the residue report below. Scoping the 2>/dev/null to a group keeps the
+  # closes (which are what we want to persist) and drops the silencing.
+  { exec 7>&-; exec 8>&-; } 2>/dev/null
   [ -n "$PID_A" ] && kill "$PID_A" 2>/dev/null
   [ -n "$PID_B" ] && kill "$PID_B" 2>/dev/null
   wait 2>/dev/null
@@ -102,10 +107,17 @@ drop table    if exists public.race_fixture;
 SQL
   psql "$DB_URL" -X -q -f "$WORK/cleanup.sql" >>"$WORK/oneshot.log" 2>&1
 
+  # Residue is a failure, not a warning: these races COMMIT, so a fixture that
+  # survives poisons every later run of the harness (and the seed the rest of
+  # the suite assumes). Reported through `fail` and then forced into the exit
+  # status — cleanup runs from the EXIT trap, after the script has already
+  # chosen its status, so incrementing FAILURES alone would change nothing.
   local leftovers
   leftovers="$(q "select count(*) from public.organizations where slug like 'race-harness-%'")"
   if [ "${leftovers:-0}" != "0" ]; then
-    printf 'WARNING: %s race-harness organization(s) survived cleanup\n' "$leftovers" >&2
+    fail "$leftovers race-harness organization(s) survived cleanup"
+    rm -rf "$WORK"
+    exit 1
   fi
   rm -rf "$WORK"
 }
@@ -209,10 +221,19 @@ await_blocked() { # await_blocked <query fragment> <seconds>
   done
 }
 
-session_clean() { # no ERROR lines in either transcript
-  local who="$1"
-  if grep -q '^ERROR' "$WORK/$who.log" 2>/dev/null; then
-    fail "session $who reported an error: $(grep -m1 '^ERROR' "$WORK/$who.log")"
+# No error lines in the transcript.
+#
+# The pattern has to allow a prefix. Sessions are fed with `psql -f <fifo>`,
+# and in file mode psql labels every diagnostic `psql:<path>:<line>: ERROR: …`
+# rather than starting the line with ERROR — so an anchored '^ERROR' matches
+# nothing a session can actually produce and the check passes for free. Both
+# shapes are accepted: `: ERROR:` for the file-mode prefix, `^ERROR:` for the
+# bare form.
+session_clean() {
+  local who="$1" hit
+  hit="$(grep -m1 -E '(^|: )ERROR:' "$WORK/$who.log" 2>/dev/null)"
+  if [ -n "$hit" ]; then
+    fail "session $who reported an error: $hit"
     return 1
   fi
   return 0
@@ -436,7 +457,7 @@ B2_ID="${B2%%:*}"; B2_CLAIMED="${B2##*:}"
 
 [ "$A2_CLAIMED" = "true" ] && [ "$B2_CLAIMED" = "false" ]
 check $? "exactly one takeover happened (A=$A2_CLAIMED, B=$B2_CLAIMED)"
-[ "$A2_ID" = "$B2_ID" ]
+[ -n "$A2_ID" ] && [ "$A2_ID" = "$B2_ID" ]
 check $? "no double owner — both sessions name the same new sweep"
 [ "$A2_ID" != "$A1_ID" ]
 check $? "the takeover really did open a new sweep"
