@@ -117,6 +117,22 @@ export const saveResponseDraftInputSchema = z.object({
 
 export type SaveResponseDraftInput = z.infer<typeof saveResponseDraftInputSchema>;
 
+/**
+ * A request to draft a reply for one mention.
+ *
+ * The mention, and nothing else: a caller names what to write about, never
+ * what to write with. Prompt version, brand voice, and model all come from the
+ * server (`generateResponseDraft`), so a crafted request cannot swap the voice
+ * a reply is written in or the text the model is shown.
+ */
+export const generateResponseDraftInputSchema = z.object({
+  mentionId: uuidSchema,
+});
+
+export type GenerateResponseDraftInput = z.infer<
+  typeof generateResponseDraftInputSchema
+>;
+
 /* -------------------------------------------------------------------------- */
 /* Approval                                                                    */
 /* -------------------------------------------------------------------------- */

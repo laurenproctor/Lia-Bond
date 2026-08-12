@@ -4,13 +4,17 @@ import { revalidatePath } from "next/cache";
 import {
   assignResponseDraftInputSchema,
   decideResponseDraftInputSchema,
+  generateResponseDraftInputSchema,
   saveResponseDraftInputSchema,
+  type GenerationFailureCategory,
   type ResponseDraft,
 } from "@/domain";
+import { getAiProvider } from "@/ai/registry";
 import { assertPermissionForLocation, authorize, mutationContext } from "@/lib/actions/guard";
-import { runAction, type ActionResult } from "@/lib/actions/result";
+import { failure, runAction, type ActionResult } from "@/lib/actions/result";
 import { diff, recordAuditEvent } from "@/lib/audit/record";
 import { notFound } from "@/lib/data/errors";
+import { generateResponseDraft } from "@/lib/responses/generate";
 
 /**
  * Assign a response draft to a person.
@@ -164,4 +168,67 @@ export async function decideResponseDraftAction(
     revalidatePath("/reddit/[id]", "page");
     return draft;
   });
+}
+
+/**
+ * Outcomes of a generation request that are not failures.
+ *
+ * `in_progress` and `draft_exists` are deliberately successes: the request did
+ * exactly what it should have — it declined to spend a second model call on
+ * work that is already done or already running — and the composer has
+ * something to show for each. Only a genuine failure carries error copy.
+ */
+export type GenerateResponseDraftOutcome =
+  | { kind: "generated"; responseDraftId: string }
+  | { kind: "in_progress" }
+  | { kind: "draft_exists"; responseDraftId: string };
+
+/**
+ * What a person reads when generation fails.
+ *
+ * Lia's own words, one sentence, sentence case, in every case: a provider
+ * message could echo the drafting prompt, and that prompt carries the review
+ * and the reviewer's name (`src/ai/provider.ts`). The service classifies;
+ * this is the only place the classification becomes English.
+ */
+const GENERATION_FAILURE_COPY: Record<GenerationFailureCategory, string> = {
+  provider_error: "Lia couldn't reach the writing model just now. Try again in a moment.",
+  invalid_output:
+    "The reply Lia wrote didn't pass its checks, so nothing was saved. Try again.",
+  lease_expired:
+    "Someone else started a reply for this review. Reload the page to see where it got to.",
+};
+
+/**
+ * Draft a public reply for one mention, on request.
+ *
+ * Organization-wide rather than location-scoped, following `response.edit`'s
+ * reasoning: drafting has no location dimension. The repository restates the
+ * same permission internally, so this check is the outer of two.
+ */
+export async function generateResponseDraftAction(
+  input: unknown,
+): Promise<ActionResult<GenerateResponseDraftOutcome>> {
+  const result = await runAction("response.generate", async () => {
+    const { mentionId } = generateResponseDraftInputSchema.parse(input);
+
+    const context = await authorize("response.generate");
+
+    const outcome = await generateResponseDraft(context, mentionId, getAiProvider());
+
+    if (outcome.kind === "generated") {
+      revalidatePath("/responses");
+      revalidatePath("/mentions");
+      revalidatePath("/reviews/google/[id]", "page");
+    }
+
+    return outcome;
+  });
+
+  if (!result.ok) return result;
+  if (result.data.kind === "failed") {
+    return failure(GENERATION_FAILURE_COPY[result.data.category]);
+  }
+
+  return { ok: true, data: result.data };
 }
