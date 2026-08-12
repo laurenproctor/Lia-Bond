@@ -64,6 +64,20 @@ export type EmailMode = z.infer<typeof emailModeSchema>;
 const newsModeSchema = z.enum(["live", "mock"]);
 export type NewsMode = z.infer<typeof newsModeSchema>;
 
+/**
+ * Which mode the rules engine runs in.
+ *
+ * Execution changes what the product does to customer data without a person
+ * in the loop; absence of configuration must mean absence of the behavior.
+ * Unlike the other mode enums in this file there is no `mock`/`unconfigured`
+ * split to worry about — the three words here are `off`, `dry_run` (evaluate
+ * and log what would happen, act on nothing), and `apply` (act). Anything
+ * else, including a plausible-looking typo like `dry-run`, fails the startup
+ * parse rather than being coerced into something safe-sounding.
+ */
+const rulesExecutionModeSchema = z.enum(["off", "dry_run", "apply"]);
+export type RulesExecutionMode = z.infer<typeof rulesExecutionModeSchema>;
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -116,6 +130,21 @@ const envSchema = z
     LIA_NEWS_MODE: newsModeSchema.optional(),
     /** Shared secret the scheduler presents so the poll route cannot be hit by anyone else. */
     CRON_SECRET: z.string().min(16).optional(),
+
+    /* Rules execution. Server-only. No default here: see `resolveRulesExecutionMode`. */
+    RULES_EXECUTION_MODE: rulesExecutionModeSchema.optional(),
+    /** Comma-separated org ids permitted to run rules while this rolls out. */
+    RULES_EXECUTION_ORG_ALLOWLIST: z.string().optional(),
+    /**
+     * Cost bounds for one rules sweep, each independently overridable.
+     * Coerced because every environment variable is a string, and required to
+     * be a positive integer so a misconfigured "0" or "-5" fails at startup
+     * instead of quietly disabling or inverting a limit.
+     */
+    RULES_MAX_MENTIONS_PER_SWEEP: z.coerce.number().int().positive().optional(),
+    RULES_MAX_ACTIONS_PER_SWEEP: z.coerce.number().int().positive().optional(),
+    RULES_MAX_RULES_PER_MENTION: z.coerce.number().int().positive().optional(),
+    RULES_EXECUTION_BUDGET_MS: z.coerce.number().int().positive().optional(),
 
     /** 32 bytes, base64 / base64url / hex. Encrypts stored OAuth credentials. */
     TOKEN_ENCRYPTION_KEY: z.string().min(32).optional(),
@@ -184,6 +213,16 @@ function readEnv(): Env {
     GNEWS_API_KEY: process.env.GNEWS_API_KEY || undefined,
     LIA_NEWS_MODE: process.env.LIA_NEWS_MODE || undefined,
     CRON_SECRET: process.env.CRON_SECRET || undefined,
+    RULES_EXECUTION_MODE: process.env.RULES_EXECUTION_MODE || undefined,
+    RULES_EXECUTION_ORG_ALLOWLIST:
+      process.env.RULES_EXECUTION_ORG_ALLOWLIST || undefined,
+    RULES_MAX_MENTIONS_PER_SWEEP:
+      process.env.RULES_MAX_MENTIONS_PER_SWEEP || undefined,
+    RULES_MAX_ACTIONS_PER_SWEEP:
+      process.env.RULES_MAX_ACTIONS_PER_SWEEP || undefined,
+    RULES_MAX_RULES_PER_MENTION:
+      process.env.RULES_MAX_RULES_PER_MENTION || undefined,
+    RULES_EXECUTION_BUDGET_MS: process.env.RULES_EXECUTION_BUDGET_MS || undefined,
   });
 
   if (!parsed.success) {
@@ -496,4 +535,73 @@ export function resolveNewsMode(): NewsMode | "unconfigured" {
 
   if (env.LIA_NEWS_MODE === "live" && env.GNEWS_API_KEY) return "live";
   return "unconfigured";
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rules execution                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which mode the rules engine runs in.
+ *
+ * Execution changes what the product does to customer data without a person
+ * in the loop; absence of configuration must mean absence of the behavior. So,
+ * unlike the other modes in this file, there is no "unconfigured" state to
+ * reason about: an unset `RULES_EXECUTION_MODE` simply means `off`, and any
+ * value the schema would not accept has already stopped the process at
+ * startup — this function never sees it.
+ */
+export function resolveRulesExecutionMode(): RulesExecutionMode {
+  return env.RULES_EXECUTION_MODE ?? "off";
+}
+
+/**
+ * Organization ids permitted to run rules execution while this feature rolls
+ * out gradually.
+ *
+ * Comma-separated, trimmed, empty entries dropped. Absent means the allowlist
+ * is empty — no organization is admitted by default, matching the same
+ * fail-closed posture as the mode itself.
+ */
+export function rulesExecutionAllowlist(): string[] {
+  if (!env.RULES_EXECUTION_ORG_ALLOWLIST) return [];
+  return env.RULES_EXECUTION_ORG_ALLOWLIST.split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+}
+
+export interface RulesExecutionLimits {
+  maxMentionsPerSweep: number;
+  maxActionsPerSweep: number;
+  maxRulesPerMention: number;
+  budgetMs: number;
+}
+
+/** Default cost bounds for one rules sweep. Each is independently overridable. */
+export const DEFAULT_RULES_EXECUTION_LIMITS: RulesExecutionLimits = {
+  maxMentionsPerSweep: 200,
+  maxActionsPerSweep: 500,
+  maxRulesPerMention: 50,
+  budgetMs: 60_000,
+};
+
+/**
+ * Cost bounds for one rules sweep: how many mentions and actions it may
+ * touch, how many rules may evaluate against a single mention, and how long
+ * it may run before stopping. Conservative defaults, each overridable on its
+ * own so a deployment can tune one bound without touching the others.
+ */
+export function rulesExecutionLimits(): RulesExecutionLimits {
+  return {
+    maxMentionsPerSweep:
+      env.RULES_MAX_MENTIONS_PER_SWEEP ??
+      DEFAULT_RULES_EXECUTION_LIMITS.maxMentionsPerSweep,
+    maxActionsPerSweep:
+      env.RULES_MAX_ACTIONS_PER_SWEEP ??
+      DEFAULT_RULES_EXECUTION_LIMITS.maxActionsPerSweep,
+    maxRulesPerMention:
+      env.RULES_MAX_RULES_PER_MENTION ??
+      DEFAULT_RULES_EXECUTION_LIMITS.maxRulesPerMention,
+    budgetMs: env.RULES_EXECUTION_BUDGET_MS ?? DEFAULT_RULES_EXECUTION_LIMITS.budgetMs,
+  };
 }
