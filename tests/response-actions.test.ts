@@ -2,13 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assignResponseDraftAction,
   decideResponseDraftAction,
+  generateResponseDraftAction,
   saveResponseDraftAction,
 } from "@/app/actions/responses";
 import { canDecideOnDraft, canEditDraft, type Mention, type ResponseDraft } from "@/domain";
-import { can } from "@/lib/auth/permissions";
+import { assertPermission } from "@/lib/actions/guard";
+import { can, type Permission } from "@/lib/auth/permissions";
 import { demoStore } from "@/lib/data/demo/store";
 import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
-import { LOC_SOHO, LOC_UES, USER_NAOMI } from "@/lib/seed/dataset";
+import { LOC_SOHO, LOC_UES, MENTION_LABELS, USER_NAOMI } from "@/lib/seed/dataset";
+import { seedId } from "@/lib/seed/ids";
 import { freshDataSource, ushg } from "./helpers/scope";
 
 /**
@@ -46,6 +49,23 @@ vi.mock("@/lib/actions/guard", async (importOriginal) => {
     mutationContext: () => mutationContextMock(),
   };
 });
+
+/**
+ * The generation service is stubbed here on purpose: `tests/generate-response.test.ts`
+ * covers what it does, and what these cases are about is the layer above it —
+ * the permission gate, and the sentence a person reads for each outcome the
+ * service can report. The provider registry goes with it, since resolving a
+ * real one would depend on deployment environment variables.
+ */
+const generateMock = vi.fn();
+
+vi.mock("@/lib/responses/generate", () => ({
+  generateResponseDraft: (...args: unknown[]) => generateMock(...args),
+}));
+
+vi.mock("@/ai/registry", () => ({
+  getAiProvider: () => ({ provider: "fake", model: "fake-model" }),
+}));
 
 // `revalidatePath` requires a live Next.js request scope that does not exist
 // under Vitest; every action under test calls it on the success path, so it
@@ -106,6 +126,7 @@ beforeEach(() => {
   dataSource = freshDataSource();
   authorizeMock.mockReset();
   mutationContextMock.mockReset();
+  generateMock.mockReset();
 });
 
 describe("response.edit permission", () => {
@@ -236,6 +257,35 @@ describe("decideResponseDraftAction with finalText", () => {
     expect(eventTypes).toContain("response.approved");
     expect(eventTypes).not.toContain("response.edited");
   });
+
+  it("records response.changes_requested and returns the draft to draft status", async () => {
+    const scope = ushg.admin();
+    authorizeMock.mockResolvedValue(contextFor(scope));
+
+    const drafts = await dataSource.responseDrafts.list(scope);
+    const editable = drafts.find((draft) => canDecideOnDraft(draft.status));
+    if (!editable) throw new Error("Fixture expected a decidable draft.");
+
+    const result = await decideResponseDraftAction({
+      responseDraftId: editable.id,
+      decision: "changes_requested",
+      decisionNote: "Please soften the tone.",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.status).toBe("draft");
+    expect(result.data.approvedByUserId).toBeNull();
+
+    const events = await dataSource.auditEvents.list(scope, {
+      entityType: "response_draft",
+      entityId: editable.id,
+    });
+    const eventTypes = events.map((event) => event.eventType);
+    expect(eventTypes).toContain("response.changes_requested");
+    expect(eventTypes).not.toContain("response.rejected");
+    expect(eventTypes).not.toContain("response.approved");
+  });
 });
 
 describe("assignResponseDraftAction location scoping", () => {
@@ -328,5 +378,108 @@ describe("assignResponseDraftAction location scoping", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.assignedUserId).toBe(USER_NAOMI);
+  });
+});
+
+describe("response.generate permission", () => {
+  it("grants owner, admin, and communications lead — nobody else", () => {
+    expect(can("owner", "response.generate")).toBe(true);
+    expect(can("admin", "response.generate")).toBe(true);
+    expect(can("communications_lead", "response.generate")).toBe(true);
+    expect(can("approver", "response.generate")).toBe(false);
+    expect(can("analyst", "response.generate")).toBe(false);
+    expect(can("viewer", "response.generate")).toBe(false);
+    expect(can("location_manager", "response.generate")).toBe(false);
+  });
+});
+
+describe("generateResponseDraftAction", () => {
+  const MENTION_ID = seedId(`mention:${MENTION_LABELS.foodSafety}`);
+
+  /** `authorize` as it really behaves: the matrix decides, then the context. */
+  function authorizeRealistically(scope: OrganizationScope): void {
+    authorizeMock.mockImplementation((permission: Permission) => {
+      const context = contextFor(scope);
+      assertPermission(context as never, permission);
+      return Promise.resolve(context);
+    });
+  }
+
+  it("returns the new draft id on success", async () => {
+    authorizeRealistically(ushg.comms());
+    generateMock.mockResolvedValue({ kind: "generated", responseDraftId: "draft-1" });
+
+    const result = await generateResponseDraftAction({ mentionId: MENTION_ID });
+
+    expect(result).toEqual({ ok: true, data: { kind: "generated", responseDraftId: "draft-1" } });
+    expect(authorizeMock).toHaveBeenCalledWith("response.generate");
+  });
+
+  it("reports an already-running attempt as a success, not an error", async () => {
+    authorizeRealistically(ushg.admin());
+    generateMock.mockResolvedValue({ kind: "in_progress" });
+
+    const result = await generateResponseDraftAction({ mentionId: MENTION_ID });
+
+    expect(result).toEqual({ ok: true, data: { kind: "in_progress" } });
+  });
+
+  it("reports an existing draft as a success carrying its id", async () => {
+    authorizeRealistically(ushg.admin());
+    generateMock.mockResolvedValue({ kind: "draft_exists", responseDraftId: "draft-9" });
+
+    const result = await generateResponseDraftAction({ mentionId: MENTION_ID });
+
+    expect(result).toEqual({ ok: true, data: { kind: "draft_exists", responseDraftId: "draft-9" } });
+  });
+
+  it("refuses an analyst before reaching the service", async () => {
+    authorizeRealistically(ushg.analyst());
+
+    const result = await generateResponseDraftAction({ mentionId: MENTION_ID });
+
+    expect(result.ok).toBe(false);
+    expect(generateMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a location manager before reaching the service", async () => {
+    authorizeRealistically(ushg.locationManager());
+
+    const result = await generateResponseDraftAction({ mentionId: MENTION_ID });
+
+    expect(result.ok).toBe(false);
+    expect(generateMock).not.toHaveBeenCalled();
+  });
+
+  it("gives each failure category Lia's own sentence, never the provider's", async () => {
+    authorizeRealistically(ushg.comms());
+
+    const messages: Record<string, string> = {};
+    for (const category of ["provider_error", "invalid_output", "lease_expired"] as const) {
+      generateMock.mockResolvedValue({ kind: "failed", category });
+      const result = await generateResponseDraftAction({ mentionId: MENTION_ID });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      messages[category] = result.error;
+
+      // Sentence case, one sentence a person can act on, and nothing that
+      // could have come out of a model or an HTTP client.
+      expect(result.error).toMatch(/^[A-Z]/);
+      expect(result.error).not.toMatch(/rate.?limit|API|HTTP|\d{3}|anthropic|token/i);
+    }
+
+    // Distinct copy per category: a person should be able to tell "try again"
+    // from "somebody else is already on it".
+    expect(new Set(Object.values(messages)).size).toBe(3);
+  });
+
+  it("rejects a request that does not name a mention", async () => {
+    authorizeRealistically(ushg.comms());
+
+    const result = await generateResponseDraftAction({});
+
+    expect(result.ok).toBe(false);
+    expect(generateMock).not.toHaveBeenCalled();
   });
 });

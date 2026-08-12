@@ -19,6 +19,7 @@ export * from "@/domain/entities/mention";
 export * from "@/domain/entities/sync-run";
 export * from "@/domain/entities/analysis-run";
 export * from "@/domain/entities/response";
+export * from "@/domain/entities/generation";
 export * from "@/domain/entities/escalation";
 export * from "@/domain/entities/automation";
 export * from "@/domain/entities/automation-execution";

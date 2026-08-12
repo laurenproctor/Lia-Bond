@@ -6,8 +6,10 @@ import type {
   AiProvider,
   AnalyzeMentionInput,
   AnalyzeMentionResult,
+  DraftResult,
 } from "@/ai/provider";
 import type { MentionAnalysisOutput } from "@/lib/analysis/schema";
+import type { DraftingContext } from "@/lib/responses/drafting-context";
 
 /**
  * An analyser that never touches the network.
@@ -113,6 +115,46 @@ function classify(mention: Mention): MentionAnalysisOutput {
   };
 }
 
+/**
+ * The fixture's nominal token budget.
+ *
+ * Not a real API parameter -- no call happens -- but `DraftResult.maxOutputTokens`
+ * is non-nullable, so this stands in for it the same way `PROVIDER`/`MODEL`
+ * above stand in for real provenance fields on a call that never touched the
+ * network.
+ */
+const MOCK_DRAFTING_MAX_TOKENS = 4_000;
+
+/**
+ * A fixture reply, not a generated one.
+ *
+ * Deterministic in the same spirit as `classify` above: the same context
+ * always produces the same text, built only from data already on the
+ * context. Shaped to pass the Global Constraints gate
+ * (`validateDraftText`, `src/lib/responses/validate-draft.ts`) -- plain
+ * prose on one line, no Markdown, no links, no preamble, well under the
+ * length cap -- so exercising the mock exercises that gate the same way a
+ * real draft would.
+ */
+function mockDraftText(context: DraftingContext): string {
+  const org = context.business.organizationName;
+  // `topics` can be present but empty (a real low-signal mention), not just
+  // absent -- `?.[0]` alone would silently interpolate the string
+  // "undefined" in that case, so the length check guards both.
+  const topic =
+    context.analysis && context.analysis.topics.length > 0
+      ? context.analysis.topics[0]
+      : "your visit";
+  const closing = context.voice.signOff ?? `The ${org} team`;
+
+  return [
+    `Thank you for taking the time to tell us about ${topic}.`,
+    `We read every review at ${org} and take this kind of feedback seriously as we keep improving.`,
+    `We would love the chance to welcome you back again soon.`,
+    closing,
+  ].join(" ");
+}
+
 export interface MockProviderOptions {
   /**
    * Make every call fail with this code.
@@ -125,10 +167,17 @@ export interface MockProviderOptions {
 
 export function createMockAiProvider(
   options: MockProviderOptions = {},
-): AiProvider {
-  return {
+): AiProvider & {
+  /**
+   * Calls to `draftResponse`, so a test can assert call counts without
+   * stubbing a network layer that does not exist for this provider.
+   */
+  draftCallCount: number;
+} {
+  const provider: AiProvider & { draftCallCount: number } = {
     provider: PROVIDER,
     model: MODEL,
+    draftCallCount: 0,
 
     async analyzeMention(
       input: AnalyzeMentionInput,
@@ -146,5 +195,27 @@ export function createMockAiProvider(
         outputTokens: null,
       };
     },
+
+    async draftResponse(context: DraftingContext): Promise<DraftResult> {
+      provider.draftCallCount += 1;
+
+      if (options.failWith) throw aiError(options.failWith);
+
+      return {
+        draftText: mockDraftText(context),
+        modelProvider: PROVIDER,
+        modelName: MODEL,
+        maxOutputTokens: MOCK_DRAFTING_MAX_TOKENS,
+        temperature: null,
+        // Null throughout below, same reasoning as analyzeMention's token
+        // counts: no call happened, so there is no honest non-null value.
+        providerRequestId: null,
+        inputTokens: null,
+        outputTokens: null,
+        latencyMs: 0,
+      };
+    },
   };
+
+  return provider;
 }

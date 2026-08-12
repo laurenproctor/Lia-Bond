@@ -4,6 +4,7 @@ import { FileText, MapPin, Send } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
 import { MentionDetailCard } from "@/components/mentions/mention-detail-card";
 import { WorkspaceQueue } from "@/components/mentions/workspace-queue";
+import { GenerateResponseButton } from "@/components/responses/generate-response-button";
 import { ResponseComposer } from "@/components/responses/response-composer";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -28,7 +29,16 @@ export default async function GoogleReviewWorkspacePage({ params }: PageProps) {
   const data = await loadWorkspace(id, ["google_review"]);
   if (!data) notFound();
 
-  const { queue, selected, detail, publishing, canDecide, canEdit } = data;
+  const {
+    queue,
+    selected,
+    detail,
+    publishing,
+    canDecide,
+    canEdit,
+    canGenerate,
+    latestGenerationAttempt,
+  } = data;
   const primaryDraft = detail.drafts[0] ?? null;
 
   const needsResponse = queue.filter((mention) =>
@@ -98,11 +108,19 @@ export default async function GoogleReviewWorkspacePage({ params }: PageProps) {
                   canEdit={canEdit}
                 />
               ) : (
-                <EmptyState
-                  title="No draft yet"
-                  description="Response generation arrives with the AI workflow. Until then, drafts are created by a person."
-                  size="sm"
-                />
+                <div className="flex flex-col gap-3">
+                  <EmptyState
+                    title="No draft yet"
+                    description="Lia can write a first reply in your brand voice. A person reviews and approves it before anything is published."
+                    size="sm"
+                  />
+                  <GenerateResponseButton
+                    mention={detail.mention}
+                    latestAttempt={latestGenerationAttempt}
+                    hasDraft={false}
+                    canGenerate={canGenerate}
+                  />
+                </div>
               )}
             </div>
           </Card>

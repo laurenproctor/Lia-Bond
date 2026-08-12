@@ -12,6 +12,7 @@ const APPROVAL_TONES: Record<ApprovalStatus, TimelineTone> = {
   pending: "amber",
   approved: "green",
   rejected: "red",
+  changes_requested: "amber",
   canceled: "neutral",
 };
 

@@ -168,6 +168,7 @@ export const APPROVAL_STATUS_LABELS: Record<ApprovalStatus, string> = {
   pending: "Pending",
   approved: "Approved",
   rejected: "Rejected",
+  changes_requested: "Changes requested",
   canceled: "Canceled",
 };
 
@@ -216,6 +217,8 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "response.assigned": "Response assigned",
   "response.approved": "Response approved",
   "response.rejected": "Response rejected",
+  "response.generated": "Response generated",
+  "response.changes_requested": "Changes requested",
   "response.edited": "Response edited",
   "escalation.assigned": "Escalation assigned",
   "escalation.status_changed": "Escalation status changed",

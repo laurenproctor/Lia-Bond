@@ -67,6 +67,7 @@ import {
   toAutomationRule,
   toBrandVoiceProfile,
   toEscalation,
+  toGenerationAttempt,
   toInvitation,
   toLocation,
   toMembership,
@@ -2415,6 +2416,153 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           .order("created_at", { ascending: false });
         if (error) fail(error, "load approvals");
         return rows(data).map(toApproval);
+      },
+    },
+
+    generationAttempts: {
+      /**
+       * The mirror of `claim_generation_attempt`. Runs on `client` — the
+       * caller's own session — not `serviceClient()`: the function's role
+       * check reads `auth.uid()`, which only resolves under the invoker's
+       * own JWT (spec's chosen model; Conflict 3). Every other RPC-backed
+       * write in this adapter that needs organization-wide authority uses
+       * `serviceClient()`; this one deliberately does not.
+       *
+       * `scope` is unused: unlike every table-backed method in this adapter,
+       * there is no `organization_id` to filter by here — the function
+       * derives the tenant from the mention row itself and checks the
+       * caller's membership in it, exactly as `claim_generation_attempt`
+       * does. The parameter stays for interface symmetry with every other
+       * repository method (and because a future caller-side check could
+       * want it), not because this call site reads it.
+       */
+      async claim(_scope, input) {
+        const { data, error } = await client.rpc("claim_generation_attempt", {
+          p_mention_id: input.mentionId,
+          p_context: input.context,
+          p_context_hash: input.contextHash,
+          p_prompt_version: input.promptVersion,
+          p_brand_voice_source: input.brandVoiceSource,
+          p_brand_voice_version: input.brandVoiceVersion,
+          p_analysis_included: input.analysisIncluded,
+          p_lease_seconds: input.leaseSeconds,
+        });
+
+        if (error) fail(error, "claim the generation attempt");
+        const row = singleRow(data);
+        if (!row) {
+          throw new DataError(
+            "unavailable",
+            "Could not claim the generation attempt. Please try again.",
+          );
+        }
+
+        switch (row.outcome) {
+          case "claimed":
+            return {
+              outcome: "claimed" as const,
+              attemptId: row.attempt_id as string,
+              claimToken: row.claim_token as string,
+            };
+          case "in_progress":
+            return { outcome: "in_progress" as const, attemptId: row.attempt_id as string };
+          case "draft_exists":
+            return {
+              outcome: "draft_exists" as const,
+              responseDraftId: row.response_draft_id as string,
+            };
+          default:
+            throw new DataError(
+              "unavailable",
+              "The claim returned an unrecognised outcome.",
+            );
+        }
+      },
+
+      /**
+       * The mirror of `complete_generation_attempt`. Same client, same
+       * reason as `claim`; `scope` is unused for the same reason too — the
+       * CAS is on `(attemptId, claimToken)`, which already names the row.
+       */
+      async complete(_scope, input) {
+        const { data, error } = await client.rpc("complete_generation_attempt", {
+          p_attempt_id: input.attemptId,
+          p_claim_token: input.claimToken,
+          p_draft_text: input.draftText,
+          p_rendered_system_hash: input.renderedSystemHash,
+          p_rendered_user_hash: input.renderedUserHash,
+          p_output_schema_version: input.outputSchemaVersion,
+          p_model_provider: input.modelProvider,
+          p_model_name: input.modelName,
+          p_max_output_tokens: input.maxOutputTokens,
+          p_temperature: input.temperature,
+          p_provider_request_id: input.providerRequestId,
+          p_input_tokens: input.inputTokens,
+          p_output_tokens: input.outputTokens,
+          p_latency_ms: input.latencyMs,
+        });
+
+        if (error) fail(error, "complete the generation attempt");
+        const row = singleRow(data);
+        if (!row) {
+          throw new DataError(
+            "unavailable",
+            "Could not complete the generation attempt. Please try again.",
+          );
+        }
+
+        if (row.outcome === "superseded") return { outcome: "superseded" as const };
+        return {
+          outcome: "completed" as const,
+          responseDraftId: row.response_draft_id as string,
+        };
+      },
+
+      /**
+       * The mirror of `fail_generation_attempt`. Declared `returns text` with
+       * no `SETOF`, so PostgREST answers with the scalar directly — like
+       * `purgeExpired`'s integer, not wrapped in a row or an array. `scope`
+       * is unused for the same reason it is in `complete`.
+       */
+      async fail(_scope, input) {
+        const { data, error } = await client.rpc("fail_generation_attempt", {
+          p_attempt_id: input.attemptId,
+          p_claim_token: input.claimToken,
+          p_failure_category: input.failureCategory,
+          p_latency_ms: input.latencyMs,
+          p_provider_request_id: input.providerRequestId,
+        });
+
+        if (error) fail(error, "record the generation failure");
+        if (data !== "failed" && data !== "superseded") {
+          throw new DataError(
+            "unavailable",
+            "The failure record returned an unrecognised outcome.",
+          );
+        }
+        return data;
+      },
+
+      async latestForMention(scope, mentionId) {
+        // An explicit column list, not `from()`'s `select("*")`: this is the
+        // one table in the schema with a column-level grant narrower than
+        // the table-level one (`claim_token` is revoked — see the migration
+        // and `toGenerationAttempt`'s doc comment). Naming every column this
+        // adapter actually reads keeps the query correct regardless of how a
+        // given PostgREST version expands `*` against a partial grant.
+        const { data, error } = await client
+          .from("generation_attempts")
+          .select(
+            "id, organization_id, mention_id, status, failure_category, claimed_by_user_id, claimed_at, expires_at, finished_at, response_draft_id, prompt_version, brand_voice_source, brand_voice_version, analysis_included, dedup_hits, model_provider, model_name, input_tokens, output_tokens, latency_ms, created_at, updated_at",
+          )
+          .eq("organization_id", scope.organizationId)
+          .eq("mention_id", mentionId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (error) fail(error, "load the latest generation attempt");
+        return data ? toGenerationAttempt(data as Row) : null;
       },
     },
 

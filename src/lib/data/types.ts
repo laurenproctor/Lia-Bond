@@ -10,6 +10,7 @@ import type {
   AutomationRuleFilter,
   AutomationSweep,
   BrandVoiceProfile,
+  BrandVoiceSource,
   ConnectionHealthUpdate,
   CreateEscalationInput,
   CreateLocationInput,
@@ -22,6 +23,8 @@ import type {
   ExecutionActionOutcome,
   FinishAnalysisRunInput,
   FinishSyncRunInput,
+  GenerationAttempt,
+  GenerationFailureCategory,
   IngestMentionInput,
   Invitation,
   InvitationPreview,
@@ -67,6 +70,7 @@ import type {
   UpsertPlatformProfileInput,
   User,
 } from "@/domain";
+import type { DraftingContext } from "@/lib/responses/drafting-context";
 
 /**
  * Repository contracts.
@@ -727,12 +731,78 @@ export interface ResponseDraftRepository {
   decide(
     scope: OrganizationScope,
     draftId: string,
-    decision: "approved" | "rejected",
+    decision: "approved" | "changes_requested",
     decidedByUserId: string,
     decisionNote?: string,
     finalText?: string,
   ): Promise<{ draft: ResponseDraft; approval: Approval | null }>;
   listApprovals(scope: OrganizationScope, draftId: string): Promise<Approval[]>;
+}
+
+/**
+ * Response generation's claim/complete/fail lifecycle.
+ *
+ * The mirror of `claim_generation_attempt` / `complete_generation_attempt` /
+ * `fail_generation_attempt` (spec: response-generation v3,
+ * `supabase/migrations/20260813000200_generation_functions.sql`). Every
+ * method here is the whole transaction — there is no partial-write path a
+ * caller can observe.
+ *
+ * `claim`'s role check is restated here rather than only at the action layer
+ * (unlike every other repository in this file): the SQL function checks
+ * `response.generate` internally too (defense in depth, the onboarding
+ * precedent), and both adapters must mirror that, not just the Postgres one.
+ */
+export interface GenerationAttemptRepository {
+  /** The serialized claim. Mirrors `claim_generation_attempt` exactly. */
+  claim(
+    scope: OrganizationScope,
+    input: {
+      mentionId: string;
+      context: DraftingContext;
+      contextHash: string;
+      promptVersion: string;
+      brandVoiceSource: BrandVoiceSource;
+      brandVoiceVersion: string | null;
+      analysisIncluded: boolean;
+      leaseSeconds?: number;
+    },
+  ): Promise<
+    | { outcome: "claimed"; attemptId: string; claimToken: string }
+    | { outcome: "in_progress"; attemptId: string }
+    | { outcome: "draft_exists"; responseDraftId: string }
+  >;
+  complete(
+    scope: OrganizationScope,
+    input: {
+      attemptId: string;
+      claimToken: string;
+      draftText: string;
+      renderedSystemHash: string;
+      renderedUserHash: string;
+      outputSchemaVersion: string;
+      modelProvider: string;
+      modelName: string;
+      maxOutputTokens: number;
+      temperature: number | null;
+      providerRequestId: string | null;
+      inputTokens: number | null;
+      outputTokens: number | null;
+      latencyMs: number;
+    },
+  ): Promise<{ outcome: "completed"; responseDraftId: string } | { outcome: "superseded" }>;
+  fail(
+    scope: OrganizationScope,
+    input: {
+      attemptId: string;
+      claimToken: string;
+      failureCategory: GenerationFailureCategory;
+      latencyMs: number;
+      providerRequestId: string | null;
+    },
+  ): Promise<"failed" | "superseded">;
+  /** Button state on the workspace: the newest attempt, any status. */
+  latestForMention(scope: OrganizationScope, mentionId: string): Promise<GenerationAttempt | null>;
 }
 
 export interface EscalationRepository {
@@ -1203,6 +1273,8 @@ export interface LiaDataSource {
   newsRejectedCandidates: NewsRejectedCandidateRepository;
   mentions: MentionRepository;
   responseDrafts: ResponseDraftRepository;
+  /** The claim/complete/fail lifecycle behind manual response generation. */
+  generationAttempts: GenerationAttemptRepository;
   escalations: EscalationRepository;
   automationRules: AutomationRuleRepository;
   /** One pass of the automation engine over pending mentions, per organization. */

@@ -680,6 +680,10 @@ organization — that is an operator action against `RULES_EXECUTION_MODE` and
 | D163 | `execute_automation_rule` executes only the stored rule revision — the caller names a unit (`rule_id`, `revision`, `mention_id`, `analysis_id`), never supplies action payloads — and validates the stored `actions` jsonb null-safely against all eight authorable action shapes before any business write | A caller-supplied payload would let a request define what a "rule" does at execution time, defeating the point of `revision`-gated activation (D138, D139): what runs is what was simulated and activated, looked up fresh from the row under `for share`, with a stale revision failing closed (`rule_changed`, terminal). Validation covers `generate_draft`, `auto_publish`, `require_approval`, `assign`, `escalate`, `notify`, `tag`, and `set_status` — the same eight `ruleActionSchema` recognizes — and is null-safe by construction: every case arm is wrapped in `coalesce(…, false)` so a missing or null field fails validation rather than evaluating to SQL `null`, which `bool_and` would silently discard from the aggregate and let slip through. A validation failure is `would_fail_validation` in dry run and terminal `failed`/`invalid_action` in apply, before any mutation. Once inside the apply loop, each action's raw decision (from `automation_set_status_decision`/`automation_escalate_decision`, or the escalation ladder's own `reason`) is mapped at the boundary into the pinned outcome vocabulary — `escalation_exists`/`occurrence_replayed` become `no_op`/`escalation_exists`; the matrix-unreachable `mention_dismissed`/`awaiting_retriage` arms map defensively to `blocked`/`forbidden_transition` — so SQL-internal reason strings never leak into the outcome rows the UI and the parity tests read. |
 | D164 | Sweep claiming is one atomic decision inside `claim_automation_sweep`: the existing `running` row (if any) is locked `for update` first, so exactly one caller performs a stale-lease takeover and every other concurrent caller blocks on that lock, re-reads, and receives the winner's claim as an ordinary `claimed: false` outcome — never a race against the insert | An application-level "check then insert" would race exactly like every other unlocked check-then-write in this codebase (D24's reasoning restated for sweeps). Locking the running row first, rather than racing straight to the insert, means the 30-minute lease-expiry decision itself only ever happens once per stale row, by whichever caller won the lock — no second caller can also decide the lease is expired and insert a competing claim. The unique-violation absorption on the fallback insert path is diagnostics-verified rather than assumed: `get stacked diagnostics constraint_name` is checked against the literal `automation_sweeps_one_running`, and anything else re-raises, because a partial unique index has no entry in `pg_constraint` — the constraint-name string in the diagnostics is the only reliable identity available, and asserting it (rather than swallowing every `unique_violation`) keeps an unrelated future unique constraint on the same table from being silently absorbed here too. |
 | D165 | CI is the parity gate: a `database` job runs the full `db:verify-execution` harness (RLS + execution-verification + the generated matrix-parity SQL + the concurrency race script) against a freshly started local Supabase instance on every PR and push to `master`, at a Supabase CLI version pinned to the exact combination the harness ran green on during Task 11 (`2.101.0`, Postgres 17.6) — not a combination verified "safe": that image's known segfault behavior is a fact the harness routes around, not one it clears | A TypeScript-only review of a matrix or RPC change cannot catch SQL that silently disagrees with `transitions.ts` or the demo adapter's twin; running the harness on every change is what makes that drift a merge blocker instead of a later production surprise. The CLI pin is not cosmetic: Task 11 found that this local Postgres image **segfaults** the whole cluster on an EXECUTE-denied call of a non-immutable function after `set role` — exactly the shape of an unauthorized PostgREST RPC call — while an *immutable* function under the same denial returns a clean `42501` (the ACL check happens during constant folding rather than in the executor, which is what narrows the trigger to non-immutable functions specifically). `db:verify-execution` is written around this, not fixed by it: the one place the spec calls for asserting "`service_role` cannot execute `raise_escalation` directly" is proven statically, from `pg_catalog.has_function_privilege`, rather than by attempting the denied call — because attempting it would take the harness's own database down mid-run. The pin exists to hold this avoidance strategy fixed against a known-quantity image, not to certify the image safe; bumping it requires a local `npm run db:verify-execution` run first precisely because a different image could change the segfault behavior in either direction — narrower (only a smaller set of calls crash it) or wider (more of the harness's own catalog-based workarounds stop being sufficient) — and nothing here would notice without that run. Marking the `database` job a required status check in branch protection is recorded as the runbook's owner action, not done by this task — CI enforces the check only once a human enables it as a merge gate. |
+| D166 | A generation attempt is written by exactly three functions — `claim_generation_attempt`, `complete_generation_attempt`, `fail_generation_attempt` — which serialize on the **mention row**, hand the claimant a compare-and-set token, and commit the draft, the attempt, and the audit event as one transaction | `authenticated` holds no `insert`/`update`/`delete` on `generation_attempts` at all, so the trio is the whole write surface rather than the recommended path through it. The claim's first act is `select … from mentions where id = … for update`: two clicks on the same review cannot both reach the insert, because the second parks on that lock, re-reads after the first commits, and reports `in_progress` with its `dedup_hits` counted (proven by race 1 in `scripts/generation-race-test.sh`, which asserts session B is genuinely parked via `pg_stat_activity` rather than assuming it). `complete`/`fail` are compare-and-set on `(id, claim_token, status = 'pending')`, which is what makes a stale worker harmless: a hung claimant whose lease expired and whose review was taken over returns to find its completion refused as `superseded`, with the replacement attempt byte-identical afterwards (race 3 compares `to_jsonb(row)` either side). `complete` locks the mention up front too, matching the claim's order, because its `response_drafts` insert would otherwise take an implicit FK lock on the same row in the opposite order and deadlock a completing worker against a live lease. The lease sweep runs **before** the `draft_exists` short-circuit: ordering it the other way pinned an expired attempt at `pending` forever on any mention that had acquired a draft by some other path, since nothing ever reached the sweep again. `generation_attempts_one_pending` is a backstop behind the serialized claim, not the mechanism. |
+| D167 | Every attempt records the exact input it was given — the frozen `DraftingContext`, its canonical hash, the prompt version, and hashes of the rendered system and user messages — and the drafting prompt is version-pinned by a test that hashes the template and the version together | Provenance that can be reconstructed is not provenance: the mention, the location, the organization, and the brand-voice profile can all change between a draft being written and somebody asking why it says what it says, so `buildDraftingContext` deep-copies what it read and the row stores that snapshot verbatim rather than the ids to re-read it from. `context_hash` is over a key-order-independent encoding, so two attempts with the same inputs are comparable regardless of how the JSON happened to serialize. The pin test hashes `DRAFTING_PROMPT_VERSION` *together with* the template constants, so editing the wording without bumping the version fails, and bumping the version without editing the wording fails too — the pair moves or neither does. `output_schema_version` is recorded separately from the prompt version because the structured-output schema and the prose can change independently. The gate between the model and the database (`validateDraftText`) is the reason a stored draft is worth this provenance at all: no URL, e-mail, phone number, Markdown, preamble, or second option reaches `complete`, and a refusal is recorded as `invalid_output` rather than saved and flagged. |
+| D168 | `changes_requested` replaces `rejected` as the decision an approver emits; the `approval_status` enum keeps `rejected` for the rows that already carry it, and the composer says "Request changes" | The old label described the wrong thing. Sending a draft back does not end its life — it returns it to editable `draft` status for the writer — so "rejected" named a terminal outcome the code never produced. `decideResponseDraftInputSchema` now accepts `changes_requested` and **rejects** `rejected`, pinned in both directions, because a swap that merely adds the new value leaves the old emission path alive. The enum value stays: Postgres cannot remove one, and historical rows are history rather than a migration problem. The confirm dialog lost its `destructive` styling with the rename — red framing for "the writer gets it back" overstated what happens. |
+| D169 | The retention *mechanism* ships without a retention *policy*: `redact_generation_snapshots(interval)` empties finished attempts' context snapshots to the JSON-null sentinel, and nothing calls it | The period is an operational decision that needs a person, and a migration inventing "30 days" would make that decision silently. What the mechanism guarantees is testable now and independent of the number eventually chosen: only finished attempts are touched, hashes and telemetry survive so a redacted row stays auditable, no audit event is written, and a second pass reports zero. The column stays `not null` and a redacted snapshot reads as jsonb `null` — distinguishable from any real context object, where "deleted the row" or "wrote `{}`" would not be. **Open operational item:** choosing the period and scheduling the call. Related deviation, recorded as deliberate: the spec called for `scripts/verify-generation-concurrency.ts` over a new `pg` dev dependency, and the shipped proof is `scripts/generation-race-test.sh` over FIFO-driven psql sessions instead — the G1 race harness already established that pattern, it adds no dependency, and driving the interleaving statement by statement is what makes the races reproducible rather than timing-dependent. |
 
 ## Known gaps after workflow 04
 
@@ -696,7 +700,11 @@ Carried over from workflow 01:
   against the demo adapter.
 - ~~Brand voice has no table; the screen still reads a typed fixture.~~
   **Resolved.** `brand_voice_profiles` ships with RLS, both adapters, and an
-  audited action. Nothing generates text from it yet.
+  audited action. ~~Nothing generates text from it yet.~~ **Also resolved:**
+  response generation reads the profile into a frozen drafting context and a
+  drafted reply records which voice produced it (D166–D167). A tenant with no
+  saved profile drafts from `DEFAULT_BRAND_VOICE`, recorded honestly as
+  `brand_voice_source: "default"` rather than as a configured voice.
 - Insights aggregates are computed in the repository layer over the full mention
   set. They will need SQL aggregates or a materialized view at real volume.
 
@@ -789,8 +797,11 @@ New in brand voice configuration:
 - **The axis taxonomy is unvalidated.** Five paired sliders are inherited from
   the fixture and the reference screens. Whether they are the right five is
   unanswerable until a prompt consumes them.
-- `response_drafts.brand_voice_version` is still written null. Stamping it is
-  drafting's job.
+- ~~`response_drafts.brand_voice_version` is still written null. Stamping it is
+  drafting's job.~~ **Resolved.** `complete_generation_attempt` copies the
+  version off the attempt that produced the draft, so a generated reply names
+  the voice it was written in. Drafts created by a person still carry null —
+  there is no voice version to name.
 - **The screen's interactive behaviour has not been exercised in a browser.**
   Slider dragging, the autosave settling window, the status transitions, the
   retry path, Enter-adds-a-phrase, and the end-to-end save round trip are
@@ -1027,6 +1038,18 @@ New building rule execution (G1):
   migrations. The Internal-apply runbook below governs turning it on for the
   founder/test organization only (G1's own scope, per the spec's release
   gates).
+- **Response generation landed.** Lia now writes a first reply for a Google
+  review on request: a frozen drafting context built from the mention, the
+  location, the organization, and the brand-voice profile; a version-pinned
+  prompt; a hard output gate between the model and the database; and the
+  claim/complete/fail lifecycle that makes a second click cost nothing and a
+  stale worker's late result harmless. Verified against real Postgres by
+  `npm run db:verify-generation` (85 harness checks + three FIFO-driven
+  concurrency races), which the `database` CI job runs alongside the execution
+  harness. See D166–D169. Generation is manual only — nothing schedules it,
+  no rule action triggers it, and every draft it produces enters the same
+  approval flow a person's draft does. The hosted project has received none
+  of its four migrations; the runbook below sequences that push.
 - **The local-image segfault finding (Task 11) is an operational fact, not
   merely a test-harness workaround.** An EXECUTE-denied call of a
   non-immutable function after `set role` — the exact shape of an
@@ -1114,6 +1137,10 @@ requires its own, separate work (see the G1 gaps above).
 | `20260812000400` | `automation_transition_functions.sql` | `automation_set_status_decision`/`automation_escalate_decision`, the matrix restated in SQL. |
 | `20260812000500` | `execute_automation_rule_rpc.sql` | The transactional execution RPC (D163). |
 | `20260812000600` | `automation_execution_support.sql` | `claim_automation_sweep`, `automation_mark_activity`, and the widened `organizations_with_unanalyzed_mentions`. |
+| `20260812000700` | `response_generation_audit_vocabulary.sql` | Redefines `audit_events_known_event_type` to add `response.generated` and `response.changes_requested`. Landed ahead of the rest of its vocabulary change: the TS↔SQL drift-guard test forced the audit literals to ship with the domain change that introduced them (D168). |
+| `20260813000100` | `generation_attempts.sql` | The `generation_attempts` table: state-shape CHECKs, the one-pending partial unique index, composite tenant FKs to `mentions` and `response_drafts`, select-only RLS, and the column revoke that makes `claim_token` unreadable (D166). |
+| `20260813000200` | `generation_functions.sql` | `claim_generation_attempt`, `complete_generation_attempt`, `fail_generation_attempt`, `redact_generation_snapshots`, and their grants (D166, D169). |
+| `20260813000300` | `response_generation_vocabulary.sql` | `alter type approval_status add value 'changes_requested'` (D168). Irreversible: Postgres enums cannot drop a value, so rollback is an application revert that stops emitting it. |
 
 ### Rollout sequence
 
@@ -1138,16 +1165,33 @@ post-push gate, run before enabling anything.
    The `database` CI job running this on every PR is the ongoing form of
    this gate; a manual local run before pushing is the one-time form of it
    for the push itself.
-2. **Push the six migrations, coordinated with deploy.** `supabase db
+
+   **Response generation adds a second harness to this gate.** Run
+   `npm run db:verify-generation` as well, the same way and at the same
+   pinned CLI. It resets the stack itself, so the two are independent runs
+   rather than one chained sequence, and CI runs both in the `database`
+   job.
+2. **Push the migrations, coordinated with deploy.** `supabase db
    push` against the hosted project, timed immediately before or upon
    deploying this branch — see the deploy-ordering note at the top of this
    section. Do not let a push and the matching deploy drift apart in time.
+
+   The pending set is now **ten**: G1's six, plus response generation's four
+   (`20260812000700`, `20260813000100`–`20260813000300`). The same
+   coordination rule governs both groups, and for the same reason —
+   generation's UI is live in this branch, and the composer's generate
+   button against a hosted project without `claim_generation_attempt` fails
+   as a clean classified error rather than a crash, but shipping that state
+   deliberately would put a button in front of people that cannot work.
+   `20260813000300` (`alter type approval_status add value`) is the one
+   irreversible step in the set: enum values cannot be dropped, so rolling
+   back means reverting the application so nothing emits the value.
 3. **Probe the hosted build for the segfault finding, post-push, before
    enabling anything.** Task 11 found that the *local* Postgres 17.6 image
    crashes (`SIGSEGV`, whole cluster into recovery) on an EXECUTE-denied
    call of a non-immutable function after `set role` — the same shape as
-   an unauthorized PostgREST RPC call. Now that the six migrations are on
-   hosted (step 2) and before `RULES_EXECUTION_MODE` is set to anything but
+   an unauthorized PostgREST RPC call. Now that step 2's migrations are on
+   hosted and before `RULES_EXECUTION_MODE` is set to anything but
    `off` there, make an unauthorized RPC call against the hosted
    PostgREST endpoint — for example, call `raise_escalation` or
    `organizations_with_unanalyzed_mentions` as an `authenticated` (non

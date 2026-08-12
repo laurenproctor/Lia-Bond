@@ -58,7 +58,7 @@ export function ResponseComposer({
 }: ResponseComposerProps) {
   const textareaId = useId();
   const [content, setContent] = useState(draft.finalText ?? draft.draftText);
-  const [confirming, setConfirming] = useState<"approve" | "reject" | null>(null);
+  const [confirming, setConfirming] = useState<"approve" | "changes" | null>(null);
   const [outcome, setOutcome] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -83,7 +83,7 @@ export function ResponseComposer({
     });
   }
 
-  function decide(decision: "approved" | "rejected") {
+  function decide(decision: "approved" | "changes_requested") {
     setError(null);
     setOutcome(null);
     startTransition(async () => {
@@ -103,7 +103,7 @@ export function ResponseComposer({
       setOutcome(
         decision === "approved"
           ? "Approved. It's ready for publishing."
-          : "Sent back to draft.",
+          : "Changes requested. The draft is editable again.",
       );
     });
   }
@@ -166,9 +166,9 @@ export function ResponseComposer({
                 variant="secondary"
                 icon={ThumbsDown}
                 disabled={pending}
-                onClick={() => setConfirming("reject")}
+                onClick={() => setConfirming("changes")}
               >
-                Send back
+                Request changes
               </Button>
             </>
           ) : null}
@@ -225,13 +225,12 @@ export function ResponseComposer({
       </ConfirmDialog>
 
       <ConfirmDialog
-        open={confirming === "reject"}
-        destructive
-        title="Send this back to draft"
-        description="The response returns to the writer. Nothing is published, and the decision is recorded in the audit trail."
-        confirmLabel="Send back"
+        open={confirming === "changes"}
+        title="Request changes to this response"
+        description="The draft becomes editable again and returns to the writer. Nothing is published, and the decision is recorded in the audit trail."
+        confirmLabel="Request changes"
         onCancel={() => setConfirming(null)}
-        onConfirm={() => decide("rejected")}
+        onConfirm={() => decide("changes_requested")}
       />
     </div>
   );

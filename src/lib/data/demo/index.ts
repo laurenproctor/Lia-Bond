@@ -43,6 +43,7 @@ import {
   type CreateEscalationInput,
   type Escalation,
   type ExecutionActionOutcome,
+  type GenerationAttempt,
   type Invitation,
   type JsonObject,
   type Location,
@@ -62,7 +63,8 @@ import {
   type User,
 } from "@/domain";
 import { canDecideOnDraft, canEditDraft, zeroSweepCounters } from "@/domain";
-import { DataError, conflict, invalidInput, notFound } from "@/lib/data/errors";
+import { can, explainDenial } from "@/lib/auth/permissions";
+import { DataError, conflict, forbidden, invalidInput, notFound } from "@/lib/data/errors";
 import {
   computeLocationMetrics,
   computeOrganizationMetrics,
@@ -70,7 +72,13 @@ import {
   isOpenStatus,
   rankByUrgency,
 } from "@/lib/data/metrics";
-import { demoRuntimeStore, demoStore, replaceRow, scoped } from "@/lib/data/demo/store";
+import {
+  demoRuntimeStore,
+  demoStore,
+  replaceRow,
+  scoped,
+  type DemoGenerationAttempt,
+} from "@/lib/data/demo/store";
 import { createMonitoringRepositories } from "@/lib/data/demo/monitoring";
 import {
   AnalysisRunInProgressError,
@@ -358,6 +366,8 @@ export function createDemoDataSource(): LiaDataSource {
     orgRows(store().responseDrafts, scope);
   const analysesIn = (scope: OrganizationScope): MentionAnalysis[] =>
     orgRows(store().mentionAnalyses, scope);
+  const attemptsIn = (scope: OrganizationScope): DemoGenerationAttempt[] =>
+    orgRows(demoRuntimeStore().generationAttempts, scope);
 
   /**
    * "Does a run still have something to do with this mention?"
@@ -2496,6 +2506,237 @@ export function createDemoDataSource(): LiaDataSource {
         return orgRows(store().approvals, scope)
           .filter((row) => row.responseDraftId === draftId)
           .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      },
+    },
+
+    generationAttempts: {
+      // The single-threaded twin of `claim_generation_attempt` — see the
+      // migration's file header and this method's own comments for which
+      // ordering decisions are load-bearing and why. Real wall-clock time
+      // throughout (`realNowIso()` / `Date.now()`), like every other lease in
+      // this file (`analysisRuns`, `platformSyncRuns`, `automationSweeps`):
+      // a lease's expiry has to be checkable against the clock a test can
+      // actually backdate against, and the frozen seed clock never advances.
+      async claim(scope, input) {
+        // Restated here, not only at the action layer (Task 9's
+        // `authorize("response.generate")`): `claim_generation_attempt`
+        // checks the same role list internally (the onboarding precedent),
+        // so both adapters mirror the database rather than trusting the
+        // caller already checked.
+        if (!can(scope.role, "response.generate")) {
+          throw forbidden(explainDenial("response.generate", scope.role));
+        }
+
+        const mention = mentionsIn(scope).find((row) => row.id === input.mentionId);
+        if (!mention) throw notFound("Mention");
+
+        if (mention.sourceType !== "google_review") {
+          throw invalidInput("Generation supports Google reviews only.");
+        }
+
+        const runtime = demoRuntimeStore();
+        const attempts = attemptsIn(scope);
+
+        // Sweep first, before the draft_exists check below — an expired
+        // lease is closed even on a mention that already carries a draft.
+        // See the migration's comment on this exact ordering.
+        const pending = attempts.find(
+          (row) => row.mentionId === input.mentionId && row.status === "pending",
+        );
+
+        let stillPending = false;
+        if (pending) {
+          if (Date.parse(pending.expiresAt) < Date.now()) {
+            const closedAt = realNowIso();
+            replaceRow(runtime.generationAttempts, {
+              ...pending,
+              status: "failed",
+              failureCategory: "lease_expired",
+              finishedAt: closedAt,
+              updatedAt: closedAt,
+            });
+          } else {
+            stillPending = true;
+          }
+        }
+
+        // D132: any draft blocks generation regardless of status. Newest
+        // first, matching the SQL's `order by created_at desc, id limit 1`.
+        let newestDraft: ResponseDraft | null = null;
+        for (const draft of draftsIn(scope)) {
+          if (draft.mentionId !== input.mentionId) continue;
+          if (!newestDraft || Date.parse(draft.createdAt) >= Date.parse(newestDraft.createdAt)) {
+            newestDraft = draft;
+          }
+        }
+        if (newestDraft) {
+          return { outcome: "draft_exists", responseDraftId: newestDraft.id };
+        }
+
+        if (stillPending && pending) {
+          const updated = replaceRow(runtime.generationAttempts, {
+            ...pending,
+            dedupHits: pending.dedupHits + 1,
+            updatedAt: realNowIso(),
+          });
+          return { outcome: "in_progress", attemptId: updated.id };
+        }
+
+        const timestamp = realNowIso();
+        const leaseSeconds = input.leaseSeconds ?? 120;
+        const created: DemoGenerationAttempt = {
+          id: crypto.randomUUID(),
+          organizationId: scope.organizationId,
+          mentionId: input.mentionId,
+          status: "pending",
+          failureCategory: null,
+          claimedByUserId: scope.userId,
+          claimToken: crypto.randomUUID(),
+          claimedAt: timestamp,
+          expiresAt: new Date(Date.now() + leaseSeconds * 1000).toISOString(),
+          finishedAt: null,
+          responseDraftId: null,
+          promptVersion: input.promptVersion,
+          brandVoiceSource: input.brandVoiceSource,
+          brandVoiceVersion: input.brandVoiceVersion,
+          analysisIncluded: input.analysisIncluded,
+          dedupHits: 0,
+          modelProvider: null,
+          modelName: null,
+          inputTokens: null,
+          outputTokens: null,
+          latencyMs: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        runtime.generationAttempts.push(created);
+        return { outcome: "claimed", attemptId: created.id, claimToken: created.claimToken };
+      },
+
+      async complete(scope, input) {
+        const runtime = demoRuntimeStore();
+        // CAS: only the pending attempt whose token this caller holds — the
+        // same guard `complete_generation_attempt` enforces in its WHERE
+        // clause. A stale worker, or a second completion of the same
+        // attempt, finds nothing here and reports superseded rather than
+        // overwriting a newer result.
+        const attempt = attemptsIn(scope).find(
+          (row) =>
+            row.id === input.attemptId &&
+            row.claimToken === input.claimToken &&
+            row.status === "pending",
+        );
+        if (!attempt) return { outcome: "superseded" };
+
+        const timestamp = realNowIso();
+        const draft: ResponseDraft = {
+          id: crypto.randomUUID(),
+          organizationId: scope.organizationId,
+          mentionId: attempt.mentionId,
+          responseType: "public_reply",
+          draftText: input.draftText,
+          finalText: null,
+          status: "draft",
+          generatedBy: "ai",
+          generationProvider: input.modelProvider,
+          generationModel: input.modelName,
+          promptVersion: attempt.promptVersion,
+          brandVoiceVersion: attempt.brandVoiceVersion,
+          policyVersion: null,
+          assignedUserId: null,
+          approvedByUserId: null,
+          approvedAt: null,
+          publishedAt: null,
+          externalResponseId: null,
+          publicationError: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+        store().responseDrafts.push(draft);
+
+        replaceRow(runtime.generationAttempts, {
+          ...attempt,
+          status: "completed",
+          finishedAt: timestamp,
+          responseDraftId: draft.id,
+          modelProvider: input.modelProvider,
+          modelName: input.modelName,
+          inputTokens: input.inputTokens,
+          outputTokens: input.outputTokens,
+          latencyMs: input.latencyMs,
+          updatedAt: timestamp,
+        });
+
+        // D162 posture: identifiers, versions, counts — never draft text.
+        // Matches `complete_generation_attempt`'s own audit insert field for
+        // field.
+        store().auditEvents.push(
+          auditEventSchema.parse({
+            id: seedId(
+              `audit:runtime:${scope.organizationId}:${draft.id}:response.generated:${store().auditEvents.length}`,
+            ),
+            organizationId: scope.organizationId,
+            actorUserId: attempt.claimedByUserId,
+            actorType: "ai",
+            eventType: "response.generated",
+            entityType: "response_draft",
+            entityId: draft.id,
+            previousState: null,
+            newState: null,
+            metadata: {
+              mentionId: attempt.mentionId,
+              attemptId: attempt.id,
+              promptVersion: attempt.promptVersion,
+              modelProvider: input.modelProvider,
+              modelName: input.modelName,
+              inputTokens: input.inputTokens,
+              outputTokens: input.outputTokens,
+              latencyMs: input.latencyMs,
+              brandVoiceSource: attempt.brandVoiceSource,
+              brandVoiceVersion: attempt.brandVoiceVersion,
+            },
+            occurredAt: timestamp,
+          }),
+        );
+
+        return { outcome: "completed", responseDraftId: draft.id };
+      },
+
+      async fail(scope, input) {
+        const runtime = demoRuntimeStore();
+        const attempt = attemptsIn(scope).find(
+          (row) =>
+            row.id === input.attemptId &&
+            row.claimToken === input.claimToken &&
+            row.status === "pending",
+        );
+        if (!attempt) return "superseded";
+
+        const timestamp = realNowIso();
+        replaceRow(runtime.generationAttempts, {
+          ...attempt,
+          status: "failed",
+          failureCategory: input.failureCategory,
+          finishedAt: timestamp,
+          latencyMs: input.latencyMs,
+          updatedAt: timestamp,
+        });
+        return "failed";
+      },
+
+      async latestForMention(scope, mentionId) {
+        let newest: DemoGenerationAttempt | null = null;
+        for (const row of attemptsIn(scope)) {
+          if (row.mentionId !== mentionId) continue;
+          if (!newest || Date.parse(row.createdAt) >= Date.parse(newest.createdAt)) {
+            newest = row;
+          }
+        }
+        if (!newest) return null;
+        // `claimToken` never leaves this file — the same guarantee the
+        // Supabase adapter gets from the column-grant revoke.
+        const { claimToken: _claimToken, ...attempt } = newest;
+        return attempt satisfies GenerationAttempt;
       },
     },
 

@@ -81,6 +81,11 @@ function fakeProvider(
         outputTokens: 50,
       };
     },
+    // Unused by this file — these tests only exercise the analysis path —
+    // but AiProvider requires it since Task 7 added draftResponse.
+    async draftResponse() {
+      throw new Error("draftResponse not implemented in this fixture");
+    },
   };
 }
 

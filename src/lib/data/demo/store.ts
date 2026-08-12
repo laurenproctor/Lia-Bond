@@ -2,6 +2,7 @@ import type {
   AnalysisRun,
   AutomationRuleExecution,
   AutomationSweep,
+  GenerationAttempt,
   Invitation,
   NewsPollRun,
   NewsRejectedCandidate,
@@ -26,6 +27,19 @@ import { SEED_DATASET } from "@/lib/seed/dataset";
 
 function clone(dataset: SeedDataset): SeedDataset {
   return structuredClone(dataset);
+}
+
+/**
+ * The in-memory row behind a generation attempt.
+ *
+ * `GenerationAttempt` (the domain entity) deliberately has no `claimToken`
+ * field — see its doc comment: it is never readable once issued, only ever
+ * returned once by `claim`. The demo store still has to hold it somewhere to
+ * run the same compare-and-set `complete`/`fail` enforce, so this is the one
+ * place it lives, kept out of anything the repository returns.
+ */
+export interface DemoGenerationAttempt extends GenerationAttempt {
+  claimToken: string;
 }
 
 let state: SeedDataset = clone(SEED_DATASET);
@@ -107,6 +121,14 @@ interface RuntimeStore {
    */
   automationSweeps: AutomationSweep[];
   automationRuleExecutions: AutomationRuleExecution[];
+  /**
+   * Response generation's claim/complete/fail lifecycle.
+   *
+   * Runtime-only for the same reason sync, analysis, and sweep history are: a
+   * seeded attempt would claim the demo tenant had already spent provider
+   * budget generating a response it never generated.
+   */
+  generationAttempts: DemoGenerationAttempt[];
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -127,6 +149,7 @@ function freshRuntimeStore(): RuntimeStore {
     newsRejectedCandidateSequence: 0,
     automationSweeps: [],
     automationRuleExecutions: [],
+    generationAttempts: [],
   };
 }
 
