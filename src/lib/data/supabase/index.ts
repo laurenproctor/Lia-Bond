@@ -2759,7 +2759,17 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         }
         const value = parsed.data;
 
-        const { data, error } = await client
+        // Service client, not `client`: the paired migration revokes INSERT
+        // on `audit_events` from `authenticated` entirely, so the caller's
+        // session client cannot write here anymore, by design. This method
+        // is trusted to write anyway because every call site reaches it only
+        // after `getOrganizationContext()` has already established the scope
+        // in hand, this module is `server-only`, and the RLS change above
+        // removes the client-credentialed path rather than narrowing it —
+        // there is no longer an authenticated insert for this to widen back
+        // open. Reads keep the user client; RLS still governs who can list
+        // events for an organization.
+        const { data, error } = await serviceClient()
           .from("audit_events")
           .insert({
             organization_id: scope.organizationId,
