@@ -8,6 +8,7 @@ import {
   executionHistoryFraming,
   executionStatusLabel,
   NO_EXECUTIONS_MESSAGE,
+  resolveExecutionHistorySection,
   RULES_EXECUTION_OFF_MESSAGE,
 } from "@/lib/rules/execution-history";
 import type { AutomationRuleExecution, ExecutionActionOutcome } from "@/domain";
@@ -77,6 +78,41 @@ describe("executionHistoryFraming", () => {
 
   it("is the dry-run framing message for dry_run", () => {
     expect(executionHistoryFraming("dry_run")).toBe(DRY_RUN_FRAMING_MESSAGE);
+  });
+});
+
+describe("resolveExecutionHistorySection", () => {
+  it("off wins even when rows are present — a disabled feature never shows stale rows", () => {
+    expect(resolveExecutionHistorySection("off", 5)).toBe("off");
+  });
+
+  it("off wins with zero rows too", () => {
+    expect(resolveExecutionHistorySection("off", 0)).toBe("off");
+  });
+
+  it("dry_run with zero rows is empty", () => {
+    expect(resolveExecutionHistorySection("dry_run", 0)).toBe("empty");
+  });
+
+  it("apply with zero rows is empty", () => {
+    expect(resolveExecutionHistorySection("apply", 0)).toBe("empty");
+  });
+
+  it("dry_run with rows present is rows", () => {
+    expect(resolveExecutionHistorySection("dry_run", 3)).toBe("rows");
+  });
+
+  it("apply with rows present is rows", () => {
+    expect(resolveExecutionHistorySection("apply", 3)).toBe("rows");
+  });
+
+  it("dry_run and apply agree with each other for both the empty and rows states", () => {
+    expect(resolveExecutionHistorySection("dry_run", 0)).toBe(
+      resolveExecutionHistorySection("apply", 0),
+    );
+    expect(resolveExecutionHistorySection("dry_run", 7)).toBe(
+      resolveExecutionHistorySection("apply", 7),
+    );
   });
 });
 

@@ -11,6 +11,7 @@ import {
   executionHistoryFraming,
   executionStatusLabel,
   NO_EXECUTIONS_MESSAGE,
+  resolveExecutionHistorySection,
   RULES_EXECUTION_OFF_MESSAGE,
 } from "@/lib/rules/execution-history";
 import type { AutomationRuleExecution } from "@/domain";
@@ -117,6 +118,7 @@ const COLUMNS: DataTableColumn<ExecutionHistoryRow>[] = [
  */
 export function ExecutionHistory({ rows, mode }: ExecutionHistoryProps) {
   const framing = executionHistoryFraming(mode);
+  const section = resolveExecutionHistorySection(mode, rows.length);
 
   return (
     <Card flush>
@@ -125,9 +127,9 @@ export function ExecutionHistory({ rows, mode }: ExecutionHistoryProps) {
         title="Execution history"
         description={framing ?? undefined}
       />
-      {mode === "off" ? (
+      {section === "off" ? (
         <EmptyState size="sm" title={RULES_EXECUTION_OFF_MESSAGE} />
-      ) : rows.length === 0 ? (
+      ) : section === "empty" ? (
         <EmptyState size="sm" title={NO_EXECUTIONS_MESSAGE} />
       ) : (
         <DataTable

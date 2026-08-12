@@ -35,6 +35,31 @@ export function executionHistoryFraming(mode: RulesExecutionMode): string | null
   return mode === "dry_run" ? DRY_RUN_FRAMING_MESSAGE : null;
 }
 
+export type ExecutionHistorySection = "off" | "empty" | "rows";
+
+/**
+ * Which of the three states the section renders.
+ *
+ * `off` wins outright, even over rows that were recorded before execution was
+ * disabled — a disabled feature must never read as still-live automation just
+ * because history happens to exist from before it was turned off. Checked
+ * before row count for exactly that reason: this is the one place that
+ * ordering is decided, so a reordered branch anywhere else can't silently
+ * resurrect stale rows behind a disabled feature.
+ *
+ * `dry_run` and `apply` are otherwise identical here — both are "active" as
+ * far as this decision is concerned; the mode only changes wording, never
+ * which of the three states shows.
+ */
+export function resolveExecutionHistorySection(
+  mode: RulesExecutionMode,
+  rowCount: number,
+): ExecutionHistorySection {
+  if (mode === "off") return "off";
+  if (rowCount === 0) return "empty";
+  return "rows";
+}
+
 /**
  * The mode badge's word. `dry_run` reads "Projection", never anything that
  * could be mistaken for a real effect — that distinction is the entire point
