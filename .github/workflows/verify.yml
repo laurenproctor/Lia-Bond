@@ -1,0 +1,41 @@
+# Merge gate: `verify` runs lint/typecheck/test/build; `database` runs the migration +
+# execution-verification harness against a freshly started local Supabase instance.
+# Runbook (owner action, tracked separately): once this workflow is green on `master`,
+# mark the `database` job a required status check in branch protection so a TypeScript
+# matrix change can never merge with stale SQL behavior.
+name: verify
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run verify
+  database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      # Pin verified against the harness's known-safe image (Postgres 17.6, Supabase CLI 2.101.0).
+      # That combination is known NOT to segfault on EXECUTE-denied non-immutable function calls
+      # after `set role` — a fault seen on other CLI/image combinations during Task 11. The
+      # db:verify-execution harness deliberately checks privileges via catalog queries rather
+      # than attempted calls, which is what makes it safe here, but the pin still matters: bumping
+      # it requires a local `npm run db:verify-execution` run first to confirm the new image is
+      # still safe.
+      - uses: supabase/setup-cli@v1
+        with: { version: "2.101.0" }
+      - run: npm ci
+      - run: supabase start
+      - name: Run the database harness against freshly migrated Postgres
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+          npm run db:verify-execution
