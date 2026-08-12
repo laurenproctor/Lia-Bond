@@ -49,7 +49,9 @@ describe("automationRules.create", () => {
     expect(created.simulatedRevision).toBeNull();
     expect(created.lastSimulatedAt).toBeNull();
     expect(created.archivedAt).toBeNull();
-    expect(created.lastRunAt).toBeNull();
+    expect(created.lastEvaluatedAt).toBeNull();
+    expect(created.lastMatchedAt).toBeNull();
+    expect(created.lastAppliedAt).toBeNull();
 
     const rules = await data.automationRules.list(ushg.admin());
     expect(rules.some((row) => row.id === created.id)).toBe(true);

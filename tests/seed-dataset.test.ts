@@ -296,7 +296,9 @@ describe("automation rule truthfulness", () => {
 
   it("never claims a rule has run", () => {
     for (const rule of SEED_DATASET.automationRules) {
-      expect(rule.lastRunAt).toBeNull();
+      expect(rule.lastEvaluatedAt).toBeNull();
+      expect(rule.lastMatchedAt).toBeNull();
+      expect(rule.lastAppliedAt).toBeNull();
     }
   });
 

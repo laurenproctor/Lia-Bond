@@ -2,6 +2,7 @@ import {
   analysisRunSchema,
   approvalSchema,
   auditEventSchema,
+  automationRuleExecutionSchema,
   automationRuleSchema,
   brandVoiceProfileSchema,
   escalationSchema,
@@ -25,6 +26,7 @@ import {
   type Approval,
   type AuditEvent,
   type AutomationRule,
+  type AutomationRuleExecution,
   type BrandVoiceProfile,
   type Escalation,
   type Invitation,
@@ -583,7 +585,9 @@ export function toAutomationRule(row: Row): AutomationRule {
       priority: row.priority,
       conditions: row.conditions ?? [],
       actions: row.actions ?? [],
-      lastRunAt: isoOrNull(row.last_run_at),
+      lastEvaluatedAt: isoOrNull(row.last_evaluated_at),
+      lastMatchedAt: isoOrNull(row.last_matched_at),
+      lastAppliedAt: isoOrNull(row.last_applied_at),
       revision: row.revision,
       lastSimulatedAt: isoOrNull(row.last_simulated_at),
       simulatedRevision: row.simulated_revision ?? null,
@@ -592,6 +596,39 @@ export function toAutomationRule(row: Row): AutomationRule {
       updatedAt: iso(row.updated_at),
     },
     "automation rule",
+  );
+}
+
+/**
+ * One (rule, mention) decision inside a sweep.
+ *
+ * `outcomes` is jsonb on the row; the schema's `superRefine` (not repeated
+ * here) is what actually confirms a dry-run row never claims an apply-mode
+ * status and vice versa — this mapper only reshapes columns.
+ */
+export function mapAutomationRuleExecution(row: Row): AutomationRuleExecution {
+  return parseOrThrow(
+    automationRuleExecutionSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      sweepId: row.sweep_id,
+      automationRuleId: row.automation_rule_id,
+      ruleRevision: row.rule_revision,
+      mentionId: row.mention_id,
+      triggerAnalysisId: row.trigger_analysis_id,
+      locationId: row.location_id ?? null,
+      mode: row.mode,
+      status: row.status,
+      outcomes: row.outcomes ?? [],
+      outcomeSchemaVersion: row.outcome_schema_version,
+      attemptCount: row.attempt_count,
+      lastErrorCode: row.last_error_code ?? null,
+      errorClass: row.error_class ?? null,
+      startedAt: iso(row.started_at),
+      completedAt: isoOrNull(row.completed_at),
+    },
+    "rule execution",
   );
 }
 

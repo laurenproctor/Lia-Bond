@@ -21,6 +21,7 @@ export * from "@/domain/entities/analysis-run";
 export * from "@/domain/entities/response";
 export * from "@/domain/entities/escalation";
 export * from "@/domain/entities/automation";
+export * from "@/domain/entities/automation-execution";
 export * from "@/domain/entities/brand-voice";
 export * from "@/domain/entities/audit";
 export * from "@/domain/entities/monitoring";

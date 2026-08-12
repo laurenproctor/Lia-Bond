@@ -68,6 +68,26 @@ export const ruleConditionSchema = z.discriminatedUnion("field", [
 export type RuleCondition = z.infer<typeof ruleConditionSchema>;
 
 /**
+ * The rule-action vocabulary.
+ *
+ * Kept in lockstep with `ruleActionSchema`'s discriminated-union `type`
+ * literals below — this list exists so execution code (which needs the plain
+ * literal set, not a union schema) has one source of truth to import instead
+ * of re-deriving it.
+ */
+export const RULE_ACTION_TYPES = [
+  "generate_draft",
+  "auto_publish",
+  "require_approval",
+  "assign",
+  "escalate",
+  "notify",
+  "tag",
+  "set_status",
+] as const;
+export type RuleActionType = (typeof RULE_ACTION_TYPES)[number];
+
+/**
  * Rule actions.
  *
  * `auto_publish` exists but is only reachable for low-risk content — the guard
@@ -112,7 +132,15 @@ export const automationRuleSchema = z
     // A rule with no actions yet is a legitimate draft-in-progress, not a
     // malformed record — the evaluator simply has nothing to do with it.
     actions: z.array(ruleActionSchema),
-    lastRunAt: timestampSchema.nullable(),
+    /**
+     * Rule-lifetime activity facts, written only by apply-mode sweeps
+     * (spec §9). Monotonic: an older sweep finishing late can never move
+     * one backwards. Dry run touches none of them. Revision changes reset
+     * nothing — per-revision truth lives in the execution rows.
+     */
+    lastEvaluatedAt: timestampSchema.nullable(),
+    lastMatchedAt: timestampSchema.nullable(),
+    lastAppliedAt: timestampSchema.nullable(),
     /**
      * Optimistic-concurrency counter. Starts at 1, increments on every save;
      * `updateAutomationRuleInputSchema` carries an `expectedRevision` so a

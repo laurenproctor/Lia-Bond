@@ -57,6 +57,7 @@ import {
   type ProfileSyncState,
 } from "@/lib/data/types";
 import {
+  mapAutomationRuleExecution,
   toAnalysisRun,
   toApproval,
   toAuditEvent,
@@ -2614,6 +2615,64 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (error) fail(error, "update the rule");
         if (!data) throw notFound("Automation rule");
         return toAutomationRule(data as Row);
+      },
+
+      async listActiveForExecution(scope) {
+        const { data, error } = await from("automation_rules", scope)
+          .eq("status", "active")
+          .is("archived_at", null)
+          .order("priority")
+          .order("created_at")
+          .order("id");
+        if (error) fail(error, "load active rules");
+        return rows(data).map(toAutomationRule);
+      },
+
+      async markActivity() {
+        // The G1 execution RPC writes this alongside the sweep it belongs to;
+        // no standalone write exists yet.
+        throw new DataError(
+          "unavailable",
+          "Rule execution writes arrive with the G1 execution RPC.",
+        );
+      },
+    },
+
+    automationSweeps: {
+      async claim() {
+        throw new DataError(
+          "unavailable",
+          "Rule execution writes arrive with the G1 execution RPC.",
+        );
+      },
+      async finalize() {
+        throw new DataError(
+          "unavailable",
+          "Rule execution writes arrive with the G1 execution RPC.",
+        );
+      },
+    },
+
+    automationRuleExecutions: {
+      async executeUnit() {
+        throw new DataError(
+          "unavailable",
+          "Rule execution writes arrive with the G1 execution RPC.",
+        );
+      },
+      async recordProjection() {
+        throw new DataError(
+          "unavailable",
+          "Rule execution writes arrive with the G1 execution RPC.",
+        );
+      },
+      async listForRule(scope, ruleId, limit) {
+        const { data, error } = await from("automation_rule_executions", scope)
+          .eq("automation_rule_id", ruleId)
+          .order("started_at", { ascending: false })
+          .limit(limit);
+        if (error) fail(error, "load rule executions");
+        return rows(data).map(mapAutomationRuleExecution);
       },
     },
 
