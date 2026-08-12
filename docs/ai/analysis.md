@@ -140,7 +140,8 @@ queue with cases nobody can act on, which is how a queue stops being read.
 Three writes per mention, in this order:
 
 1. **Escalation** — only at `high`/`critical` risk, and only when the mention
-   has none. Created `open` and **unassigned**.
+   has no *open* one already (§6: closed cases no longer block, D158). Created
+   `open` and **unassigned**.
 2. **Mention update** — `sentiment`, `risk_level`, `relevance_score`, and
    `status` advanced **only from `new`**.
 3. **`mention_analyses` insert** — append-only. **This is the commit point.**
@@ -186,9 +187,18 @@ spec's promise that high-risk content is always escalated.
 - **`open` and unassigned.** An unowned item in the escalations centre is
   precisely the "somebody must look at this" signal; a default owner would make
   it look handled. Assignment stays a human decision.
-- **One per mention.** A mention that already has an escalation gets none —
-  two open cases for one review is a queue nobody trusts, and a re-run must not
-  produce that.
+- **One *open* escalation per mention, not one ever.** A mention that already
+  has an open escalation gets none — two open cases for one review is a queue
+  nobody trusts, and a re-run must not produce that. A **closed** case no
+  longer blocks: re-escalation is possible, but only through a human closing
+  the old escalation, a human re-triaging the mention off `escalated` (the
+  transition matrix refuses `escalate` from `escalated`, and permanently from
+  `dismissed`), and a genuinely new analysis occurrence recording a change.
+  This is the G1 escalation contract (D158/D159 in
+  `docs/architecture/current-state.md`), enforced by a partial unique index
+  — at most one *open* escalation per mention — rather than a read-then-check;
+  it superseded an earlier any-escalation dedupe that permanently capped a
+  mention at one case for its lifetime.
 - **No due date.** Inventing an SLA the organization never agreed to would put
   a deadline in the queue that nobody set and nobody owns.
 - **Title derived when the model omits one.** `escalations.title` is `not null`
@@ -256,7 +266,7 @@ database.
 | --- | --- |
 | `analyzed` | Classified by the model. |
 | `heuristic` | Classified by the rating heuristic, with no model call. |
-| `escalated` | Escalations **this run** raised. A mention that already had one is not counted. |
+| `escalated` | Escalations **this run** raised. A mention that already has an *open* escalation is not counted; one whose only escalation is closed can be. |
 | `failed` | Could not be classified. Still unanalysed, so a later run retries. |
 | `remaining` | Backlog left after the cap, plus anything a fatal error stopped it reaching. |
 
