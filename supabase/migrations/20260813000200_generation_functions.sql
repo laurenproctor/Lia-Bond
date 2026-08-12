@@ -1,9 +1,31 @@
 -- Response generation's lifecycle functions (spec: response-generation v3).
 -- All attempt mutations flow through these three; authenticated holds zero
--- direct DML on generation_attempts. The claim serializes on ONE lock (the
--- mention row) taken before any attempt read/write; complete/fail are
--- compare-and-set on (id, claim_token, status='pending') so a stale worker
--- can never overwrite a newer attempt's result.
+-- direct DML on generation_attempts.
+--
+-- Lock discipline: claim and complete both acquire locks in the same order
+-- — mention, then attempt — never the reverse. claim takes the mention row
+-- FOR UPDATE explicitly, first, before touching generation_attempts at all.
+-- complete does the same, explicitly, before its CAS update: it has to,
+-- because its response_drafts insert (on the success path) implicitly takes
+-- a FOR KEY SHARE lock on the same mention row via the mention_id FK. If
+-- that implicit lock were the only place complete touched mentions, the two
+-- functions would acquire mention and attempt in opposite orders — attempt
+-- first, then mention, in complete; mention first, then attempt, in claim —
+-- and concurrent traffic (a live lease vs. a completing worker) can deadlock
+-- on that (40P01), with complete as the victim and no contract for it. So
+-- complete locks the mention up front too, matching claim's order, and the
+-- later implicit FK lock is redundant (already held) rather than a second,
+-- reversed one. fail() never writes a draft and never touches mentions, so
+-- it never participates in this ordering.
+--
+-- complete/fail are compare-and-set on (id, claim_token, status='pending')
+-- so a stale worker can never overwrite a newer attempt's result. claim's
+-- own two in-place updates (closing an expired lease, bumping a dedup
+-- counter) carry the same status='pending' guard for the same reason: they
+-- are read-then-write against a row nothing else here holds a lock on
+-- (fail() can resolve it without ever touching the mention), so the WHERE
+-- clause — not the row's identity alone — has to be what makes the write
+-- correct.
 
 create function public.claim_generation_attempt(
   p_mention_id uuid,
@@ -21,10 +43,13 @@ as $$
 declare
   v_mention public.mentions;
   v_attempt public.generation_attempts;
+  v_still_pending boolean := false;
   v_draft uuid;
   v_new public.generation_attempts;
 begin
-  -- One lock, taken first: the mention row. Also proves existence.
+  -- One lock, taken first: the mention row. Also proves existence. See the
+  -- file header for why complete() takes this same lock, in this same
+  -- order, before its own attempt write.
   select * into v_mention from public.mentions
    where id = p_mention_id for update;
   if not found then
@@ -49,6 +74,40 @@ begin
       using errcode = '22023';
   end if;
 
+  -- Sweep first: load any pending attempt and close it out if its lease has
+  -- expired, BEFORE the draft_exists check below. Ordered this way on
+  -- purpose — draft_exists used to run first and would short-circuit every
+  -- call once a draft existed (via any path, not just this flow), which
+  -- left an expired attempt pinned at status='pending' forever: nothing
+  -- ever reached this block again to sweep it, and generation_attempts_one_
+  -- pending doesn't reap, it only prevents a second pending row. Now the
+  -- sweep always runs first, so a stale lease gets closed even on a mention
+  -- that already has a draft.
+  select * into v_attempt from public.generation_attempts ga
+   where ga.mention_id = p_mention_id and ga.status = 'pending';
+  if found then
+    if v_attempt.expires_at < now() then
+      -- Guarded (and status = 'pending'): this is a read-then-write against
+      -- a row we hold no lock on between the two statements — fail() can
+      -- resolve this exact attempt without ever touching the mention we're
+      -- holding (see the header), so under READ COMMITTED our UPDATE, if it
+      -- blocks on fail()'s row lock, re-evaluates this WHERE clause against
+      -- the post-fail() row version once it unblocks. Without the guard
+      -- we'd blindly reassert status='failed'/failure_category on a row
+      -- fail() already finished closing — same outcome, so harmless here —
+      -- but the guard is what makes that true instead of assumed. Whether
+      -- our own UPDATE or a concurrent fail() closed it, there is no longer
+      -- a live pending attempt for this mention either way.
+      update public.generation_attempts
+         set status = 'failed', failure_category = 'lease_expired',
+             finished_at = now(), updated_at = now()
+       where id = v_attempt.id and status = 'pending';
+      v_still_pending := false;
+    else
+      v_still_pending := true;
+    end if;
+  end if;
+
   -- D132: any draft blocks generation regardless of status.
   select rd.id into v_draft from public.response_drafts rd
    where rd.mention_id = p_mention_id
@@ -58,22 +117,21 @@ begin
     return;
   end if;
 
-  select * into v_attempt from public.generation_attempts ga
-   where ga.mention_id = p_mention_id and ga.status = 'pending';
-  if found then
-    if v_attempt.expires_at < now() then
-      update public.generation_attempts
-         set status = 'failed', failure_category = 'lease_expired',
-             finished_at = now(), updated_at = now()
-       where id = v_attempt.id;
-      -- fall through to a fresh claim
-    else
-      update public.generation_attempts
-         set dedup_hits = dedup_hits + 1, updated_at = now()
-       where id = v_attempt.id;
+  if v_still_pending then
+    -- Guarded for the same reason as the expired-close branch above.
+    update public.generation_attempts
+       set dedup_hits = dedup_hits + 1, updated_at = now()
+     where id = v_attempt.id and status = 'pending';
+    if found then
       return query select 'in_progress'::text, v_attempt.id, null::uuid, null::uuid;
       return;
     end if;
+    -- Zero rows: fail() resolved this attempt between our read and this
+    -- update, so it is no longer actually in progress — reporting
+    -- 'in_progress' with a stale attempt_id would be dishonest. Fall
+    -- through to issue a fresh claim, exactly as if we'd found no pending
+    -- attempt at all (the one-pending partial index is satisfied either
+    -- way: the old row is no longer status='pending').
   end if;
 
   insert into public.generation_attempts
@@ -110,6 +168,13 @@ declare
   v_attempt public.generation_attempts;
   v_draft_id uuid;
 begin
+  -- Lock the mention first, matching claim's order (see the file header).
+  -- Locks nothing if p_attempt_id doesn't resolve to a mention; the CAS
+  -- below then finds no row either and returns 'superseded'.
+  perform 1 from public.mentions
+   where id = (select mention_id from public.generation_attempts where id = p_attempt_id)
+     for update;
+
   -- CAS: only the pending attempt whose token this caller holds.
   update public.generation_attempts
      set updated_at = now()
