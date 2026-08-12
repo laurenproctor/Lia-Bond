@@ -636,6 +636,24 @@ the Phase 2 design recorded below the decisions.
 | D146 | Simulation requires a saved rule; staleness tracked on `revision`, not a config hash | No simulate-before-first-save. Reusing the counter that already guards concurrent edits needs no extra state and matches "editing invalidates simulation" for free; the cost is one extra save click before a first simulation. Simulation itself is read-only — no AI call, no side effects — and its audit metadata carries counts only. |
 | D147 | Phase 2 idempotency design: execution records keyed unique on (rule revision, mention) | A retry must not double-apply a rule, and an edited rule must re-apply rather than being silently treated as "already handled" — the composite unique key gives both for free via `on conflict do nothing`. The engine runs inside the existing analysis sweep, never from a page request, matching the no-verified-human-behind-it posture D88 established for analysis. |
 
+## Decisions made building rule execution (G0)
+
+The dry-run engine from `docs/superpowers/specs/2026-08-11-rules-execution-phase2-design.md`
+now exists end to end: schema, transition matrix, demo-adapter execution
+unit, the cron-integrated sweep loop, and rule-detail history. `apply`
+against real data does not — the Supabase adapter deliberately throws on
+`executeUnit` until the G1 RPC lands (see "Known gaps" below).
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D148 | The idempotency key is `(automation_rule_id, rule_revision, mention_id, trigger_analysis_id, mode)`, with the analysis row standing for the trigger occurrence | `mention_analyses.id` is durable and append-only (F13 of the Phase 2 spec) — the row that authorized reconsidering a mention — so it, not a nullable `analysis_run_id`, is what the key holds. A reanalyzed mention gets a new analysis row and therefore a new key, so the same rule revision may legitimately execute again against fresh evidence, while the same occurrence can never apply twice. `mode` in the key separates a dry-run projection from an apply attempt of the same occurrence, so a stale projection can neither block nor satisfy a later apply. |
+| D149 | The transition matrix is explicit and lives in one module (`src/lib/rules/transitions.ts`), replacing the earlier status-lattice idea, with `escalated` reserved to the `escalate` executor | `set_status` may never target `escalated` — it returns `blocked`/`escalation_reserved` from every source status — because only `decideEscalate` is permitted to produce that state, and only after validating eligibility against the current locked mention. Naming the permitted `(from, to, risk)` cells directly, instead of ranking statuses on a scale, makes every allowed transition explainable by inspection; the G1 execution RPC restates the same cells in SQL, and a parity test is expected to assert the two agree cell for cell. |
+| D150 | Whole-unit rollback: any technical failure discards the unit's business writes and records a surviving `failed` row; a policy refusal (`blocked`, `no_op`) is an outcome, not an error, and can sit beside another action's success in the same unit (`partial`) | Treating a guardrail refusal as a thrown error would make a unit's failure indistinguishable from a rule doing exactly what it was configured to do. The demo adapter's single-threaded twin of the spec's transaction stages business writes against copies of the mention/escalation state and commits them only after every action in the unit finishes; a thrown error discards the copies — that discard *is* the rollback — and finalizes the row `failed`/`retryable` (or `/terminal` for a stale revision or an unparseable action), never partially mutating store state. |
+| D151 | Dry-run projection recording is deliberately held to apply-mode fidelity: escalation dedupe checks for *any* open escalation on the mention (not only one this rule raised), projection state is carried per mention across its own actions, sweep counters are derived from the rows actually recorded rather than tallied separately, and replay exclusion is scoped by `sweepId` | A projection that dedupes, counts, or excludes differently than apply mode would misreport what apply would actually do, which defeats the purpose of a dry run. Threading projection state across one mention's own action list (rather than re-reading raw store state per action) is what lets a projected `escalate` correctly deflate a later projected `set_status` within the same mention's outcome list; scoping replay exclusion by `sweepId` keeps a rule re-evaluated in a later sweep from reading an earlier sweep's projection as already having run. Landed as Task 10's round-1 review fix (`progress.md`); the escalation-dedupe alignment is also the platform-consistent "any" reading tracked as parked question Q7 below. |
+| D152 | `RULES_EXECUTION_MODE` and `RULES_EXECUTION_ORG_ALLOWLIST` fail closed | Absence of configuration must mean absence of the behavior, because execution changes what the product does to customer data with nobody in the loop. An unset mode resolves to `off`; an unrecognized mode value fails the startup Zod parse rather than defaulting to something that sounds safe, matching every other mode enum in the codebase; and an active mode with an empty allowlist runs no sweeps, stated plainly in the cron response (`allowlist_empty`) rather than reading as a clean day with nothing to do. |
+| D153 | `lastRunAt` is replaced by three monotonic activity timestamps: `lastEvaluatedAt`, `lastMatchedAt`, `lastAppliedAt` | One boolean-shaped fact could not distinguish a rule evaluated every sweep and never matching from one that matches but whose every action is blocked, and an operator reading the rule detail page needs that distinction. All three are written only by apply-mode sweeps (dry run touches none of them) and advance only via `greatest()`, so a late-finishing older sweep can never move one backwards; the list and detail UI label the third one "Last applied." |
+| D154 | The cron route folds a *returned-but-unsuccessful* analysis run into `degraded`, and treats "every attempted organization's analysis failed" and "every attempted execution sweep failed" as two independent triggers for `failed`/503 | `analyzeMentions` can return normally carrying an error code and nothing analyzed — a run that succeeds at returning while succeeding at nothing — so counting only thrown exceptions against status, the route's first reading, rendered a total outage indistinguishable from an organization with no backlog. `analysisRunsWithErrors`/`analysisRunsWithoutProgress` close that gap (closes F8). The 503 clause is a disjunction, not a conjunction — matching the spec's parenthetical — because requiring both halves to fail before paging would leave the execution half structurally unable to report systemic breakage on its own: a sweep is only attempted after its own organization's analysis already succeeded, so it can never independently satisfy an analysis-side conjunct. Accepted consequence for the runbook: while the allowlist holds a single organization, that organization's sweep throwing is the only attempted execution sweep, so it alone satisfies "every attempted sweep failed" and pages the whole invocation — honest paging for a single-tenant rollout, worth revisiting only if the allowlist grows before G2. |
+
 ## Known gaps after workflow 04
 
 Carried over from workflow 01:
@@ -917,6 +935,60 @@ New after integrating the branches:
   of this merge. Whatever caused them to be missed is a process gap, not a
   code one — the branch that added them updated no architecture doc at all.
 
+New building rule execution (G0):
+
+- **G0 ships dry run only.** `set_status` and `escalate` are the only
+  executors, `RULES_EXECUTION_MODE=apply` is untested end to end against
+  real data, and nothing in this branch enables it for any organization.
+  The spec's release gates (§3) govern when `apply` may be turned on: G1 is
+  internal-organization-only via allowlist, and G2 is the earliest point
+  customer `apply` is permitted, contingent on the transactionality work
+  below.
+- **The Supabase adapter's `executeUnit` deliberately throws
+  `DataError("unavailable")`.** There is no execution RPC yet — only the
+  demo adapter implements the claim/replay/retry/rollback algorithm
+  described in spec §7 — so no request path, cron or otherwise, can apply
+  an effect against a real Postgres row before the RPC exists. The demo
+  adapter's algorithm is the G1 RPC's specification, not yet its proof: the
+  transaction shape is verified only by the TypeScript twin's tests, never
+  by the PostgreSQL harness the spec designates as authoritative (§11
+  DB-1…DB-10).
+- **The audit vocabulary migration and audit hardening (spec §6) are G1
+  work, not landed here.** `automation_rule.executed`,
+  `automation_rule.execution_failed`, and `automation_sweep.completed`
+  do not exist in `audit_events_known_event_type` yet — nothing in G0
+  writes an audit event for execution at all, dry run by design (§8) and
+  apply because it cannot run. Removing authenticated audit inserts
+  (`audit_events_insert` policy, `revoke insert … from authenticated`) is
+  also deferred to G1, timed to land in the same migration as the adapter
+  change per F16.
+- **Parked: Q7, open-vs-any escalation dedupe.** Spec §7 literally reads
+  "open" when describing what the `escalate` executor dedupes against, but
+  the implementation — in both the analysis path this rule execution
+  engine matches and D151's dry-run projection — dedupes against *any*
+  escalation ever raised for the mention, not only a currently-open one.
+  Ruled platform-consistent for G0 rather than rewritten, because the
+  analysis path already behaved this way and diverging rule execution from
+  it would have meant a dry-run projection lying about what apply would
+  do. Consequence, stated plainly: a mention escalated and later resolved
+  by a human cannot be re-escalated by either analysis or a rule today.
+  This must be decided — reopen dedupe to "open only," or keep "any" and
+  document it as intentional — before the G1 RPC pins the equivalent SQL
+  semantics; changing it after G1 means a migration against live execution
+  history rather than a TypeScript function.
+- **P0-2, the reset-verification gate, passed.** `supabase db reset`
+  applied all 34 migrations — including this branch's three
+  (`20260811000100_tenant_integrity_prereqs`,
+  `20260811000200_automation_execution`,
+  `20260811000300_automation_execution_rls`) — cleanly against the local
+  Docker stack, and `npm run db:verify-rls` then ran the full
+  `supabase/tests/rls-verification.sql` harness against that reset
+  database with 37 checks passing and zero failures. Both commands ran
+  against the local stack only (`SUPABASE_DB_URL` pointed at
+  `127.0.0.1:54322`); the hosted project received nothing. This is the
+  first time `db:verify-rls` has completed — see the "Still open" entry
+  below, now resolved.
+
 ## Closed by the first live run
 
 All 26 migrations are applied to the hosted project, and the subsystems below
@@ -1024,11 +1096,16 @@ Two useful things fell out of doing it:
 - **The `NEWSAPI_AI_API_KEY` in `.env` is dead configuration.** It is an Event
   Registry key, read by no code here, and it will not authenticate against the
   GNews client. D89's upgrade is still an upgrade, not the current state.
-- **`supabase/tests/rls-verification.sql` has still never been executed.** The
-  live checks above were run through PostgREST as an authenticated user, which
-  covers the tenancy property that harness protects but not the harness
-  itself — it needs `psql` and the database password, and `npm run
-  db:verify-rls` additionally needs `supabase db reset`, which needs Docker.
+- ~~`supabase/tests/rls-verification.sql` has still never been executed.~~
+  **Resolved, building rule execution (G0).** `npm run db:verify-rls` ran
+  against the local Docker stack — `supabase db reset` followed by the
+  harness itself against `postgresql://postgres:postgres@127.0.0.1:54322/postgres`
+  — and passed: 37 checks, zero failures, including this branch's three new
+  migrations. `SUPABASE_DB_URL` is not set anywhere in the repository or
+  `.env`; it must be exported to the local connection string before running
+  the script, which the two prior attempts recorded here evidently never
+  did. Not run against the hosted project, which is a separate, deliberate
+  step gated on this passing first.
 - **Prompt quality remains unvalidated.** The first live run classified 11 of
   12 mentions `low` and one `medium`, and raised no escalation. That is
   plausible for this seed and is not evidence the risk thresholds are right;

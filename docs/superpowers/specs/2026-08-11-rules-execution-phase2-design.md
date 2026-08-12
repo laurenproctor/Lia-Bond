@@ -452,25 +452,34 @@ locally.
 
 ### Implementation order
 
-1. **G0 block:** P0-2 harness run; migration 1; domain types
+1. **G0 block — implemented (worktree `rules-execution-g0`, Tasks 1–13):**
+   P0-2 harness run — done, local Docker stack, `supabase db reset` clean
+   with this branch's three migrations, `npm run db:verify-rls` 37/37
+   checks (Task 13); migration 1 — done (Task 1); domain types
    (`transitions.ts` matrix with `escalation_reserved`, outcome and
-   projection vocabularies); migrations 2–3; repository contract + demo
-   adapter (full algorithm, including the claim/replay/retry semantics in
-   TypeScript); engine loop with `dry_run` + `off` only; route contract;
-   dry-run UI states. *Releasable: dry run internally.*
-2. **G1 block:** migration 4 (RPC) + Supabase adapter; migration 5;
-   migration 6 + audit adapter change; P0-4 location-scoping action fixes;
-   full §11 test suite; `apply` for the internal organization via
-   allowlist.
-3. **G2 block (its own plan):** F17 inventory re-verification; per-path
-   transactional RPCs for the overlapping mutations; database-level
-   location authorization for mention/escalation writes. Not scheduled
-   here; a prerequisite line item for customer `apply`.
+   projection vocabularies) — done (Tasks 2, 5); migrations 2–3 — done
+   (Task 4); repository contract + demo adapter (full algorithm, including
+   the claim/replay/retry semantics in TypeScript) — done (Tasks 6–7);
+   engine loop with `dry_run` + `off` only — done (Task 10); route
+   contract — done (Task 11); dry-run UI states — done (Task 12).
+   *Releasable: dry run internally.* Decision-ledger entries D148–D154 in
+   `docs/architecture/current-state.md` record what shipped and why;
+   `apply` is not enabled anywhere by this block.
+2. **G1 block — not started:** migration 4 (RPC) + Supabase adapter;
+   migration 5; migration 6 + audit adapter change; P0-4 location-scoping
+   action fixes; full §11 test suite; `apply` for the internal organization
+   via allowlist.
+3. **G2 block (its own plan) — not started:** F17 inventory
+   re-verification; per-path transactional RPCs for the overlapping
+   mutations; database-level location authorization for mention/escalation
+   writes. Not scheduled here; a prerequisite line item for customer
+   `apply`.
 4. Outcome UI on `/rules/[ruleId]` (execution history with mode column,
    projected vs applied outcomes visually distinct, three timestamps,
-   mode-aware empty states) — lands with block 1 for dry-run visibility.
+   mode-aware empty states) — lands with block 1 for dry-run visibility —
+   done (Task 12).
 5. Docs: decision-ledger entries; current-state updates; this plan marked
-   implemented per gate.
+   implemented per gate — done (Task 13, this update).
 
 ### Tests
 
@@ -574,3 +583,17 @@ The G3 retrofit workstream is acknowledged, gated, and not planned here.
   history page enough for Phase 2? Plan assumes the page is enough.
 - Q4 from v2 stands resolved as specified: automation never reopens
   dismissed mentions.
+- **Q7 — open-vs-any escalation dedupe.** This section (§7) says the
+  `escalate` executor dedupes against an "open" escalation. G0 shipped
+  dedupe against *any* escalation ever raised for the mention — matching
+  the analysis path's existing `escalations.create` behavior, which rule
+  execution reuses, and which the dry-run projection in D151 mirrors for
+  fidelity. Parked rather than silently implemented against the letter of
+  this spec: the consequence is that a mention escalated and later
+  resolved by a human cannot be re-escalated by either analysis or a rule
+  today. Must be decided — reopen to "open only," or keep "any" and amend
+  this section — before the G1 execution RPC pins the equivalent SQL
+  semantics, since changing it after G1 means a migration against live
+  execution history rather than a TypeScript function. (Recorded in
+  `docs/architecture/current-state.md`, "New building rule execution
+  (G0)".)
