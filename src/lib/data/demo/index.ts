@@ -812,14 +812,24 @@ export function createDemoDataSource(): LiaDataSource {
       },
       // Deliberately unscoped — see the doc comment on
       // `listWithUnanalyzedMentions` in types.ts. Mirrors `listUnanalyzed`'s
-      // own selection ("no analysis row"), just unfiltered by organization.
+      // own selection exactly ("no analysis row, or a latest row whose
+      // outcome was never applied"), just unfiltered by organization. A
+      // mention with only a pending analysis row is not in `settled` (its
+      // outcome was never applied), so it still counts as needing work —
+      // the same widening `organizations_with_unanalyzed_mentions` picked up
+      // in migration 20260812000600.
       async listWithUnanalyzedMentions() {
-        const analyzed = new Set(
-          store().mentionAnalyses.map((analysis) => analysis.mentionId),
-        );
+        const pending = new Set<string>();
+        const settled = new Set<string>();
+        for (const analysis of store().mentionAnalyses) {
+          if (analysis.outcomeAppliedAt === null) pending.add(analysis.mentionId);
+          else settled.add(analysis.mentionId);
+        }
         const organizationIds = new Set<string>();
         for (const mention of store().mentions) {
-          if (!analyzed.has(mention.id)) organizationIds.add(mention.organizationId);
+          if (pending.has(mention.id) || !settled.has(mention.id)) {
+            organizationIds.add(mention.organizationId);
+          }
         }
         return [...organizationIds];
       },

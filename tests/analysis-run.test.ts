@@ -1295,3 +1295,36 @@ describe("observability", () => {
     expect(run?.promptVersion).toBeNull();
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* The cron sweep's organization scan                                         */
+/* -------------------------------------------------------------------------- */
+
+describe("the cron sweep's organization scan", () => {
+  it("mirrors listUnanalyzed's widened selection: a pending occurrence still counts as work", async () => {
+    // Clear both organizations' backlogs first, so what each one carries
+    // afterward is exactly what this test sets up next — not whatever the
+    // seed happened to leave behind.
+    const harborScope = harbor.owner();
+    await analyzeMentions({ dataSource, scope }, { provider: fakeProvider(), limit: 500 });
+    await analyzeMentions(
+      { dataSource, scope: harborScope },
+      { provider: fakeProvider(), limit: 500 },
+    );
+    expect(await unanalyzedCount()).toBe(0);
+    expect(await unanalyzedCount(harborScope)).toBe(0);
+
+    // USHG's only remaining work is a pending occurrence — the narrower "no
+    // analysis row" predicate would miss this mention entirely, because a
+    // pending analysis row already exists for it.
+    const target = await ingestFresh("sweep-widened-pending");
+    await seedPendingOccurrence(target.id);
+
+    const swept = await dataSource.organizations.listWithUnanalyzedMentions();
+
+    expect(swept).toContain(scope.organizationId);
+    // Harbor has nothing outstanding — every mention it carries is analysed
+    // and applied — so the widened predicate must still leave it out.
+    expect(swept).not.toContain(harborScope.organizationId);
+  });
+});
