@@ -1104,6 +1104,14 @@ New building rule execution (G1):
 
 ## Internal-apply runbook (G1)
 
+> **Resolved 2026-08-12 — hosted is current.** Every migration this note
+> worries about is on the hosted project (verified via
+> `supabase migration list --linked`: local and remote aligned through
+> `20260813000300`, schema pushed ahead of the deploy). The ordering
+> warning below is kept for the record and for the next branch that ships
+> migrations the deployed code depends on; it no longer describes a live
+> risk for this set.
+>
 > **Deploy-vs-migration-push ordering — read this before merging or
 > deploying this branch.** This branch's application code unconditionally
 > calls `record_analysis_occurrence` and `apply_analysis_occurrence` on
