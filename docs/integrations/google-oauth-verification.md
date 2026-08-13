@@ -16,7 +16,7 @@ Conflating these costs weeks, because each is invisible while you wait on the
 other.
 
 | | What it gates | Where |
-|---|---|---|
+| --- | --- | --- |
 | **OAuth verification** | Whether users see a scary warning, and how many may ever consent | Google Auth Platform → Verification |
 | **Business Profile API access** | Whether the endpoints return data at all | [Prerequisites form](https://developers.google.com/my-business/content/prereqs) |
 
@@ -63,23 +63,62 @@ every connected location to `action_required` at once.
 
 The only thing that removes the cap is verification.
 
-## 3. Order of operations
+## 3. Submitting
 
-1. Publish the app (*Audience* → **Publish app**). Verification cannot be
-   submitted from Testing.
-2. Verify the domain in Google Search Console, **using the same Google account
-   that owns the Cloud project**. A domain verified under a different account
-   does not count and the error message will not say so.
-3. Fill in *Branding*: app name, 120×120 logo, user support email, developer
-   contact email, app homepage, privacy policy link, terms link. The app name
-   must match what the homepage calls itself.
-4. Submit OAuth verification with the justification in §4.
-5. Submit the Business Profile API access request.
+The order matters, and not for tidiness: each step unlocks the next, and one of
+them starts a clock.
 
-Sensitive-scope review runs roughly 4–6 weeks. `business.manage` is *sensitive*,
-not *restricted*, so it does not trigger a CASA Tier 2 security assessment —
-that longer path (2–6 months) applies to Gmail and Drive content scopes, which
-Lia deliberately does not request.
+**Step 0 — verify the domain.** In [Google Search
+Console](https://search.google.com/search-console), verify `lia.bond` from an
+account holding **Owner or Editor** on the property — and it must be the same
+Google account that owns the Cloud project. A domain verified under a different
+account does not count, and nothing downstream will tell you that is the
+problem.
+
+**Step 1 — Branding, then Verify Branding.** *Google Auth Platform → Branding*:
+app name, 120×120 logo, user support email, developer contact email, app
+homepage, privacy policy link, terms link. The app name must match what the
+homepage calls itself. Then click **Verify Branding**.
+
+This is an automated check that usually returns within minutes and leaves the
+status at "Ready to publish". That status **expires after 7 days**, after which
+it has to be re-verified — so do not run it until ready to carry on through the
+remaining steps.
+
+**Step 2 — publish.** *Audience → Publish app*. The submission path opens once
+the app is in production; see §2 for what publishing changes.
+
+**Step 3 — declare the scope.** *Data Access → Add or remove scopes* → add
+`https://www.googleapis.com/auth/business.manage` → **Update**. The console
+sorts it into the sensitive table by itself.
+
+**Step 4 — submit.** In the **OAuth Verification Center**, click **Submit for
+verification**. The dialog wants:
+
+- a justification for each sensitive scope, *and* a separate explanation of why
+  a narrower scope is insufficient — a required field, not a courtesy. §4.
+- the demo video URL, unlisted on YouTube. §5.
+- up to three documentation links for the related features, if any exist.
+
+**Step 5 — the other approval.** Submit the [Business Profile API access
+request](https://developers.google.com/my-business/content/prereqs). §1.
+
+### Afterwards
+
+Google's own documentation says verification "can take up to 10 days". Treat
+that as the figure to plan against and anything longer as slippage rather than
+as the expectation — third-party write-ups quoting four to six weeks are
+describing bad cases, often self-inflicted ones.
+
+Correspondence arrives by email, to the developer contact address *and* the
+support email on the consent screen. Watch both, and watch the Verification
+Center status page. This is where the elapsed time actually goes: a request for
+clarification sitting unanswered for a week adds a week, and that is the usual
+reason a ten-day review becomes a month.
+
+`business.manage` is *sensitive*, not *restricted*, so it does not trigger a
+CASA Tier 2 security assessment — the 2–6 month path that applies to Gmail and
+Drive content scopes, which Lia deliberately does not request.
 
 ## 4. Scope justification
 
@@ -95,11 +134,12 @@ this file, which will drift.
 
 The shape of the argument, for whoever is filling in the form:
 
-- **Why this scope.** Google gates account discovery, location discovery, and
-  review management behind one scope. There is no read-only variant. Requesting
-  less is not an option Google offers, and the form's implicit question — "could
-  you have asked for less?" — has the answer "no", which is worth stating
-  explicitly rather than leaving the reviewer to work out.
+- **Why this scope, and why nothing narrower.** These are two separate fields on
+  the form, and the second is where submissions get sent back. Google gates
+  account discovery, location discovery, and review management behind one scope;
+  there is no read-only variant; requesting less is not an option Google offers.
+  Say that plainly rather than leaving the reviewer to establish it. The answer
+  to "could you have asked for less" is "no", and it is defensible.
 - **What it is used for.** Listing the Business Profile accounts the user
   administers; listing locations under a selected account; importing reviews for
   a connected location; confirming the grant is still valid during a health
@@ -167,7 +207,7 @@ and must match `GOOGLE_OAUTH_REDIRECT_URI` in that environment's configuration.
 Google compares strings: scheme, host, port, and path, with no trailing slash.
 
 | Environment | URI |
-|---|---|
+| --- | --- |
 | Local | `http://localhost:3000/api/integrations/google-business-profile/callback` |
 | Production | `https://lia.bond/api/integrations/google-business-profile/callback` |
 
@@ -189,7 +229,7 @@ Google client. Changing `APP_URL` alone does not move the callback.
 ## 8. Consent-screen errors
 
 | Screen says | Cause | Fix |
-|---|---|---|
+| --- | --- | --- |
 | `Error 400: redirect_uri_mismatch` | The `redirect_uri` sent is not registered on the client. Google echoes the offending value in *Request details* — read it, it is definitive. | Register it, or correct `GOOGLE_OAUTH_REDIRECT_URI` and redeploy. §7. |
 | `Error 403: access_denied`, "has not completed the Google verification process" | App is in Testing and this account is not a test user. | Add the account under *Audience → Test users*, or publish. §2. |
 | "Google hasn't verified this app" | Published, sensitive scope, verification not yet granted. | Expected. *Advanced → Go to lia.bond (unsafe)* until verification lands. §2. |
