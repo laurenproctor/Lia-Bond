@@ -1,9 +1,12 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Megaphone, Plus, Star, X } from "lucide-react";
+import { updateBrandVoiceAction } from "@/app/actions/brand-voice";
 import { completeOnboardingBrandVoiceAction } from "@/app/actions/onboarding";
+import { SaveStatus } from "@/components/autosave/save-status";
+import { useAutosave } from "@/components/autosave/use-autosave";
 import {
   OnboardingActions,
   OnboardingError,
@@ -20,6 +23,7 @@ import {
   MAX_PHRASE_LENGTH,
   MAX_PHRASES,
   type BrandVoiceAxisKey,
+  type BrandVoiceProfile,
   type UpdateBrandVoiceInput,
 } from "@/domain";
 import { summarizeBrandVoice } from "@/lib/brand-voice/summary";
@@ -41,6 +45,14 @@ import { cn } from "@/lib/cn";
  * The preview is computed synchronously from the form's own state. No model is
  * called, for the reasons on `buildVoicePreview`, and the screen labels it as an
  * illustration rather than implying anything has been published.
+ *
+ * Edits save themselves through the same `useAutosave` primitive and the same
+ * `updateBrandVoiceAction` the `/brand-voice` screen uses — a slider on release,
+ * a phrase immediately, then an idle window so a burst of edits is one request.
+ * That is only ever the **voice**: autosave never advances the wizard, because
+ * settling step 4 is the person pressing the button, not them touching a slider.
+ * The button still writes both, so a step reached without any autosave landing
+ * behaves exactly as it did before.
  */
 
 const PHRASE_LIMIT_HINT = `Up to ${MAX_PHRASES} phrases, ${MAX_PHRASE_LENGTH} characters each.`;
@@ -60,11 +72,47 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
     [preview, value.prohibitedPhrases],
   );
 
+  // The saved profile is deliberately ignored rather than re-seeded into the
+  // form. The form already applies the schema's own trim and case-insensitive
+  // dedupe rules as phrases are added, so there is nothing to reconcile — and
+  // re-seeding would overwrite an adjustment made while the request was in
+  // flight.
+  const handleSaved = useCallback(() => {
+    setError(null);
+    setFieldErrors({});
+  }, []);
+
+  const handleFailed = useCallback(
+    (message: string, fields: Record<string, string>) => {
+      setError(message);
+      setFieldErrors(fields);
+    },
+    [],
+  );
+
+  const { status, commit, flush } = useAutosave<UpdateBrandVoiceInput, BrandVoiceProfile>(
+    value,
+    {
+      save: updateBrandVoiceAction,
+      onSaved: handleSaved,
+      onFailed: handleFailed,
+      // Every role the wizard admits may write the voice, so there is no
+      // read-only case to turn this off for.
+      enabled: true,
+    },
+  );
+
   function setAxis(key: BrandVoiceAxisKey, next: number) {
     setValue((current) => ({
       ...current,
       axes: { ...current.axes, [key]: next },
     }));
+  }
+
+  /** Change the value and treat the edit as complete. */
+  function edit(update: (current: UpdateBrandVoiceInput) => UpdateBrandVoiceInput) {
+    setValue(update);
+    commit();
   }
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -75,6 +123,15 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
     setFieldErrors({});
 
     startTransition(async () => {
+      // Settle autosave before writing the same profile again. `flush` resolves
+      // only once nothing is in flight, so the two cannot interleave on a save
+      // that reads the current version and writes the next one.
+      //
+      // Its outcome is deliberately not a gate: the action below saves the voice
+      // itself, so a flush that failed on a dropped connection is retried by
+      // this submission rather than costing a second press.
+      await flush();
+
       const result = await completeOnboardingBrandVoiceAction(value);
 
       if (!result.ok) {
@@ -93,8 +150,13 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
         <OnboardingStepHeader
           icon={Megaphone}
           title="Brand voice"
-          description="Choose the tone and phrases that help Lia sound like you."
+          description="Choose the tone and phrases that help Lia sound like you. Your changes save as you make them."
         />
+
+        {/* Whether what is on screen is on the server. Sits above the controls
+            rather than beside the button, because the saving it reports is not
+            the button's. */}
+        <SaveStatus status={status} className="-mt-4" />
 
         <fieldset className="flex flex-col gap-3">
           <legend className="text-[14px] font-bold text-site-ink">
@@ -127,6 +189,14 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
                   // on its own means nothing.
                   aria-valuetext={`${value.axes[axis.key]} of 100, ${axis.leftLabel} to ${axis.rightLabel}`}
                   onChange={(event) => setAxis(axis.key, Number(event.target.value))}
+                  // Three, because each covers a gap the others leave.
+                  // `pointerup` ends a drag; `keyup` ends an arrow-key
+                  // adjustment; `blur` catches a keyboard user who tabs away,
+                  // which fires no `keyup` on this control. The preview follows
+                  // every frame of the drag; only the release starts a save.
+                  onPointerUp={commit}
+                  onKeyUp={commit}
+                  onBlur={commit}
                   className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-site-border accent-[color:var(--color-site-blue)]"
                 />
                 <span className="text-right text-[13px] text-site-body">
@@ -139,14 +209,12 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
 
         <PhraseField
           id="approved"
-          legend="Use these phrases"
-          description="Phrases Lia may include in responses."
+          legend="Use these types of phrases"
+          description="The types of phrases Lia would be likely to include in responses."
           tone="approved"
           phrases={value.approvedPhrases}
           error={fieldErrors.approvedPhrases}
-          onChange={(next) =>
-            setValue((current) => ({ ...current, approvedPhrases: next }))
-          }
+          onChange={(next) => edit((current) => ({ ...current, approvedPhrases: next }))}
         />
 
         <PhraseField
@@ -157,7 +225,7 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
           phrases={value.prohibitedPhrases}
           error={fieldErrors.prohibitedPhrases}
           onChange={(next) =>
-            setValue((current) => ({ ...current, prohibitedPhrases: next }))
+            edit((current) => ({ ...current, prohibitedPhrases: next }))
           }
         />
 
@@ -245,12 +313,18 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
           recorded.
         </OnboardingNote>
 
-        {error ? <OnboardingError>{error}</OnboardingError> : null}
+        {/* A failure keeps the edits on screen, and says so: this screen's whole
+            purpose is accumulating small adjustments, and losing them to a
+            failed request is not acceptable. Pressing the button below sends
+            them again. */}
+        {error ? (
+          <OnboardingError>{error} Your changes are still here.</OnboardingError>
+        ) : null}
 
         <OnboardingActions
           primary={
             <PrimaryAction pending={pending} pendingLabel="Saving…">
-              Save voice
+              Save and continue
             </PrimaryAction>
           }
           secondary={<SecondaryLink href="/onboarding/locations">Back</SecondaryLink>}

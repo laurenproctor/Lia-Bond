@@ -1,19 +1,23 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useId,
   useImperativeHandle,
   useRef,
   useState,
-  useTransition,
   type KeyboardEvent,
   type Ref,
 } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, Newspaper, Plus, X } from "lucide-react";
+import { Newspaper, Plus, RotateCw, X } from "lucide-react";
 import { saveOnboardingNewsMonitoringAction } from "@/app/actions/onboarding";
+import { SaveStatus } from "@/components/autosave/save-status";
+import { useAutosave, type FlushOutcome } from "@/components/autosave/use-autosave";
 import { OnboardingError } from "@/components/onboarding/onboarding-actions";
+import type { MonitoringQuery } from "@/domain";
+import type { ActionResult } from "@/lib/actions/result";
 import { cn } from "@/lib/cn";
 
 /**
@@ -26,6 +30,13 @@ import { cn } from "@/lib/cn";
  * exclusions, country, language, enabled. The tuning controls (thresholds,
  * poll intervals, publisher lists) stay on the full integration screen; the
  * server fills their documented defaults.
+ *
+ * There is no Save button. Edits save themselves after a short settling
+ * window (`useAutosave`), the status line says whether what is on screen is
+ * on the server, and the two ways out of the panel — closing it, or the
+ * step's own "Save and continue" — flush anything outstanding first. Nothing
+ * is held back, so there is nothing to discard and nothing to forget to
+ * press.
  *
  * Rendered as an expanded section beneath the source cards rather than a
  * dialog: the repository has no modal primitive on the onboarding surface,
@@ -46,12 +57,13 @@ export interface NewsConfiguratorValues {
 /** What "Save and continue" asks before navigating away. */
 export interface NewsConfiguratorHandle {
   /**
-   * Persist unsaved input. Resolves `"clean"` when there is nothing to save,
-   * `"saved"` on success, `"invalid"` when the input fails validation or the
-   * save fails — the configurator is already showing why, and navigation
-   * must not discard the form over it.
+   * Persist anything the settling window has not sent yet. Resolves
+   * `"clean"` when the server already has everything, `"saved"` after a
+   * write, `"failed"` when the input is invalid or the write failed — the
+   * configurator is already showing why, and navigation must not discard the
+   * form over it.
    */
-  flush(): Promise<"clean" | "saved" | "invalid">;
+  flush(): Promise<FlushOutcome>;
 }
 
 /**
@@ -81,31 +93,66 @@ const LANGUAGE_OPTIONS = [
 const FIELD_CLASSES =
   "min-h-[46px] w-full rounded-xl border border-site-field bg-white px-3.5 text-[14px] text-site-ink placeholder:text-site-muted";
 
+/**
+ * Longer than the hook's default, on purpose.
+ *
+ * Every way out of this panel flushes — Done, the close control, and the
+ * step's own "Save and continue" — so unlike the brand voice screen the timer
+ * is not the only thing standing between an edit and the database, and it can
+ * be tuned for coalescing rather than for safety. Coalescing is the only lever
+ * there is on audit volume: `audit_events` is append-only, so a first-run
+ * session that fires nine `monitoring_query.updated` events leaves nine in the
+ * trail forever. Two seconds folds the way people actually fill this in — one
+ * keyword, then the next, then the next — into a single write, and costs
+ * nothing, because nobody leaves this panel without a flush.
+ */
+const SETTLING_MS = 2_000;
+
+/**
+ * The two rules the server would reject on anyway, checked here so autosave
+ * spends no request finding out and the message names the field.
+ */
+function validate(values: NewsConfiguratorValues): string | null {
+  if (values.name.trim().length === 0) {
+    return "Name this monitoring, so it can be recognised later.";
+  }
+  if (values.keywords.length === 0) {
+    return "Add at least one name or keyword to monitor.";
+  }
+  return null;
+}
+
 export function NewsMonitoringConfigurator({
   initial,
   suggestions,
+  persisted,
   onClose,
   handleRef,
 }: {
   initial: NewsConfiguratorValues;
   /** Real organization facts offered as one-press keywords. Never fabricated. */
   suggestions: string[];
+  /** True when a monitoring query already exists for this organization. */
+  persisted: boolean;
   onClose: () => void;
   handleRef: Ref<NewsConfiguratorHandle>;
 }) {
   const router = useRouter();
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const [pending, startTransition] = useTransition();
+  const [value, setValue] = useState<NewsConfiguratorValues>(initial);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  const [closing, setClosing] = useState(false);
 
-  const [name, setName] = useState(initial.name);
-  const [keywords, setKeywords] = useState(initial.keywords);
-  const [exclusions, setExclusions] = useState(initial.exclusions);
-  const [sourceCountry, setSourceCountry] = useState(initial.sourceCountry ?? "");
-  const [language, setLanguage] = useState(initial.language ?? "");
-  const [enabled, setEnabled] = useState(initial.enabled);
+  /**
+   * Whether a row exists to edit. Held in a ref as well as the prop because a
+   * save here is believed immediately, while the prop only catches up after
+   * `router.refresh` re-renders the page — and in that gap the flush below
+   * would otherwise write the same defaults a second time.
+   */
+  const written = useRef(persisted);
+  useEffect(() => {
+    if (persisted) written.current = true;
+  }, [persisted]);
 
   // Focus the heading on open, so a keyboard or screen-reader user lands on
   // "what just appeared" rather than staying on a button that now controls an
@@ -114,61 +161,91 @@ export function NewsMonitoringConfigurator({
     headingRef.current?.focus();
   }, []);
 
-  function touch<T>(setter: (value: T) => void) {
-    return (value: T) => {
-      setter(value);
-      setDirty(true);
-      setSaved(false);
-    };
-  }
+  const save = useCallback(
+    async (next: NewsConfiguratorValues): Promise<ActionResult<MonitoringQuery>> => {
+      const problem = validate(next);
+      if (problem) return { ok: false, error: problem };
 
-  function validate(): string | null {
-    if (name.trim().length === 0) return "Name this monitoring, so it can be recognised later.";
-    if (keywords.length === 0) return "Add at least one name or keyword to monitor.";
-    return null;
-  }
+      const result = await saveOnboardingNewsMonitoringAction({
+        name: next.name.trim(),
+        keywords: next.keywords,
+        exclusions: next.exclusions,
+        sourceCountry: next.sourceCountry,
+        language: next.language,
+        enabled: next.enabled,
+      });
 
-  /** One save path, shared by the Save button and the parent's flush. */
-  function save(): Promise<"saved" | "invalid"> {
-    const problem = validate();
-    if (problem) {
-      setError(problem);
-      return Promise.resolve("invalid");
-    }
-    setError(null);
-
-    return new Promise((resolve) => {
-      startTransition(async () => {
-        const result = await saveOnboardingNewsMonitoringAction({
-          name: name.trim(),
-          keywords,
-          exclusions,
-          sourceCountry: sourceCountry === "" ? null : sourceCountry,
-          language: language === "" ? null : language,
-          enabled,
-        });
-
-        if (!result.ok) {
-          setError(result.error);
-          resolve("invalid");
-          return;
-        }
-
-        setSaved(true);
-        setDirty(false);
+      if (result.ok) {
+        written.current = true;
         // Re-derive the card's summary from what was actually persisted.
         router.refresh();
-        resolve("saved");
-      });
-    });
+      }
+      return result;
+    },
+    [router],
+  );
+
+  /**
+   * Deliberately does not re-seed the form from the response. The server
+   * trims the name, and adopting that mid-sentence would delete characters
+   * typed while the request was in flight. The card beside the panel is
+   * re-read from the database instead, so what is *reported* stays true to
+   * the row either way.
+   */
+  const handleSaved = useCallback(() => setError(null), []);
+  const handleFailed = useCallback((message: string) => setError(message), []);
+
+  const { status, commit, retry, flush } = useAutosave<
+    NewsConfiguratorValues,
+    MonitoringQuery
+  >(value, {
+    save,
+    onSaved: handleSaved,
+    onFailed: handleFailed,
+    enabled: true,
+    idleMs: SETTLING_MS,
+  });
+
+  /** Change one field and treat the edit as complete. */
+  function edit(patch: Partial<NewsConfiguratorValues>) {
+    setValue((current) => ({ ...current, ...patch }));
+    commit();
   }
 
-  useImperativeHandle(handleRef, () => ({
-    async flush() {
-      if (!dirty) return "clean";
-      return save();
-    },
-  }));
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      async flush() {
+        const outcome = await flush();
+        if (outcome !== "clean") return outcome;
+        if (written.current) return "clean";
+
+        // Open, untouched, and nothing persisted: the panel is showing
+        // defaults nobody has disagreed with, and pressing the step's own
+        // save button is the confirmation of them. Closing the panel is not,
+        // which is why this lives here rather than in `requestClose`.
+        commit();
+        return flush();
+      },
+    }),
+    [flush, commit],
+  );
+
+  /** Closing must not drop an edit the settling window has not sent yet. */
+  function requestClose() {
+    if (closing) return;
+    setClosing(true);
+    void flush().then((outcome) => {
+      setClosing(false);
+      // The panel stays open on a failure, showing what is wrong. Closing
+      // would throw the input away over it.
+      if (outcome === "failed") {
+        headingRef.current?.focus();
+        return;
+      }
+      onClose();
+    });
+  }
 
   return (
     <section
@@ -192,14 +269,15 @@ export function NewsMonitoringConfigurator({
             </h4>
             <p className="mt-0.5 max-w-[52ch] text-[13px] leading-relaxed text-site-body">
               Lia searches news coverage for these names and keeps what clears
-              its relevance checks. Thresholds, poll schedules, and publisher
-              lists can be tuned later on the News &amp; Media screen.
+              its relevance checks. Changes save as you make them. Thresholds,
+              poll schedules, and publisher lists can be tuned later on the
+              News &amp; Media screen.
             </p>
           </div>
         </div>
         <button
           type="button"
-          onClick={onClose}
+          onClick={requestClose}
           className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-site-muted transition-colors hover:bg-site-tint hover:text-site-ink"
         >
           <X className="size-5" aria-hidden />
@@ -207,78 +285,75 @@ export function NewsMonitoringConfigurator({
         </button>
       </div>
 
-      {error ? <OnboardingError>{error}</OnboardingError> : null}
-      {saved && !error ? (
-        <p
-          role="status"
-          className="flex items-start gap-2 rounded-xl border border-green-600/20 bg-green-100 px-4 py-3 text-[13.5px] text-green-700"
-        >
-          <CheckCircle2 className="mt-0.5 size-[18px] shrink-0" strokeWidth={2} aria-hidden />
-          News monitoring saved. You can keep editing, or continue to the next
-          step.
-        </p>
+      <SaveStatus status={status} />
+
+      {error ? (
+        <OnboardingError>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>{error} Your changes are still here.</span>
+            <button
+              type="button"
+              onClick={retry}
+              className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-red-600/30 bg-white px-3 text-[13px] font-semibold text-red-600 transition-colors hover:bg-red-50"
+            >
+              <RotateCw className="size-3.5" aria-hidden />
+              Retry
+            </button>
+          </div>
+        </OnboardingError>
       ) : null}
 
-      <NameField value={name} onChange={touch(setName)} disabled={pending} />
+      <NameField value={value.name} onChange={(name) => edit({ name })} />
 
       <ChipField
         label="Names and keywords"
         hint="What Lia searches coverage for — your organization, common abbreviations, important people. At least one."
-        values={keywords}
-        onChange={touch(setKeywords)}
+        values={value.keywords}
+        onChange={(keywords) => edit({ keywords })}
         suggestions={suggestions}
         placeholder="Add a name and press Enter"
-        disabled={pending}
       />
 
       <ChipField
         label="Excluded terms"
         hint="Optional. Coverage matching one of these is filtered out."
-        values={exclusions}
-        onChange={touch(setExclusions)}
+        values={value.exclusions}
+        onChange={(exclusions) => edit({ exclusions })}
         placeholder="Add an exclusion and press Enter"
-        disabled={pending}
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
         <SelectField
           label="Country or market"
-          value={sourceCountry}
-          onChange={touch(setSourceCountry)}
+          value={value.sourceCountry}
+          onChange={(sourceCountry) => edit({ sourceCountry })}
           options={COUNTRY_OPTIONS}
-          disabled={pending}
         />
         <SelectField
           label="Language"
-          value={language}
-          onChange={touch(setLanguage)}
+          value={value.language}
+          onChange={(language) => edit({ language })}
           options={LANGUAGE_OPTIONS}
-          disabled={pending}
         />
       </div>
 
-      <EnabledField value={enabled} onChange={touch(setEnabled)} disabled={pending} />
+      <EnabledField
+        value={value.enabled}
+        onChange={(enabled) => edit({ enabled })}
+      />
 
       <div className="flex flex-wrap items-center justify-end gap-3">
         <button
           type="button"
-          onClick={onClose}
-          disabled={pending}
-          className="inline-flex min-h-[44px] items-center justify-center rounded-xl px-4 py-2.5 text-[14px] font-semibold text-site-blue underline-offset-4 transition-colors hover:underline disabled:opacity-60"
-        >
-          Close
-        </button>
-        <button
-          type="button"
-          onClick={() => void save()}
-          aria-disabled={pending ? true : undefined}
+          onClick={requestClose}
+          aria-disabled={closing ? true : undefined}
           className={cn(
             "inline-flex min-h-[44px] items-center justify-center rounded-xl border border-site-blue-edge bg-white px-5 py-2.5",
             "text-[14px] font-semibold text-site-blue transition-colors hover:bg-site-blue-tint",
-            pending && "cursor-progress opacity-80",
+            closing && "cursor-progress opacity-80",
           )}
         >
-          {pending ? "Saving…" : "Save monitoring"}
+          {closing ? "Saving…" : "Done"}
         </button>
       </div>
     </section>
@@ -289,14 +364,19 @@ export function NewsMonitoringConfigurator({
 /* Fields                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/*
+ * Nothing here disables itself while a save runs. Autosave fires on a timer
+ * the user did not choose, and freezing the fields underneath them every time
+ * it does is the quickest way to make the panel feel broken. Requests are
+ * serialised in `useAutosave` instead.
+ */
+
 function NameField({
   value,
   onChange,
-  disabled,
 }: {
   value: string;
   onChange: (next: string) => void;
-  disabled: boolean;
 }) {
   const id = useId();
   return (
@@ -308,7 +388,6 @@ function NameField({
         id={id}
         type="text"
         value={value}
-        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         placeholder="e.g. Brand watch"
         className={cn(FIELD_CLASSES, "mt-1.5")}
@@ -329,7 +408,6 @@ function ChipField({
   values,
   onChange,
   placeholder,
-  disabled,
   suggestions = [],
 }: {
   label: string;
@@ -337,7 +415,6 @@ function ChipField({
   values: string[];
   onChange: (next: string[]) => void;
   placeholder: string;
-  disabled: boolean;
   suggestions?: string[];
 }) {
   const id = useId();
@@ -379,9 +456,8 @@ function ChipField({
             {term}
             <button
               type="button"
-              disabled={disabled}
               onClick={() => onChange(values.filter((value) => value !== term))}
-              className="inline-flex size-6 items-center justify-center rounded-md hover:bg-site-blue/15 disabled:pointer-events-none"
+              className="inline-flex size-6 items-center justify-center rounded-md hover:bg-site-blue/15"
             >
               <X className="size-3.5" aria-hidden />
               <span className="sr-only">Remove {term}</span>
@@ -392,7 +468,6 @@ function ChipField({
           id={id}
           type="text"
           value={draft}
-          disabled={disabled}
           aria-describedby={hintId}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={handleKeyDown}
@@ -408,9 +483,8 @@ function ChipField({
             <button
               key={suggestion}
               type="button"
-              disabled={disabled}
               onClick={() => onChange([...values, suggestion])}
-              className="inline-flex items-center gap-1 rounded-lg border border-site-border bg-site-tint px-2.5 py-1 text-[12.5px] font-semibold text-site-body transition-colors hover:bg-site-blue-tint hover:text-site-blue disabled:opacity-60"
+              className="inline-flex items-center gap-1 rounded-lg border border-site-border bg-site-tint px-2.5 py-1 text-[12.5px] font-semibold text-site-body transition-colors hover:bg-site-blue-tint hover:text-site-blue"
             >
               <Plus className="size-3.5" aria-hidden />
               {suggestion}
@@ -422,18 +496,17 @@ function ChipField({
   );
 }
 
+/** Empty option means "no preference", which the query stores as null. */
 function SelectField({
   label,
   value,
   onChange,
   options,
-  disabled,
 }: {
   label: string;
-  value: string;
-  onChange: (next: string) => void;
+  value: string | null;
+  onChange: (next: string | null) => void;
   options: readonly { value: string; label: string }[];
-  disabled: boolean;
 }) {
   const id = useId();
   return (
@@ -443,9 +516,8 @@ function SelectField({
       </label>
       <select
         id={id}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
+        value={value ?? ""}
+        onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
         className={cn(FIELD_CLASSES, "mt-1.5")}
       >
         {options.map((option) => (
@@ -461,11 +533,9 @@ function SelectField({
 function EnabledField({
   value,
   onChange,
-  disabled,
 }: {
   value: boolean;
   onChange: (next: boolean) => void;
-  disabled: boolean;
 }) {
   const id = useId();
   return (
@@ -474,7 +544,6 @@ function EnabledField({
         id={id}
         type="checkbox"
         checked={value}
-        disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
         className="mt-0.5 size-5 shrink-0 accent-[var(--color-site-blue)]"
       />

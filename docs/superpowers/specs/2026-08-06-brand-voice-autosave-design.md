@@ -2,6 +2,15 @@
 
 Design document. Written 2026-08-06, before implementation.
 
+> **Later amendment (2026-08-12).** The three modules below were promoted out
+> of `brand-voice/` when the onboarding News configurator adopted autosave:
+> `src/lib/autosave/status.ts`, `src/components/autosave/use-autosave.ts`,
+> `src/components/autosave/save-status.tsx`. The hook gained `flush()` — send
+> now and resolve on the answer — for the callers that have a moment autosave
+> cannot cover on its own (closing a panel, leaving a wizard step). Every
+> decision below still holds; only the paths moved. See `docs/onboarding.md`
+> §7.2.
+
 ## Summary
 
 Replace the brand voice screen's explicit Save with autosave, and show whether
