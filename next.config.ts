@@ -2,6 +2,18 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // The apex is the only canonical host. www.lia.bond stays in DNS so old
+  // links resolve, but every request to it is sent to lia.bond permanently.
+  async redirects() {
+    return [
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: "www.lia.bond" }],
+        destination: "https://lia.bond/:path*",
+        permanent: true,
+      },
+    ];
+  },
   // Typed routes stay off while navigation targets come from mock fixtures as
   // plain strings. Turn on once routes are generated from typed helpers.
   typedRoutes: false,
