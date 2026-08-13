@@ -7,6 +7,7 @@ import { AxisSlider } from "@/components/brand-voice/axis-slider";
 import { PhraseEditor } from "@/components/brand-voice/phrase-editor";
 import { SaveStatus } from "@/components/autosave/save-status";
 import { useAutosave } from "@/components/autosave/use-autosave";
+import { VoicePreview } from "@/components/brand-voice/voice-preview";
 import { VoiceSummary } from "@/components/brand-voice/voice-summary";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -21,9 +22,16 @@ export interface VoiceFormProps {
   initial: UpdateBrandVoiceInput;
   /** True when the caller's role cannot change the voice. */
   readOnly: boolean;
-  /** Server-rendered cards that sit inside the form's layout. */
+  /**
+   * Server-rendered cards that sit inside the form's layout.
+   *
+   * `channels` stays a prop because it renders the organization's *connected
+   * platforms* — server data this component has no business fetching. The
+   * preview used to arrive the same way and no longer does: it is derived
+   * entirely from the state held here, and a preview that cannot follow a
+   * slider is not a preview.
+   */
   channels: ReactNode;
-  preview: ReactNode;
 }
 
 /**
@@ -42,7 +50,7 @@ export interface VoiceFormProps {
  * request failed is not acceptable on a screen whose whole purpose is
  * accumulating small adjustments.
  */
-export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormProps) {
+export function VoiceForm({ initial, readOnly, channels }: VoiceFormProps) {
   const [value, setValue] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -117,7 +125,7 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
           <Card>
             <CardHeader
               title="2. Use these phrases"
-              description="Phrases Lia may include in responses. Extra words are allowed inside a phrase — “made our day” also covers “really made our day”."
+              description="Phrases Lia may include in responses."
             />
             <PhraseEditor
               id="approved-phrase"
@@ -137,7 +145,7 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
           <Card>
             <CardHeader
               title="3. Avoid these phrases"
-              description="Phrases Lia will never write. Extra words are allowed inside a phrase — “made our day” also blocks “really made our day”."
+              description="Phrases Lia will never write."
             />
             <PhraseEditor
               id="prohibited-phrase"
@@ -158,7 +166,7 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
         </div>
 
         <div className="flex flex-col gap-4 xl:col-span-5">
-          {preview}
+          <VoicePreview value={value} />
           <VoiceSummary axes={value.axes} />
         </div>
       </div>

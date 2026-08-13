@@ -7,7 +7,22 @@ import {
 } from "@/domain";
 
 /**
- * The brand-voice preview on step 4.
+ * The brand-voice preview, shared by onboarding step 4 and `/brand-voice`.
+ *
+ * Lived under `src/lib/onboarding/` while step 4 was its only caller. It was
+ * never onboarding-specific — it is pure, takes an `UpdateBrandVoiceInput`, and
+ * imports nothing from the wizard — and keeping it there was what let the two
+ * screens diverge: the settings page showed a "available once response drafting
+ * arrives" placeholder while the wizard had a working preview, so the screen
+ * somebody returns to was strictly less capable than the one they saw once.
+ * Both now render this module, so the illustration a person tunes against
+ * during setup is the illustration they get back afterwards.
+ *
+ * The chrome around it is deliberately *not* shared. Onboarding sits outside
+ * the app shell on the public-site brand and the settings page is a product
+ * page in it, so each renders its own markup; what has to agree is the reply
+ * text, which phrases are flagged, and the sentence used to flag them — all of
+ * which are decided here.
  *
  * **Deterministic, and no model is called.** Three reasons, in order of how
  * much they matter:
@@ -17,7 +32,10 @@ import {
  * 2. `LIA_AI_MODE` is frequently `unconfigured` — during onboarding especially,
  *    which is the one moment a new customer must not meet a configuration
  *    error. A preview that needs a provider is a preview that is blank exactly
- *    when it is most needed.
+ *    when it is most needed. This holds on the settings screen too, and it is
+ *    why response drafting having shipped did not make this module redundant:
+ *    a real draft is a better *sample* and a worse *control*, because it cannot
+ *    follow a slider and it fails when the provider is unset.
  * 3. A model's answer would be one sample from a distribution, and showing it
  *    beside "this is how Lia will reply" would overstate it. What this produces
  *    is an *illustration of the settings*, which is a claim it can actually keep
@@ -190,4 +208,25 @@ export function prohibitedPhraseMatchesInPreview(
   prohibitedPhrases: readonly string[],
 ): PhraseMatch[] {
   return findPhraseMatches(preview, prohibitedPhrases);
+}
+
+/**
+ * The matched wording, written out for the warning.
+ *
+ * Here rather than in either screen because both have to say the same thing.
+ * When this was inline JSX on step 4, the settings page had no warning at all
+ * to disagree with; now that both render one, the phrasing is a single fact.
+ *
+ * Names what the example *actually said*, and the phrase it matched when the
+ * two differ — a list that matches around extra words has to show its working,
+ * or a warning about wording nobody typed looks like a mistake.
+ */
+export function describePreviewConflicts(matches: readonly PhraseMatch[]): string {
+  return matches
+    .map((match) =>
+      match.matchedText.toLowerCase() === match.phrase.toLowerCase()
+        ? `“${match.matchedText}”`
+        : `“${match.matchedText}” (matching “${match.phrase}”)`,
+    )
+    .join(", ");
 }

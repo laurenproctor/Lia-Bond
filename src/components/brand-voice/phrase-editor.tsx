@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { isCoveredByPhrases, MAX_PHRASE_LENGTH, MAX_PHRASES } from "@/domain";
+import {
+  isCoveredByPhrases,
+  MAX_PHRASE_LENGTH,
+  MAX_PHRASES,
+  PHRASE_LIMIT_HINT,
+} from "@/domain";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
@@ -148,6 +153,7 @@ export function PhraseEditor({
               add();
             }
           }}
+          aria-describedby={error ? `${id}-error` : `${id}-hint`}
           className="h-9 min-w-0 flex-1 rounded-lg border border-gray-300 px-2.5 text-[13px] text-gray-950 placeholder:text-gray-400 focus:border-purple-600 focus:outline-none disabled:bg-gray-50 disabled:text-gray-400"
         />
         <Button
@@ -161,11 +167,21 @@ export function PhraseEditor({
         </Button>
       </div>
 
+      {/*
+        The same sentence the wizard's phrase field shows, from the same
+        constant. This screen used to state neither the matching rule here nor
+        the limits anywhere — the cap surfaced only as a placeholder once a 21st
+        chip was refused, which is the worst moment to learn it.
+      */}
       {error ? (
-        <p role="alert" className="mt-2 text-[12px] text-red-600">
+        <p id={`${id}-error`} role="alert" className="mt-2 text-[12px] text-red-600">
           {error}
         </p>
-      ) : null}
+      ) : (
+        <p id={`${id}-hint`} className="mt-2 text-[12px] text-gray-500">
+          {PHRASE_LIMIT_HINT}
+        </p>
+      )}
     </div>
   );
 }

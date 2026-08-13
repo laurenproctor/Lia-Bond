@@ -17,6 +17,24 @@ import {
 export const MAX_PHRASES = 20;
 export const MAX_PHRASE_LENGTH = 80;
 
+/**
+ * What to tell somebody standing in front of an empty phrase box.
+ *
+ * Declared here, beside the two limits it quotes, and rendered by **both**
+ * phrase editors — the wizard's and the settings screen's. Two facts, both of
+ * which change what a person types and neither of which is guessable:
+ *
+ * - **Matching is not exact.** Somebody who assumes it is writes out every
+ *   variation of a phrase by hand.
+ * - **There are limits.** The settings screen used to reveal these only by
+ *   refusing a 21st chip, which is the worst moment to learn them.
+ *
+ * A constant rather than two hand-written strings because the wizard stating
+ * the rule and the settings page staying silent about it is exactly the drift
+ * this pairing keeps reintroducing.
+ */
+export const PHRASE_LIMIT_HINT = `Extra words are allowed inside a phrase — “made our day” also covers “really made our day”. Up to ${MAX_PHRASES} phrases, ${MAX_PHRASE_LENGTH} characters each.`;
+
 export const BRAND_VOICE_AXIS_KEYS = [
   "warmth",
   "detail",

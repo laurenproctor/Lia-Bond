@@ -222,7 +222,10 @@ Required modules:
 - Approved phrases
 - Prohibited phrases
 - Channel selection
-- Live preview
+- Live preview — the shared deterministic illustration from
+  `src/lib/brand-voice/preview.ts`, the same one onboarding step 4 shows, so a
+  voice tuned during setup previews identically afterwards. No model is called;
+  it follows the sliders live and works with no provider configured.
 - Plain-language voice summary
 
 Reference: `public/reference-screens/13-brand-voice-studio.png`

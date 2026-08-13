@@ -36,8 +36,8 @@ recorded under "Decisions made integrating the branches".
 | `src/app/actions/` | Server actions. The only write path in the application. |
 | `src/lib/site/` | The marketing route table, and the content each public page renders. One source for the nav, the footer, the sitemap, and `robots.txt`. |
 | `src/lib/support/` | Help requests: validation, message composition, and delivery mode. |
-| `src/lib/brand-voice/` | Brand voice save service, summary derivation, and autosave status. |
-| `src/lib/onboarding/` | First-run setup: route guards, step transitions and their audit trail, the deterministic brand-voice preview, quick-win resolution, import status, and the post-authentication destination. |
+| `src/lib/brand-voice/` | Brand voice save service, form seed, summary derivation, and the deterministic preview both the settings screen and onboarding step 4 render. |
+| `src/lib/onboarding/` | First-run setup: route guards, step transitions and their audit trail, quick-win resolution, import status, and the post-authentication destination. The brand-voice preview used to live here; it moved to `src/lib/brand-voice/` once `/brand-voice` rendered it too. |
 | `src/components/` | Presentational components. **Never** query the database. |
 | `src/domain/` | Zod schemas, inferred types, and lifecycle enums. No I/O. |
 | `src/integrations/` | Platform connector boundary. All Google API behaviour lives behind it. |
@@ -612,6 +612,21 @@ reachable without a session, so provider errors are logged and swallowed too.
 | D75 | Nothing renders until the first save | Showing "Saved" on arrival claims something that never happened. |
 | D76 | `pending` is removed from the controls' `disabled` | Left in, every autosave would freeze the form mid-edit — the quickest way to make the feature feel broken. Serialisation happens in the hook instead. |
 | D77 | The status renders as the form's first row, not inside `PageHeader` | `PageHeader` is server-rendered by the page while the state lives in the client form — the same cross-component problem that put Save in a sticky bar originally. A context provider for one string is not worth the indirection. |
+
+## Decisions made aligning `/brand-voice` with onboarding step 4
+
+The two screens were already backed by one row — same repository, same
+`brandVoiceFormSeed`, same `saveBrandVoice`, pinned by
+`tests/brand-voice-onboarding-alignment.test.ts`. What had drifted was what they
+*showed*.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D174 | The preview module moves to `src/lib/brand-voice/`, and both screens render it | It was pure and took an `UpdateBrandVoiceInput`; nothing about it was ever onboarding-specific. Filing it under the wizard is what let the settings screen ship a placeholder instead — the screen somebody returns to was strictly less capable than the one they saw once. |
+| D175 | Response drafting having shipped does not make the deterministic preview redundant | The placeholder promised "a real mention answered in this voice… available once response drafting arrives", and drafting did arrive, which made the sentence false. Calling the model would still be wrong here: a real draft cannot follow a slider, costs a request per frame of a drag, and is blank exactly when `LIA_AI_MODE` is unset. A real draft is a better *sample* and a worse *control*. |
+| D176 | The preview is rendered by `VoiceForm`, not passed in as a server `ReactNode` | It is derived entirely from live form state. `channels` stays a prop because it renders the organization's connected platforms, which is server data; the preview is not. |
+| D177 | The conflict sentence and the phrase hint are shared constants, not restated copy | Both were places the two screens could word the same condition differently — and `/brand-voice` stated neither the matching rule nor the phrase caps, revealing the 20-phrase limit only by refusing a 21st chip. `describePreviewConflicts` and `PHRASE_LIMIT_HINT` make each a single fact. |
+| D178 | The chrome is deliberately **not** shared | Onboarding sits outside the app shell on the public-site brand; `/brand-voice` is a product page inside it. Each renders its own markup, and the alignment test reads both component sources — what regressed here was never a return value, it was one screen importing something the other did not. |
 
 ## Decisions made in workflow 06
 
