@@ -320,6 +320,33 @@ location — only when an enabled onboarding brand query shows the person
 opted into News monitoring, and never writing a row that already exists, so
 retries are idempotent and user edits are never overwritten.
 
+The News card asks for a **market and a local anchor**: a country from
+`MONITORING_COUNTRIES` (`src/lib/geo/countries.ts` — the 30 codes GNews
+accepts, so the picker cannot promise a filter the provider will ignore), plus
+an optional postal code that auto-fills a city and region. Country is the only
+one of these a poll uses today; `monitoring_queries.postal_code`,
+`locality_city`, and `locality_region` are stored and read by nothing, waiting
+on the provider upgrade that can search regionally (D71). They are captured now
+because an organization-wide brand watch has no location row to derive a
+neighbourhood from, and nobody will come back to a settings screen to add one
+later. `ensureOnboardingLocationQueries` takes a location query's locality from
+**that location's own persisted address**, not from the brand query, so head
+office's postal code is never stamped on a restaurant three states away.
+
+Auto-fill goes through `lookupPostalCodeAction` →
+`src/lib/geo/postal-lookup.ts`, the single HTTP boundary to Zippopotam — free,
+unauthenticated, adding no environment variable and no per-poll cost, and with
+no SLA, which is why nothing depends on it: the city and region are ordinary
+editable fields, a failed lookup says so and leaves them for the person, and a
+country with no lookup coverage (Ireland, Hong Kong, Singapore) is still a
+country the picker offers. `fetch` is injected exactly as `searchGNews` takes
+it, so `tests/postal-lookup.test.ts` covers every provider failure without
+touching the network. The shared behaviour — debounce, stale-response
+suppression, clearing the locality when the country changes — lives in
+`src/components/monitoring/use-postal-lookup.ts` and is used by both the
+onboarding configurator and the News & Media query editor; the markup is not
+shared, because the two screens are on different design systems.
+
 **Reddit monitoring is not implemented.** `reddit` exists as platform-enum
 vocabulary, seed/demo fixture data, and a presentation route
 (`/reddit/[id]`); there is no Reddit connector, monitor, persistence, or
@@ -974,6 +1001,23 @@ on `listDue`'s underlying query, and two UI regressions in the monitoring-query
 editor (a lost two-column grid; an inline edit form inside an unconstrained
 `DataTable` cell) — are tracked in `progress.md` rather than repeated here;
 they sit an abstraction level below what an architecture scan needs.
+
+Two defects found and fixed while adding the monitoring locality, both worth
+recording because neither was visible from the UI:
+
+- `QueryEditor` sent the literal `sourceCountry: "us"` on create and omitted
+  the field entirely on update, so every query created from the News & Media
+  screen watched the United States and no edit could change it. The country is
+  now a real field on both paths.
+- `updateMonitoringQueryInputSchema` derives from the create schema, and Zod's
+  `.partial()` makes a key optional **without** stripping its `.default()` — an
+  absent key still parses to the default. With `.default(null)` on the three
+  locality columns, any patch that did not mention them (a rename, a toggle)
+  would have arrived at the repository carrying explicit nulls, and both
+  adapters would have written them. The update schema now re-takes those three
+  fields from `monitoringQuerySchema`, where they have no default, so
+  `undefined` means "not mentioned" again. Pinned by
+  `tests/monitoring-repositories.test.ts`.
 
 New after integrating the branches:
 

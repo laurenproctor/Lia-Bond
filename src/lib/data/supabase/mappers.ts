@@ -777,6 +777,12 @@ export function toMonitoringQuery(row: Row): MonitoringQuery {
       allowedDomains: stringArray(row.allowed_domains),
       deniedDomains: stringArray(row.denied_domains),
       sourceCountry: row.source_country ?? null,
+      // `?? null` rather than a fallback: a row written before the locality
+      // migration has nothing to say about where it is, and null is what the
+      // schema means by that.
+      postalCode: row.postal_code ?? null,
+      localityCity: row.locality_city ?? null,
+      localityRegion: row.locality_region ?? null,
       language: row.language ?? null,
       relevanceThreshold: num(row.relevance_threshold) ?? 0,
       enabled: row.enabled,

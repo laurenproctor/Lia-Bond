@@ -124,6 +124,9 @@ describe("findOnboardingNewsQuery", () => {
       allowedDomains: [],
       deniedDomains: [],
       sourceCountry: "us",
+      postalCode: null,
+      localityCity: null,
+      localityRegion: null,
       language: "en",
       relevanceThreshold: 0.35,
       enabled: true,
@@ -457,6 +460,29 @@ describe("ensureOnboardingLocationQueries", () => {
     const brand = queries.find((query) => query.id === MQ_HARBOR_BRAND);
     expect(locationQuery?.sourceCountry).toBe(brand?.sourceCountry);
     expect(locationQuery?.language).toBe(brand?.language);
+  });
+
+  it("takes the locality from the location's own address, not from the brand query", async () => {
+    const dataSource = freshDataSource();
+    const scope = harbor.owner();
+
+    await ensureOnboardingLocationQueries(
+      { dataSource, scope },
+      [LOC_HARBOR_HOUSE],
+      fakeMonitor(),
+      NOW,
+    );
+
+    const queries = await dataSource.monitoringQueries.list(scope);
+    const locationQuery = queries.find((query) => query.locationId === LOC_HARBOR_HOUSE);
+    const location = await dataSource.locations.get(scope, LOC_HARBOR_HOUSE);
+
+    // This restaurant's persisted address, verbatim. Inheriting the brand
+    // query's locality instead would stamp head office's neighbourhood onto
+    // every restaurant in the group.
+    expect(locationQuery?.postalCode).toBe(location?.postalCode);
+    expect(locationQuery?.localityCity).toBe(location?.city);
+    expect(locationQuery?.localityRegion).toBe(location?.region);
   });
 
   it("is idempotent: a retried step 3 creates nothing new", async () => {

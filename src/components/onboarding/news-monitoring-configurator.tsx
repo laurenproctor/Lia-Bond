@@ -15,10 +15,16 @@ import { Newspaper, Plus, RotateCw, X } from "lucide-react";
 import { saveOnboardingNewsMonitoringAction } from "@/app/actions/onboarding";
 import { SaveStatus } from "@/components/autosave/save-status";
 import { useAutosave, type FlushOutcome } from "@/components/autosave/use-autosave";
+import {
+  usePostalLookup,
+  type Locality,
+  type PostalLookup,
+} from "@/components/monitoring/use-postal-lookup";
 import { OnboardingError } from "@/components/onboarding/onboarding-actions";
 import type { MonitoringQuery } from "@/domain";
 import type { ActionResult } from "@/lib/actions/result";
 import { cn } from "@/lib/cn";
+import { MONITORING_COUNTRIES } from "@/lib/geo/countries";
 
 /**
  * The simplified News configuration step 2 offers.
@@ -50,6 +56,9 @@ export interface NewsConfiguratorValues {
   keywords: string[];
   exclusions: string[];
   sourceCountry: string | null;
+  postalCode: string | null;
+  localityCity: string | null;
+  localityRegion: string | null;
   language: string | null;
   enabled: boolean;
 }
@@ -67,20 +76,17 @@ export interface NewsConfiguratorHandle {
 }
 
 /**
- * Curated to what GNews actually filters on. Two-letter codes, lowercase,
- * matching `monitoringQuerySchema.sourceCountry`. Empty means anywhere.
+ * Every country GNews filters on, from `MONITORING_COUNTRIES` rather than a
+ * second list here — the codes and the labels have one home, and the postal
+ * lookup reads the same rows to decide where it can help. Empty means anywhere.
  */
 const COUNTRY_OPTIONS = [
   { value: "", label: "Anywhere" },
-  { value: "us", label: "United States" },
-  { value: "gb", label: "United Kingdom" },
-  { value: "ca", label: "Canada" },
-  { value: "au", label: "Australia" },
-  { value: "ie", label: "Ireland" },
-  { value: "de", label: "Germany" },
-  { value: "fr", label: "France" },
-  { value: "es", label: "Spain" },
-] as const;
+  ...MONITORING_COUNTRIES.map((country) => ({
+    value: country.code,
+    label: country.label,
+  })),
+];
 
 const LANGUAGE_OPTIONS = [
   { value: "", label: "Any language" },
@@ -171,6 +177,9 @@ export function NewsMonitoringConfigurator({
         keywords: next.keywords,
         exclusions: next.exclusions,
         sourceCountry: next.sourceCountry,
+        postalCode: next.postalCode,
+        localityCity: next.localityCity,
+        localityRegion: next.localityRegion,
         language: next.language,
         enabled: next.enabled,
       });
@@ -211,6 +220,24 @@ export function NewsMonitoringConfigurator({
     setValue((current) => ({ ...current, ...patch }));
     commit();
   }
+
+  /**
+   * The country, postal code, and the city and region it resolves to.
+   *
+   * Every change routes through `edit`, so an auto-filled city is an edit like
+   * any other: the settling window starts, the status line says "saving", and
+   * the value is on the server two seconds later without anybody pressing
+   * anything.
+   */
+  const locality = usePostalLookup({
+    value: {
+      sourceCountry: value.sourceCountry,
+      postalCode: value.postalCode,
+      localityCity: value.localityCity,
+      localityRegion: value.localityRegion,
+    },
+    onChange: edit,
+  });
 
   useImperativeHandle(
     handleRef,
@@ -326,7 +353,7 @@ export function NewsMonitoringConfigurator({
         <SelectField
           label="Country or market"
           value={value.sourceCountry}
-          onChange={(sourceCountry) => edit({ sourceCountry })}
+          onChange={locality.setCountry}
           options={COUNTRY_OPTIONS}
         />
         <SelectField
@@ -336,6 +363,16 @@ export function NewsMonitoringConfigurator({
           options={LANGUAGE_OPTIONS}
         />
       </div>
+
+      <LocalityFields
+        value={{
+          sourceCountry: value.sourceCountry,
+          postalCode: value.postalCode,
+          localityCity: value.localityCity,
+          localityRegion: value.localityRegion,
+        }}
+        lookup={locality}
+      />
 
       <EnabledField
         value={value.enabled}
@@ -528,6 +565,151 @@ function SelectField({
       </select>
     </div>
   );
+}
+
+/**
+ * Where this organization is, inside the market it just chose.
+ *
+ * Sits under the country because it depends on it: the postal field is
+ * disabled until a country is set, which is how the "a postal code needs a
+ * country" invariant is enforced — `monitoringQuerySchema` deliberately does
+ * not enforce it, because a partial update has no country to check against.
+ *
+ * The city and region are editable in every country, including the ones the
+ * lookup covers. Auto-fill is a convenience, not an assertion: the lookup
+ * resolves an area rather than a precise town in several markets, and the
+ * person filling this in knows their own city better than a free postal API
+ * does. What is *never* done is filling them with a guess — a lookup that
+ * fails leaves them empty and says so.
+ */
+function LocalityFields({
+  value,
+  lookup,
+}: {
+  value: Locality;
+  lookup: PostalLookup;
+}) {
+  const postalId = useId();
+  const cityId = useId();
+  const regionId = useId();
+  const statusId = `${postalId}-status`;
+
+  const hasCountry = value.sourceCountry !== null;
+
+  return (
+    <div>
+      <p className="text-[13px] font-semibold text-site-ink">
+        Where you are
+      </p>
+      <p className="mt-0.5 max-w-[62ch] text-[12.5px] leading-relaxed text-site-muted">
+        Optional. Lia searches the whole market you chose above. This is the
+        local anchor it will use when regional coverage becomes available —
+        it changes nothing about what is monitored today.
+      </p>
+
+      <div className="mt-2 grid gap-4 sm:grid-cols-3">
+        <div>
+          <label htmlFor={postalId} className="text-[13px] font-semibold text-site-ink">
+            {lookup.postalLabel}
+          </label>
+          <input
+            id={postalId}
+            type="text"
+            inputMode="text"
+            autoComplete="postal-code"
+            maxLength={12}
+            disabled={!hasCountry}
+            aria-describedby={statusId}
+            value={value.postalCode ?? ""}
+            onChange={(event) => lookup.setPostalCode(event.target.value)}
+            placeholder={hasCountry ? "" : "Choose a country first"}
+            className={cn(
+              FIELD_CLASSES,
+              "mt-1.5",
+              !hasCountry && "cursor-not-allowed bg-site-tint text-site-muted",
+            )}
+          />
+        </div>
+
+        <div>
+          <label htmlFor={cityId} className="text-[13px] font-semibold text-site-ink">
+            City
+          </label>
+          <input
+            id={cityId}
+            type="text"
+            autoComplete="address-level2"
+            maxLength={120}
+            disabled={!hasCountry}
+            value={value.localityCity ?? ""}
+            onChange={(event) => lookup.setCity(event.target.value)}
+            className={cn(
+              FIELD_CLASSES,
+              "mt-1.5",
+              !hasCountry && "cursor-not-allowed bg-site-tint text-site-muted",
+            )}
+          />
+        </div>
+
+        <div>
+          <label htmlFor={regionId} className="text-[13px] font-semibold text-site-ink">
+            State or region
+          </label>
+          <input
+            id={regionId}
+            type="text"
+            autoComplete="address-level1"
+            maxLength={120}
+            disabled={!hasCountry}
+            value={value.localityRegion ?? ""}
+            onChange={(event) => lookup.setRegion(event.target.value)}
+            className={cn(
+              FIELD_CLASSES,
+              "mt-1.5",
+              !hasCountry && "cursor-not-allowed bg-site-tint text-site-muted",
+            )}
+          />
+        </div>
+      </div>
+
+      {/*
+        Polite rather than assertive, and never a role="alert": the lookup runs
+        on a debounce nobody asked for, and interrupting a screen reader
+        mid-word to announce that a third-party service is slow would be worse
+        than the problem. A failure here costs two fields of typing.
+      */}
+      <p
+        id={statusId}
+        aria-live="polite"
+        className={cn(
+          "mt-1.5 text-[12.5px] leading-relaxed",
+          lookup.status === "failed" ? "text-red-600" : "text-site-muted",
+        )}
+      >
+        <LocalityStatusText value={value} lookup={lookup} />
+      </p>
+    </div>
+  );
+}
+
+/** One sentence about what the lookup is doing, or nothing at all. */
+function LocalityStatusText({
+  value,
+  lookup,
+}: {
+  value: Locality;
+  lookup: PostalLookup;
+}) {
+  if (value.sourceCountry === null) return null;
+  if (lookup.status === "looking-up") return <>Looking up that {lookup.postalLabel.toLowerCase()}…</>;
+  if (lookup.status === "failed") return <>{lookup.message}</>;
+  if (lookup.status === "filled") {
+    return <>City and region filled in from the {lookup.postalLabel.toLowerCase()}. Edit either if it is not right.</>;
+  }
+  if (!lookup.lookupSupported) {
+    return <>Lia cannot look up postal codes in this country yet — enter the city and region yourself.</>;
+  }
+  return null;
 }
 
 function EnabledField({

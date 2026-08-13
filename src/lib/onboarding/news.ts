@@ -129,6 +129,9 @@ export async function saveOnboardingNewsQuery(
       "keywords",
       "exclusions",
       "sourceCountry",
+      "postalCode",
+      "localityCity",
+      "localityRegion",
       "language",
       "enabled",
     ]);
@@ -249,6 +252,9 @@ export interface LocationQueryOutcome {
  * - Language and country are inherited from the brand query, so the
  *   organization's queries agree; everything else takes the documented
  *   defaults, `origin: "onboarding"`.
+ * - The locality (postal code, city, region) comes from the **location's own
+ *   address**, not from the brand query. Inheriting it would stamp head
+ *   office's neighbourhood onto every restaurant in the group.
  *
  * Failures are per location and never propagate: the locations step has
  * already succeeded, and a monitoring-query hiccup must not un-succeed it.
@@ -301,6 +307,15 @@ export async function ensureOnboardingLocationQueries(
         allowedDomains: [],
         deniedDomains: [],
         sourceCountry: brand.sourceCountry,
+        // The locality comes from the location itself, not from the brand
+        // query: this restaurant's own persisted address is a better answer
+        // than the organization's head-office postal code, and it is a fact
+        // already on the row rather than an inheritance. Falls back to null
+        // rather than to the brand's — a Chicago location must not be labelled
+        // with a New York locality just because head office is there.
+        postalCode: location.postalCode,
+        localityCity: location.city,
+        localityRegion: location.region,
         language: brand.language,
         relevanceThreshold: DEFAULT_RELEVANCE_THRESHOLD,
         pollIntervalMinutes: DEFAULT_POLL_INTERVAL_MINUTES,

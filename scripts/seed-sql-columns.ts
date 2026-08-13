@@ -67,6 +67,10 @@ export const SEED_TABLE_COLUMNS = {
   monitoring_queries: [
     "id", "organizationId", "locationId", "name", "queryType", "keywords",
     "exclusions", "allowedDomains", "deniedDomains", "sourceCountry",
+    // Locality (the monitoring-query-locality migration). Null on most seeded
+    // rows, which is the honest depiction of a workspace configured before the
+    // columns existed.
+    "postalCode", "localityCity", "localityRegion",
     "language", "relevanceThreshold", "enabled", "pollIntervalMinutes",
     "origin", "lastPolledAt", "createdAt", "updatedAt",
   ],

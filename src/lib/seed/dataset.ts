@@ -525,6 +525,15 @@ interface MonitoringQuerySeed {
   exclusions?: string[];
   allowedDomains?: string[];
   sourceCountry?: string | null;
+  /**
+   * The local anchor, given as a real postal code for the depicted city.
+   *
+   * Optional, and left unset on most rows on purpose: the column is new, so a
+   * dataset where every query has a locality would misrepresent what an
+   * existing workspace actually looks like. The two that set it are the ones
+   * whose city the rest of the seed already names.
+   */
+  locality?: { postalCode: string; city: string; region: string };
   relevanceThreshold?: number;
   pollIntervalMinutes?: number;
   lastPolledAt: string | null;
@@ -542,6 +551,9 @@ function monitoringQuery(seed: MonitoringQuerySeed): MonitoringQuery {
     allowedDomains: seed.allowedDomains ?? [],
     deniedDomains: [],
     sourceCountry: seed.sourceCountry ?? "us",
+    postalCode: seed.locality?.postalCode ?? null,
+    localityCity: seed.locality?.city ?? null,
+    localityRegion: seed.locality?.region ?? null,
     language: "en",
     relevanceThreshold: seed.relevanceThreshold ?? 0.35,
     enabled: true,
@@ -571,6 +583,10 @@ const monitoringQueries: MonitoringQuery[] = [
     // below actually use.
     keywords: ["Maison Laurent", "Union Square Hospitality Group", "USHG"],
     exclusions: ["obituary"],
+    // Organization-wide, so there is no location row to take a locality from —
+    // which is the case these columns exist for. Anchored to the city every
+    // seeded USHG location is in, the answer an admin would have given.
+    locality: { postalCode: "10003", city: "New York", region: "NY" },
     pollIntervalMinutes: 240,
     lastPolledAt: minutesAgo(9),
   }),
@@ -597,6 +613,10 @@ const monitoringQueries: MonitoringQuery[] = [
     // SoHo mentions below say "Maison Laurent" outright, so "Laurent" alone
     // is why this query would have found them.
     keywords: ["Laurent", "Prince Street"],
+    // LOC_SOHO's own postal code, city, and region, copied exactly. A location
+    // query's locality has to agree with the location it is bound to, or the
+    // seed depicts a state the product would never produce.
+    locality: { postalCode: "10012", city: "New York", region: "NY" },
     // A publisher on this list also earns LOCAL_OUTLET_BONUS in the gate —
     // both outlets below already cover this SoHo location.
     allowedDomains: ["eater.com", "timeout.com"],
