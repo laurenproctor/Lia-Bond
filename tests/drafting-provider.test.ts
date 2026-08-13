@@ -41,6 +41,7 @@ const CONTEXT: DraftingContext = {
     confidence: 40,
     hospitality: 70,
     toneNotes: "Keep it upbeat and specific.",
+    preferredPhrases: ["we'd love to welcome you back"],
     bannedPhrases: ["we apologize for any inconvenience"],
     signOff: "The Lia Bistro Team",
   },

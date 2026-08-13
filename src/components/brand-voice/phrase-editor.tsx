@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { MAX_PHRASE_LENGTH, MAX_PHRASES } from "@/domain";
+import { isCoveredByPhrases, MAX_PHRASE_LENGTH, MAX_PHRASES } from "@/domain";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
@@ -12,6 +12,13 @@ export interface PhraseEditorProps {
   legend: string;
   tone: "approved" | "prohibited";
   phrases: string[];
+  /**
+   * The opposite list. A suggestion already covered there is withheld, since
+   * pressing it could only produce the use/avoid contradiction error.
+   */
+  counterpartPhrases?: readonly string[];
+  /** Offered as buttons, never applied on their own. */
+  suggestions?: readonly string[];
   disabled?: boolean;
   error?: string;
   onChange: (phrases: string[]) => void;
@@ -37,6 +44,8 @@ export function PhraseEditor({
   legend,
   tone,
   phrases,
+  counterpartPhrases = [],
+  suggestions = [],
   disabled = false,
   error,
   onChange,
@@ -44,16 +53,28 @@ export function PhraseEditor({
   const [draft, setDraft] = useState("");
   const full = phrases.length >= MAX_PHRASES;
 
-  function add() {
-    const phrase = draft.trim();
+  function addPhrase(raw: string) {
+    const phrase = raw.trim();
     if (!phrase || full) return;
     if (phrases.some((existing) => existing.toLowerCase() === phrase.toLowerCase())) {
-      setDraft("");
       return;
     }
     onChange([...phrases, phrase]);
+  }
+
+  function add() {
+    addPhrase(draft);
     setDraft("");
   }
+
+  const available =
+    full || disabled
+      ? []
+      : suggestions.filter(
+          (suggestion) =>
+            !isCoveredByPhrases(suggestion, phrases) &&
+            !isCoveredByPhrases(suggestion, counterpartPhrases),
+        );
 
   return (
     <div className="mt-4">
@@ -82,6 +103,30 @@ export function PhraseEditor({
           <li className="text-[13px] text-gray-500">None yet.</li>
         ) : null}
       </ul>
+
+      {available.length > 0 ? (
+        <div className="mt-3">
+          <p id={`${id}-suggestions`} className="text-[12px] font-medium text-gray-500">
+            {tone === "approved" ? "Suggestions to use" : "Suggestions to avoid"}
+          </p>
+          <ul aria-labelledby={`${id}-suggestions`} className="mt-1.5 flex flex-wrap gap-2">
+            {available.map((suggestion) => (
+              <li key={suggestion}>
+                <button
+                  type="button"
+                  onClick={() => addPhrase(suggestion)}
+                  // Visible text kept inside the accessible name (WCAG 2.5.3).
+                  aria-label={`Add suggested phrase: ${suggestion}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-2.5 py-1.5 text-[13px] text-gray-600 transition-colors hover:border-purple-600 hover:bg-purple-50 hover:text-purple-700"
+                >
+                  <Plus className="size-3.5 shrink-0" aria-hidden />
+                  {suggestion}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="mt-3 flex items-center gap-2">
         <label htmlFor={id} className="sr-only">
