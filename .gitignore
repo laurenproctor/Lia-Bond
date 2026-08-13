@@ -1,4 +1,13 @@
-node_modules/
+# No trailing slash, so this covers a symlinked `node_modules` as well as a real
+# one. This checkout lives in iCloud Drive, which evicts the contents of files it
+# thinks are cold — leaving entries that report their true size and read back as
+# zero bytes, so eslint and Next fail with errors that look like version
+# conflicts (`Ajv__default.default is not a constructor`) rather than like
+# missing data. Pointing `node_modules` at a `.nosync` directory does not survive
+# npm: both `npm ci` and `npm install` delete the path and recreate it as a real
+# directory, so the symlink silently disappears on the next install.
+node_modules
+node_modules.nosync/
 .next/
 out/
 build/
@@ -21,3 +30,6 @@ supabase/.temp/
 # carries the work, and an unignored worktree directory is how an entire
 # second checkout gets committed into the repository by a stray `git add -A`.
 .claude/worktrees/
+
+# Claude Code personal settings (permissions, local overrides)
+.claude/settings.local.json
