@@ -20,7 +20,7 @@ import { BRAND_VOICE_AXES } from "@/domain/entities/brand-voice";
  * could move the model's output, and re-record the pin test's hash in the
  * same commit.
  */
-export const DRAFTING_PROMPT_VERSION = "drafting@2026-08-12";
+export const DRAFTING_PROMPT_VERSION = "drafting@2026-08-13";
 
 /**
  * Versions the shape `draftingOutputSchema` accepts, independent of the
@@ -163,7 +163,22 @@ export const DRAFTING_USER_LABELS = {
   voiceSliderSuffix: "/100",
   voiceToneNotesLabel: "- Additional tone notes: ",
   voiceToneNotesMissing: "- Additional tone notes: none given.",
-  voiceBannedPhrasesLabel: "- Never use these phrases, in any form: ",
+  // A vocabulary, not a checklist -- said in the label because a bare list of
+  // phrases under a heading reads as one. The brand-voice screen makes the same
+  // promise ("phrases Lia may include"), and a reply that welds all twenty in
+  // would be both unnatural and a different thing from what was agreed. "Where
+  // it fits" also has to beat "always": forcing an invitation back into a reply
+  // to a serious complaint is how a voice setting turns into a liability.
+  voicePreferredPhrasesLabel:
+    "- Wording this business likes, to draw on where it fits naturally. This is a vocabulary, not a checklist: use only what suits this particular reply, skip the rest, and never force one in or use one the review contradicts: ",
+  voicePreferredPhrasesMissing: "- Preferred wording: none listed.",
+  // States the matching rule rather than leaving "in any form" to
+  // interpretation. The product now has a defined one -- see
+  // `src/domain/entities/phrase-match.ts` -- and the interface promises it to
+  // the customer, so the model has to be held to the same rule the checker
+  // applies rather than a vaguer cousin of it.
+  voiceBannedPhrasesLabel:
+    "- Never use these phrases. A phrase is banned in any form, meaning its words in that order even when other words sit between them (banning \"made our day\" also bans \"really made our day\"): ",
   voiceBannedPhrasesMissing: "- Never use these phrases: none listed.",
   voiceSignOffLabel: "- Sign off as: ",
   voiceSignOffMissing:
@@ -197,10 +212,11 @@ export const DRAFTING_TEMPLATE_CONSTANTS: readonly string[] = [
  *
  * `voice`'s five fields are named after the real brand-voice sliders in
  * `src/domain/entities/brand-voice.ts` (`BRAND_VOICE_AXIS_KEYS`): `warmth`,
- * `detail`, `formality`, `confidence`, `hospitality`. `toneNotes`,
- * `bannedPhrases`, and `signOff` have no counterpart in that entity today --
- * see this task's report for what Task 6 will need to source or default them
- * from.
+ * `detail`, `formality`, `confidence`, `hospitality`. `preferredPhrases` and
+ * `bannedPhrases` carry that entity's `approvedPhrases` and
+ * `prohibitedPhrases`. `toneNotes` and `signOff` still have no counterpart
+ * there -- see this task's report for what Task 6 will need to source or
+ * default them from.
  */
 export interface DraftingPromptContext {
   review: {
@@ -228,6 +244,7 @@ export interface DraftingPromptContext {
     confidence: number;
     hospitality: number;
     toneNotes: string | null;
+    preferredPhrases: string[];
     bannedPhrases: string[];
     signOff: string | null;
   };
@@ -289,6 +306,11 @@ function renderDraftingUser(context: DraftingPromptContext): string {
     `${L.voiceConfidenceLabel}${voice.confidence}${L.voiceSliderSuffix}`,
     `${L.voiceHospitalityLabel}${voice.hospitality}${L.voiceSliderSuffix}`,
     voice.toneNotes ? `${L.voiceToneNotesLabel}${voice.toneNotes}` : L.voiceToneNotesMissing,
+    // Preferred before banned, matching the order the customer set them in on
+    // the brand-voice screen ("2. Use these phrases", "3. Avoid these").
+    voice.preferredPhrases.length > 0
+      ? `${L.voicePreferredPhrasesLabel}${voice.preferredPhrases.join("; ")}`
+      : L.voicePreferredPhrasesMissing,
     voice.bannedPhrases.length > 0
       ? `${L.voiceBannedPhrasesLabel}${voice.bannedPhrases.join("; ")}`
       : L.voiceBannedPhrasesMissing,

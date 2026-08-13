@@ -4,7 +4,7 @@ import {
   nextStatus,
   statusLabel,
   type AutosaveStatus,
-} from "@/lib/brand-voice/autosave-status";
+} from "@/lib/autosave/status";
 
 /**
  * The autosave status machine.

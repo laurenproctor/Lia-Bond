@@ -5,12 +5,17 @@ import { RotateCw } from "lucide-react";
 import { updateBrandVoiceAction } from "@/app/actions/brand-voice";
 import { AxisSlider } from "@/components/brand-voice/axis-slider";
 import { PhraseEditor } from "@/components/brand-voice/phrase-editor";
-import { SaveStatus } from "@/components/brand-voice/save-status";
-import { useAutosave } from "@/components/brand-voice/use-autosave";
+import { SaveStatus } from "@/components/autosave/save-status";
+import { useAutosave } from "@/components/autosave/use-autosave";
 import { VoiceSummary } from "@/components/brand-voice/voice-summary";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
-import { BRAND_VOICE_AXES, type UpdateBrandVoiceInput } from "@/domain";
+import {
+  BRAND_VOICE_AXES,
+  SUGGESTED_APPROVED_PHRASES,
+  SUGGESTED_PROHIBITED_PHRASES,
+  type UpdateBrandVoiceInput,
+} from "@/domain";
 
 export interface VoiceFormProps {
   initial: UpdateBrandVoiceInput;
@@ -112,13 +117,15 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
           <Card>
             <CardHeader
               title="2. Use these phrases"
-              description="Phrases Lia may include in responses."
+              description="Phrases Lia may include in responses. Extra words are allowed inside a phrase — “made our day” also covers “really made our day”."
             />
             <PhraseEditor
               id="approved-phrase"
               legend="Add an approved phrase"
               tone="approved"
               phrases={value.approvedPhrases}
+              counterpartPhrases={value.prohibitedPhrases}
+              suggestions={SUGGESTED_APPROVED_PHRASES}
               disabled={readOnly}
               error={fieldErrors.approvedPhrases}
               onChange={(next) =>
@@ -130,13 +137,15 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
           <Card>
             <CardHeader
               title="3. Avoid these phrases"
-              description="Phrases Lia will never write."
+              description="Phrases Lia will never write. Extra words are allowed inside a phrase — “made our day” also blocks “really made our day”."
             />
             <PhraseEditor
               id="prohibited-phrase"
               legend="Add a prohibited phrase"
               tone="prohibited"
               phrases={value.prohibitedPhrases}
+              counterpartPhrases={value.approvedPhrases}
+              suggestions={SUGGESTED_PROHIBITED_PHRASES}
               disabled={readOnly}
               error={fieldErrors.prohibitedPhrases}
               onChange={(next) =>

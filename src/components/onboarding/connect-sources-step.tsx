@@ -40,10 +40,11 @@ import { RedditSourceCard } from "@/components/onboarding/reddit-source-card";
  * Reddit is presented exactly as capable as it is — which today is not at
  * all (`reddit-source-card.tsx` explains).
  *
- * "Save and continue" first flushes any unsaved News configuration through
- * the configurator's own save path, so pressing the page's main button never
- * silently discards a form someone filled in — and never navigates away from
- * one that failed validation.
+ * The News panel autosaves, so there is normally nothing outstanding by the
+ * time anyone leaves. "Save and continue" still flushes it: it covers the
+ * settling window, and it is what confirms an untouched panel of defaults —
+ * pressing the page's main button with News open means those defaults, and
+ * the step never navigates away from a configuration that failed to save.
  */
 
 export interface ConnectSourcesViewModel {
@@ -57,6 +58,8 @@ export interface ConnectSourcesViewModel {
   news: NewsCardSummary & {
     /** Prefill for the configurator: the persisted query, or real-data suggestions. */
     initialValues: NewsConfiguratorValues;
+    /** True when `initialValues` came from a row rather than from defaults. */
+    initialValuesPersisted: boolean;
     keywordSuggestions: string[];
   };
   reddit: {
@@ -96,12 +99,13 @@ export function ConnectSourcesStep({
     if (pending) return;
     setError(null);
     startTransition(async () => {
-      // Unsaved News input is persisted before the step advances. "invalid"
-      // aborts: the configurator is showing exactly what is wrong, and
-      // navigating would throw the person's input away over it.
+      // News input the settling window has not sent yet is persisted before
+      // the step advances. "failed" aborts: the configurator is showing
+      // exactly what is wrong, and navigating would throw the person's input
+      // away over it.
       if (newsOpen) {
         const flushed = await configuratorRef.current?.flush();
-        if (flushed === "invalid") return;
+        if (flushed === "failed") return;
       }
 
       const result = await action();
@@ -168,6 +172,7 @@ export function ConnectSourcesStep({
         {newsOpen ? (
           <NewsMonitoringConfigurator
             initial={model.news.initialValues}
+            persisted={model.news.initialValuesPersisted}
             suggestions={model.news.keywordSuggestions}
             onClose={closeNews}
             handleRef={configuratorRef}

@@ -4,6 +4,7 @@ import {
   createMonitoringQueryInputSchema,
   DEFAULT_POLL_INTERVAL_MINUTES,
   DEFAULT_RELEVANCE_THRESHOLD,
+  MAX_MONITORING_QUERY_NAME_LENGTH,
   type MonitoringQuery,
   type OnboardingNewsMonitoringInput,
 } from "@/domain";
@@ -58,6 +59,36 @@ export function findOnboardingNewsQuery(
   return candidates[0] ?? null;
 }
 
+const WATCH_SUFFIX = " watch";
+/** Used only when a subject has no usable name, which the schemas forbid. */
+const FALLBACK_WATCH_NAME = "Brand watch";
+
+/**
+ * What a generated monitoring query is called: the subject's own name, plus
+ * "watch".
+ *
+ * The brand query takes the organization's name, and step 3's location
+ * queries take the location's — one rule, so an organization's queries read
+ * as a set ("Ember & Oak watch", "Ember & Oak Soho watch") instead of the
+ * generic "Brand watch" nobody would recognise in a list.
+ *
+ * Names are longer than a query name may be (160 against
+ * `MAX_MONITORING_QUERY_NAME_LENGTH`), so a long one is shortened on the
+ * subject and never on the suffix: cutting the composed string would leave
+ * "Some Very Long Restaurant Group Incorpo" with no indication of what the
+ * row is.
+ */
+export function watchQueryName(subject: string): string {
+  const name = subject.trim();
+  if (name.length === 0) return FALLBACK_WATCH_NAME;
+
+  const composed = `${name}${WATCH_SUFFIX}`;
+  if (composed.length <= MAX_MONITORING_QUERY_NAME_LENGTH) return composed;
+
+  const room = MAX_MONITORING_QUERY_NAME_LENGTH - WATCH_SUFFIX.length;
+  return `${name.slice(0, room).trimEnd()}${WATCH_SUFFIX}`;
+}
+
 export interface OnboardingNewsServiceContext {
   dataSource: LiaDataSource;
   scope: OrganizationScope;
@@ -101,14 +132,23 @@ export async function saveOnboardingNewsQuery(
       "language",
       "enabled",
     ]);
-    await recordAuditEvent(context, {
-      eventType: "monitoring_query.updated",
-      entityType: "monitoring_query",
-      entityId: existing.id,
-      previousState: changes.previousState,
-      newState: changes.newState,
-      metadata: { source: "onboarding" },
-    });
+
+    // An event only when something moved. Under the configurator's autosave
+    // nobody presses anything, so a write that changes no field is not a
+    // decision somebody made — it is a timer firing, and recording it would
+    // put an entry saying nothing into an append-only trail that can never be
+    // cleaned up. Every event that survives this still carries its real
+    // before-and-after, so the chain stays continuous.
+    if (Object.keys(changes.newState).length > 0) {
+      await recordAuditEvent(context, {
+        eventType: "monitoring_query.updated",
+        entityType: "monitoring_query",
+        entityId: existing.id,
+        previousState: changes.previousState,
+        newState: changes.newState,
+        metadata: { source: "onboarding" },
+      });
+    }
 
     return updated;
   }
@@ -253,7 +293,7 @@ export async function ensureOnboardingLocationQueries(
       if (city.length >= 2 && !keywords.includes(city)) keywords.push(city);
 
       const createInput = createMonitoringQueryInputSchema.parse({
-        name: `${location.name} watch`.slice(0, 120),
+        name: watchQueryName(location.name),
         queryType: "location",
         locationId: location.id,
         keywords,

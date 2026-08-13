@@ -278,10 +278,23 @@ describe("the news configurator", () => {
   });
 
   it("announces validation failures and saves", () => {
-    // Failures use the shared alert treatment; the save confirmation is a
-    // status, so it is announced without stealing focus.
+    // Failures use the shared alert treatment. The panel autosaves, so the
+    // confirmation is the shared status line's polite live region — announced
+    // on every transition without stealing focus from whatever is being typed.
     expect(configurator).toContain("OnboardingError");
-    expect(configurator).toContain('role="status"');
+    expect(configurator).toContain("<SaveStatus status={status} />");
+    expect(source("src/components/autosave/save-status.tsx")).toContain(
+      'aria-live="polite"',
+    );
+  });
+
+  it("keeps its fields operable while a save runs", () => {
+    // Autosave fires on a timer nobody chose. Disabling the fields under the
+    // user each time it does would make the panel feel broken, and would move
+    // focus off a disabled control mid-edit.
+    expect(code("src/components/onboarding/news-monitoring-configurator.tsx")).not.toMatch(
+      /disabled=\{(pending|saving|closing)\}/,
+    );
   });
 
   it("names every chip's remove button after its term", () => {

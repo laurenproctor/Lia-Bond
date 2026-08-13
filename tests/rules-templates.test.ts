@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   RULE_TEMPLATES,
+  resolveRuleTemplate,
 } from "@/lib/rules/templates";
 import {
   automationRuleConfigSchema,
@@ -79,6 +80,31 @@ describe("Rule Templates", () => {
         actionTypesInConfig.sort()
       );
     }
+  });
+
+  describe("resolveRuleTemplate", () => {
+    it("resolves a known id to the template the builder is seeded from", () => {
+      const template = resolveRuleTemplate("escalate-one-star");
+      expect(template?.id).toBe("escalate-one-star");
+      expect(template?.config.name).toBe("Escalate one-star reviews");
+      expect(template?.config.conditions).toHaveLength(2);
+      expect(template?.config.actions).toHaveLength(1);
+    });
+
+    it("falls back to null for an absent, empty, or unknown id", () => {
+      expect(resolveRuleTemplate(undefined)).toBeNull();
+      expect(resolveRuleTemplate("")).toBeNull();
+      expect(resolveRuleTemplate("not-a-template")).toBeNull();
+      expect(resolveRuleTemplate("ESCALATE-ONE-STAR")).toBeNull();
+    });
+
+    it("resolves every template the panel links to", () => {
+      // The panel's "Use template" href is `/rules/new?template=<id>`, so
+      // every available template's id must round-trip back to itself.
+      for (const template of RULE_TEMPLATES.filter((entry) => entry.available)) {
+        expect(resolveRuleTemplate(template.id)).toBe(template);
+      }
+    });
   });
 
   describe("template properties", () => {

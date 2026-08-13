@@ -192,12 +192,21 @@ export function TeamStepForm({
               // and `xl` the contextual panel takes a third of the width, so
               // the card is at its narrowest exactly where a `sm:` grid would
               // already be four columns wide — which overflowed at 1024px.
-              className="grid gap-3 rounded-xl border border-site-border p-3 sm:grid-cols-2 xl:grid-cols-[1fr_1.3fr_auto_auto] xl:items-end"
+              //
+              // Aligned to the *top*, not the bottom. Under `items-end` a
+              // column that grows even slightly taller than its neighbours
+              // drags its own label and control upward, and the email field
+              // grows for reasons this component does not control: password
+              // managers attach their badge to it and nothing else. Anchoring
+              // to the top means each control sits at label height + gap, which
+              // is identical in all three columns, and anything appended below
+              // a control can only extend downward.
+              className="grid gap-3 rounded-xl border border-site-border p-3 sm:grid-cols-2 xl:grid-cols-[1fr_1.3fr_auto_auto] xl:items-start"
             >
               <div className="flex min-w-0 flex-col gap-1.5">
                 <label
                   htmlFor={`${row.id}-name`}
-                  className="text-[12.5px] font-semibold text-site-ink"
+                  className="text-[12.5px] leading-[18px] font-semibold text-site-ink"
                 >
                   Name
                   <span className="ml-1 font-normal text-site-muted">(optional)</span>
@@ -221,7 +230,7 @@ export function TeamStepForm({
               <div className="flex min-w-0 flex-col gap-1.5">
                 <label
                   htmlFor={`${row.id}-email`}
-                  className="text-[12.5px] font-semibold text-site-ink"
+                  className="text-[12.5px] leading-[18px] font-semibold text-site-ink"
                 >
                   Work email
                 </label>
@@ -240,7 +249,7 @@ export function TeamStepForm({
               <div className="flex min-w-0 flex-col gap-1.5">
                 <label
                   htmlFor={`${row.id}-role`}
-                  className="text-[12.5px] font-semibold text-site-ink"
+                  className="text-[12.5px] leading-[18px] font-semibold text-site-ink"
                 >
                   Role
                 </label>
@@ -264,15 +273,24 @@ export function TeamStepForm({
                 </select>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setRows((current) => current.filter((r) => r.id !== row.id))}
-                disabled={rows.length === 1}
-                aria-label={`Remove teammate ${index + 1}`}
-                className="inline-flex size-11 items-center justify-center self-end rounded-xl text-site-muted transition-colors hover:bg-site-tint hover:text-site-ink disabled:opacity-40"
-              >
-                <X className="size-4" aria-hidden />
-              </button>
+              <div className="flex flex-col gap-1.5">
+                {/* Stands in for the label the other three columns have, so the
+                    button lands on the control row rather than the label row.
+                    It matches `leading-[18px]` above. Hidden in the one-column
+                    layout, where the button has no neighbour to line up with. */}
+                <span aria-hidden className="hidden h-[18px] sm:block" />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setRows((current) => current.filter((r) => r.id !== row.id))
+                  }
+                  disabled={rows.length === 1}
+                  aria-label={`Remove teammate ${index + 1}`}
+                  className="inline-flex size-11 items-center justify-center rounded-xl text-site-muted transition-colors hover:bg-site-tint hover:text-site-ink disabled:opacity-40"
+                >
+                  <X className="size-4" aria-hidden />
+                </button>
+              </div>
             </div>
           ))}
 

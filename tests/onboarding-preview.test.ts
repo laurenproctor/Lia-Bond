@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildVoicePreview,
   PREVIEW_REVIEW,
-  prohibitedPhrasesInPreview,
+  prohibitedPhraseMatchesInPreview,
 } from "@/lib/onboarding/preview";
 import {
   BRAND_VOICE_AXES,
@@ -142,6 +142,26 @@ describe("approved phrases", () => {
     expect(text).toContain("We appreciate it.");
     expect(text).not.toContain("We appreciate it..");
   });
+
+  it("does not repeat a phrase the reply already makes, allowing for extra words", () => {
+    // Warmth 0 opens "Thank you so much for this — it really made our day," which
+    // already satisfies "it made our day" under phrase matching. Inserting it
+    // again would say the same thing twice in one reply.
+    const axes = { ...DEFAULT_BRAND_VOICE.axes, warmth: 0 };
+    const text = buildVoicePreview(voice({ axes, approvedPhrases: ["it made our day"] }));
+
+    expect(text).toContain("it really made our day");
+    expect(text).not.toContain("It made our day.");
+  });
+
+  it("falls through to the next phrase that is not already covered", () => {
+    const axes = { ...DEFAULT_BRAND_VOICE.axes, warmth: 0 };
+    const text = buildVoicePreview(
+      voice({ axes, approvedPhrases: ["it made our day", "We appreciate your visit"] }),
+    );
+
+    expect(text).toContain("We appreciate your visit");
+  });
 });
 
 describe("prohibited phrases", () => {
@@ -149,20 +169,38 @@ describe("prohibited phrases", () => {
     const text = buildVoicePreview(voice({}));
     // Take a phrase the preview genuinely uses, so this tests the detector
     // rather than the sentence bank.
-    const found = prohibitedPhrasesInPreview(text, ["thank you"]);
-    expect(found).toEqual(["thank you"]);
+    const found = prohibitedPhraseMatchesInPreview(text, ["thank you"]);
+    expect(found.map((match) => match.phrase)).toEqual(["thank you"]);
   });
 
   it("finds nothing when the avoid list does not appear", () => {
     const text = buildVoicePreview(voice({}));
-    expect(prohibitedPhrasesInPreview(text, ["we guarantee", "best in town"])).toEqual(
-      [],
-    );
+    expect(
+      prohibitedPhraseMatchesInPreview(text, ["we guarantee", "best in town"]),
+    ).toEqual([]);
   });
 
   it("ignores blank entries", () => {
     const text = buildVoicePreview(voice({}));
-    expect(prohibitedPhrasesInPreview(text, ["   "])).toEqual([]);
+    expect(prohibitedPhraseMatchesInPreview(text, ["   "])).toEqual([]);
+  });
+
+  it("catches a phrase the reply says with extra words in it", () => {
+    // Warmth 0 opens "Thank you so much for this — it really made our day."
+    const text = buildVoicePreview(
+      voice({ axes: { ...DEFAULT_BRAND_VOICE.axes, warmth: 0 } }),
+    );
+    const found = prohibitedPhraseMatchesInPreview(text, ["it made our day"]);
+
+    expect(found).toHaveLength(1);
+    // Reports what the reply actually said, so the warning can show its working.
+    expect(found[0]!.matchedText).toBe("it really made our day");
+  });
+
+  it("does not fire on a word that merely contains the phrase", () => {
+    // The `includes` check this replaced matched across word boundaries.
+    const found = prohibitedPhraseMatchesInPreview("our dayboat scallops", ["our day"]);
+    expect(found).toEqual([]);
   });
 });
 

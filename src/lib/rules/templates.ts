@@ -300,3 +300,18 @@ export const RULE_TEMPLATES: readonly RuleTemplate[] = [
   createApprovalFirstRedditTemplate(),
   createAutoPublishGlowingTemplate(),
 ];
+
+/**
+ * Resolve the `?template=` search param on `/rules/new` into the template the
+ * builder should be seeded from.
+ *
+ * The id is bookmarkable, user-editable URL input, so an unknown or absent one
+ * is not an error — it falls back to `null` (an empty builder), the same way
+ * `parseRuleStatusParam` falls back for an unrecognised status.
+ */
+export function resolveRuleTemplate(
+  templateId: string | undefined,
+): RuleTemplate | null {
+  if (!templateId) return null;
+  return RULE_TEMPLATES.find((entry) => entry.id === templateId) ?? null;
+}
