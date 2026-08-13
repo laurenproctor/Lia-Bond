@@ -11,6 +11,17 @@ export interface RuleTemplatesPanelProps {
    * Null when the builder started blank.
    */
   appliedTemplateId?: string | null;
+  /**
+   * Whether the viewer may actually create a rule.
+   *
+   * Defaults to true because the builder only renders this panel after its own
+   * permission check. The rules list is the caller that needs it: it shows this
+   * panel to everybody who can see an empty rules screen, and a reader whose
+   * role cannot create rules would otherwise get five buttons leading to a page
+   * that tells them so. Matches the treatment the list's own "New rule" button
+   * already gets.
+   */
+  canManage?: boolean;
 }
 
 /**
@@ -25,7 +36,10 @@ export interface RuleTemplatesPanelProps {
  * a separate column: without the marker, "Use template" reads as a click that
  * did nothing.
  */
-export function RuleTemplatesPanel({ appliedTemplateId = null }: RuleTemplatesPanelProps) {
+export function RuleTemplatesPanel({
+  appliedTemplateId = null,
+  canManage = true,
+}: RuleTemplatesPanelProps) {
   return (
     <Card>
       <CardHeader
@@ -85,7 +99,7 @@ export function RuleTemplatesPanel({ appliedTemplateId = null }: RuleTemplatesPa
                 already open, so pressing it is a no-op navigation that resets
                 nothing. "Start blank" in the header is the way back out.
               */}
-              {applied ? null : (
+              {applied || !canManage ? null : (
                 <div className="mt-2.5">
                   {template.available ? (
                     <ButtonLink

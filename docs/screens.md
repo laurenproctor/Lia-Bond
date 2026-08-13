@@ -184,6 +184,12 @@ Required modules:
   builder. Derived from the rule's own conditions by
   `src/lib/rules/platform-scope.ts`, never stored, so it cannot disagree with
   what the evaluator would do.
+- Empty state with the templates beside it — an organization with **no rules at
+  all** gets the full template panel in a 7/5 split rather than a bare "create
+  one" message, since "what would I even automate?" is the real question at that
+  point. Distinct from a *filtered* empty view (a status tab with no matches),
+  which keeps the table and names the status instead: those rules exist, one tab
+  away. The status tabs are hidden entirely when every count would read zero.
 
 Reference: `public/reference-screens/10-rules-automation.png`
 
