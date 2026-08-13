@@ -1,9 +1,11 @@
 import { z } from "zod";
 import {
   escalationCategorySchema,
+  MENTION_SOURCE_TYPES,
   mentionSourceTypeSchema,
   mentionStatusSchema,
   platformSchema,
+  PLATFORMS,
   recommendedActionSchema,
   riskLevelSchema,
   sentimentSchema,
@@ -526,6 +528,39 @@ export const SOURCE_TYPE_PLATFORM: Record<
   facebook_comment: "facebook",
   instagram_comment: "instagram",
 };
+
+/**
+ * The reverse of `SOURCE_TYPE_PLATFORM`: every source type a platform can
+ * produce.
+ *
+ * Derived from the forward map rather than written out again, so the two can
+ * never disagree about where a source type lives.
+ *
+ * It exists because excluding a source type does not necessarily exclude its
+ * platform, which is what `rulePlatformScope` needs to get right: a rule
+ * carrying only `source_type is_not reddit_post` still affects Reddit, because
+ * `reddit_comment` remains. Reddit is the only platform with more than one
+ * source type today — hard-coding around that would break on the second.
+ *
+ * Seeded from `PLATFORMS` rather than from the forward map's values so a
+ * platform with no source type yet still gets a key. Reading a missing one
+ * would return undefined and throw on the caller's `.filter`, rather than
+ * answering "nothing excludes this platform".
+ */
+export const PLATFORM_SOURCE_TYPES: Record<
+  z.infer<typeof platformSchema>,
+  readonly z.infer<typeof mentionSourceTypeSchema>[]
+> = (() => {
+  const map = {} as Record<
+    z.infer<typeof platformSchema>,
+    z.infer<typeof mentionSourceTypeSchema>[]
+  >;
+  for (const platform of PLATFORMS) map[platform] = [];
+  for (const sourceType of MENTION_SOURCE_TYPES) {
+    map[SOURCE_TYPE_PLATFORM[sourceType]].push(sourceType);
+  }
+  return map;
+})();
 
 /** Source types that carry a star rating. */
 export const REVIEW_SOURCE_TYPES = [

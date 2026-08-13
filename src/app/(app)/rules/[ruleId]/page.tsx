@@ -17,6 +17,7 @@ import { getDataSource } from "@/lib/data";
 import { resolveRulesExecutionMode } from "@/lib/env";
 import { formatRelativeShort, humanize } from "@/lib/format";
 import { AUDIT_EVENT_LABELS } from "@/lib/labels";
+import { RulePlatformBadges } from "@/components/rules/rule-platform-badges";
 import { ruleSentence } from "@/lib/rules/sentence";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
 import { excerptFrom, workspacePathFor } from "@/lib/view-models/mention";
@@ -111,6 +112,16 @@ export default async function RuleDetailPage({ params }: RuleDetailPageProps) {
           </div>
         }
       >
+        {/*
+          Above the activity facts, not among them: which platforms a rule
+          reaches is part of what the rule *is*, alongside the sentence, rather
+          than a record of what it has done.
+        */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[12.5px] text-gray-500">Affects</span>
+          <RulePlatformBadges conditions={rule.conditions} />
+        </div>
+
         <dl className="flex flex-wrap gap-x-6 gap-y-1 text-[12.5px]">
           <div className="flex items-baseline gap-1.5">
             <dt className="text-gray-500">Last evaluated</dt>

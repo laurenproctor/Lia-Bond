@@ -179,6 +179,11 @@ Required modules:
 - When/and/then builder
 - Performance summary (Phase 2 — execution-dependent)
 - Enable/disable controls
+- Platform scope indicator — which platforms each rule affects, as badges on
+  the rules table, the rule detail header, each template card, and live in the
+  builder. Derived from the rule's own conditions by
+  `src/lib/rules/platform-scope.ts`, never stored, so it cannot disagree with
+  what the evaluator would do.
 
 Reference: `public/reference-screens/10-rules-automation.png`
 
