@@ -3,6 +3,11 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import {
+  invitationSignUpErrorMessage,
+  signUpErrorMessage,
+  updatePasswordErrorMessage,
+} from "@/lib/auth/auth-error";
+import {
   hashInvitationToken,
   isInvitationTokenShaped,
 } from "@/lib/auth/invitation-token";
@@ -146,10 +151,13 @@ export interface SignUpResult {
  * The reverse order would leave an ownerless organization, which is not
  * recoverable by anyone.
  *
- * Nothing here reports whether an address is already registered. Supabase
- * returns a success-shaped response for a duplicate sign-up precisely so this
- * endpoint cannot be used to enumerate customers, and that behaviour is
- * preserved rather than unpicked.
+ * Nothing here reports whether an address is already registered. With email
+ * confirmation switched on, Supabase returns a success-shaped response for a
+ * duplicate precisely so this endpoint cannot enumerate customers; with it off,
+ * Supabase says `user_already_exists` outright and `signUpErrorMessage` is what
+ * keeps that from reaching the browser. The guarantee has to hold either way,
+ * because the project setting can be changed from a dashboard by someone who is
+ * not reading this file.
  *
  * On success the owner lands on `/onboarding/organization`, not on the
  * overview. The organization exists at that point but is a name and nothing
@@ -202,8 +210,11 @@ export async function signUpAction(
   });
 
   if (error) {
-    console.error("[auth:sign-up]", error.message);
-    return { error: "That account could not be created. Try again." };
+    // Code and status as well as the message: the message is what the mapping
+    // deliberately discards, so a branch that fell through to the default is
+    // otherwise undiagnosable from the logs.
+    console.error("[auth:sign-up]", error.status, error.code, error.message);
+    return { error: signUpErrorMessage(error) };
   }
 
   // No session means the project requires email confirmation. The account
@@ -307,11 +318,8 @@ export async function acceptInvitationWithSignUpAction(
   });
 
   if (error) {
-    console.error("[auth:invite-sign-up]", error.message);
-    return {
-      error:
-        "That account could not be created. If you already have one, sign in and open this link again.",
-    };
+    console.error("[auth:invite-sign-up]", error.status, error.code, error.message);
+    return { error: invitationSignUpErrorMessage(error) };
   }
 
   if (!data.session) {
@@ -421,10 +429,8 @@ export async function updatePasswordAction(
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
 
   if (error) {
-    console.error("[auth:update-password]", error.message);
-    return {
-      error: "That password could not be saved. Try again, or request a new link.",
-    };
+    console.error("[auth:update-password]", error.status, error.code, error.message);
+    return { error: updatePasswordErrorMessage(error) };
   }
 
   redirect("/overview");
