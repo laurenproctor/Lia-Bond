@@ -1034,8 +1034,10 @@ New building rule execution (G1):
   `database` job in `.github/workflows/verify.yml` on every PR. See D159–D165.
   `RULES_EXECUTION_MODE=apply` is still off everywhere it is not explicitly
   turned on by an operator — nothing in this worktree enables it for any
-  organization, and the hosted project has received none of these six
-  migrations. The Internal-apply runbook below governs turning it on for the
+  organization. ~~The hosted project has received none of these six
+  migrations.~~ **All six were pushed to hosted on 2026-08-12**; the schema
+  being present changes nothing about the flag, which is still off
+  everywhere. The Internal-apply runbook below governs turning it on for the
   founder/test organization only (G1's own scope, per the spec's release
   gates).
 - **Response generation landed.** Lia now writes a first reply for a Google
@@ -1048,8 +1050,10 @@ New building rule execution (G1):
   concurrency races), which the `database` CI job runs alongside the execution
   harness. See D166–D169. Generation is manual only — nothing schedules it,
   no rule action triggers it, and every draft it produces enters the same
-  approval flow a person's draft does. The hosted project has received none
-  of its four migrations; the runbook below sequences that push.
+  approval flow a person's draft does. Its four migrations were pushed to
+  hosted on 2026-08-12, before this branch merged, and the live schema was
+  probed to confirm the privilege boundary survived the push — see the
+  runbook's step 2.
 - **The local-image segfault finding (Task 11) is an operational fact, not
   merely a test-harness workaround.** An EXECUTE-denied call of a
   non-immutable function after `set role` — the exact shape of an
@@ -1176,16 +1180,26 @@ post-push gate, run before enabling anything.
    deploying this branch — see the deploy-ordering note at the top of this
    section. Do not let a push and the matching deploy drift apart in time.
 
-   The pending set is now **ten**: G1's six, plus response generation's four
-   (`20260812000700`, `20260813000100`–`20260813000300`). The same
-   coordination rule governs both groups, and for the same reason —
-   generation's UI is live in this branch, and the composer's generate
-   button against a hosted project without `claim_generation_attempt` fails
-   as a clean classified error rather than a crash, but shipping that state
-   deliberately would put a button in front of people that cannot work.
-   `20260813000300` (`alter type approval_status add value`) is the one
+   **Done for both groups, 2026-08-12.** G1's six were pushed earlier that
+   day; response generation's four (`20260812000700`,
+   `20260813000100`–`20260813000300`) were pushed the same evening, ahead of
+   this branch's merge, via `supabase db push --linked` — passwordless, four
+   migrations, no collisions. Verified against the live schema rather than
+   the CLI's success message: the table, all four functions, the
+   `changes_requested` enum value, and the state-shape CHECKs exist, and
+   `has_column_privilege('authenticated', …, 'claim_token', 'select')` is
+   false while `status` remains readable. (Watch out for
+   `information_schema.column_privileges` when re-checking that last one: it
+   shows a `REFERENCES` row for `claim_token`/`authenticated`, which looks
+   like a surviving grant and is not one. `has_column_privilege` is the
+   operative test.)
+
+   `20260813000300` (`alter type approval_status add value`) was the one
    irreversible step in the set: enum values cannot be dropped, so rolling
-   back means reverting the application so nothing emits the value.
+   back now means reverting the application so nothing emits the value.
+   Because the schema went first, the ordering rule this step exists to
+   protect is satisfied from the other direction — hosted is ahead of the
+   deploy rather than behind it, so no deploy can reach a missing RPC.
 3. **Probe the hosted build for the segfault finding, post-push, before
    enabling anything.** Task 11 found that the *local* Postgres 17.6 image
    crashes (`SIGSEGV`, whole cluster into recovery) on an EXECUTE-denied
