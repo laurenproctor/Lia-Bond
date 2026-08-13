@@ -27,21 +27,32 @@ import {
  */
 
 /**
- * The five brand-voice sliders, plus the three fields the drafting prompt
- * also needs (`toneNotes`, `bannedPhrases`, `signOff`) that
- * `src/domain/entities/brand-voice.ts` does not yet model as columns.
+ * The five brand-voice sliders, plus the four fields the drafting prompt also
+ * needs (`toneNotes`, `preferredPhrases`, `bannedPhrases`, `signOff`) that
+ * `src/domain/entities/brand-voice.ts` does not model under those names.
  *
  * Mapping decision (task 6 of the response-generation plan):
  * - `bannedPhrases` <- the profile's `prohibitedPhrases` (or
  *   `DEFAULT_BRAND_VOICE.prohibitedPhrases`, `[]` today, when unconfigured).
+ * - `preferredPhrases` <- the profile's `approvedPhrases`, on the same terms.
+ *   Task 6 left this unmapped, which meant the "use these phrases" list a
+ *   customer fills in during onboarding reached the preview and nothing else:
+ *   avoiding a phrase changed real replies, asking for one did not. The two
+ *   halves of one screen have to behave the same way, so it is mapped now.
  * - `toneNotes` and `signOff` have no counterpart in `brand-voice.ts` today —
  *   no field there plausibly stands in for either (the profile has no notes
  *   field and no signature field). Both are always `null`, in both the
  *   configured and default snapshot, until a future migration adds them.
  *   Nothing here invents a value for either.
+ *
+ * Both phrase lists are operator-authored — staff typed them into their own
+ * settings — so unlike the review body they are not wrapped as untrusted
+ * content. They are the same trust level as each other, which is why they get
+ * the same treatment.
  */
 export const draftingVoiceSnapshotSchema = brandVoiceAxesSchema.extend({
   toneNotes: z.string().nullable(),
+  preferredPhrases: z.array(z.string()),
   bannedPhrases: z.array(z.string()),
   signOff: z.string().nullable(),
 });
@@ -96,6 +107,7 @@ function voiceSnapshotFromProfile(profile: BrandVoiceProfile): DraftingVoiceSnap
     confidence: profile.axes.confidence,
     hospitality: profile.axes.hospitality,
     toneNotes: null,
+    preferredPhrases: [...profile.approvedPhrases],
     bannedPhrases: [...profile.prohibitedPhrases],
     signOff: null,
   };
@@ -109,6 +121,7 @@ function defaultVoiceSnapshot(): DraftingVoiceSnapshot {
     confidence: DEFAULT_BRAND_VOICE.axes.confidence,
     hospitality: DEFAULT_BRAND_VOICE.axes.hospitality,
     toneNotes: null,
+    preferredPhrases: [...DEFAULT_BRAND_VOICE.approvedPhrases],
     bannedPhrases: [...DEFAULT_BRAND_VOICE.prohibitedPhrases],
     signOff: null,
   };

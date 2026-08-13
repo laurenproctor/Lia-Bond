@@ -20,8 +20,11 @@ import {
 } from "@/components/onboarding/onboarding-card";
 import {
   BRAND_VOICE_AXES,
+  isCoveredByPhrases,
   MAX_PHRASE_LENGTH,
   MAX_PHRASES,
+  SUGGESTED_APPROVED_PHRASES,
+  SUGGESTED_PROHIBITED_PHRASES,
   type BrandVoiceAxisKey,
   type BrandVoiceProfile,
   type UpdateBrandVoiceInput,
@@ -30,7 +33,7 @@ import { summarizeBrandVoice } from "@/lib/brand-voice/summary";
 import {
   buildVoicePreview,
   PREVIEW_REVIEW,
-  prohibitedPhrasesInPreview,
+  prohibitedPhraseMatchesInPreview,
 } from "@/lib/onboarding/preview";
 import { cn } from "@/lib/cn";
 
@@ -55,7 +58,14 @@ import { cn } from "@/lib/cn";
  * behaves exactly as it did before.
  */
 
-const PHRASE_LIMIT_HINT = `Up to ${MAX_PHRASES} phrases, ${MAX_PHRASE_LENGTH} characters each.`;
+/**
+ * States the matching rule where the phrases are typed.
+ *
+ * A list that matches around extra words is not something anybody guesses from
+ * an empty text box, and the difference decides what they type: somebody who
+ * assumes exact matching writes out every variation by hand.
+ */
+const PHRASE_LIMIT_HINT = `Extra words are allowed inside a phrase — “made our day” also covers “really made our day”. Up to ${MAX_PHRASES} phrases, ${MAX_PHRASE_LENGTH} characters each.`;
 
 export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput }) {
   const router = useRouter();
@@ -68,8 +78,19 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
   const preview = useMemo(() => buildVoicePreview(value), [value]);
   const summary = useMemo(() => summarizeBrandVoice(value.axes), [value.axes]);
   const conflicts = useMemo(
-    () => prohibitedPhrasesInPreview(preview, value.prohibitedPhrases),
+    () => prohibitedPhraseMatchesInPreview(preview, value.prohibitedPhrases),
     [preview, value.prohibitedPhrases],
+  );
+  const conflictSummary = useMemo(
+    () =>
+      conflicts
+        .map((match) =>
+          match.matchedText.toLowerCase() === match.phrase.toLowerCase()
+            ? `“${match.matchedText}”`
+            : `“${match.matchedText}” (matching “${match.phrase}”)`,
+        )
+        .join(", "),
+    [conflicts],
   );
 
   // The saved profile is deliberately ignored rather than re-seeded into the
@@ -213,6 +234,8 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
           description="The types of phrases Lia would be likely to include in responses."
           tone="approved"
           phrases={value.approvedPhrases}
+          counterpartPhrases={value.prohibitedPhrases}
+          suggestions={SUGGESTED_APPROVED_PHRASES}
           error={fieldErrors.approvedPhrases}
           onChange={(next) => edit((current) => ({ ...current, approvedPhrases: next }))}
         />
@@ -223,6 +246,8 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
           description="Phrases Lia will never write."
           tone="prohibited"
           phrases={value.prohibitedPhrases}
+          counterpartPhrases={value.approvedPhrases}
+          suggestions={SUGGESTED_PROHIBITED_PHRASES}
           error={fieldErrors.prohibitedPhrases}
           onChange={(next) =>
             edit((current) => ({ ...current, prohibitedPhrases: next }))
@@ -289,8 +314,12 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
               role="alert"
               className="mt-3 rounded-lg border border-site-amber-edge/40 bg-site-amber-tint px-3 py-2 text-[12.5px] text-site-amber-ink"
             >
-              This example uses {conflicts.join(", ")}, which you asked Lia to
-              avoid. Real replies will not — the example sentences are fixed.
+              {/* Names the words the example actually used, and the phrase they
+                  matched when the two differ. A phrase list that matches around
+                  extra words has to show its working, or a warning about
+                  wording nobody typed looks like a mistake. */}
+              This example says {conflictSummary}, which you asked Lia to avoid.
+              Real replies will not — the example sentences are fixed.
             </p>
           ) : null}
 
@@ -341,6 +370,11 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
  * The remove control on each chip is a real button with an accessible name
  * naming the phrase it removes, so a screen-reader user hears "Remove thank you
  * for your feedback" rather than five identical "Remove" buttons.
+ *
+ * `suggestions` are offered as buttons and are never applied on their own — see
+ * `SUGGESTED_APPROVED_PHRASES`. One disappears once it is on the list, once an
+ * existing phrase already covers it, or once it appears on `counterpartPhrases`,
+ * where pressing it would only produce the use/avoid contradiction error.
  */
 function PhraseField({
   id,
@@ -348,6 +382,8 @@ function PhraseField({
   description,
   tone,
   phrases,
+  counterpartPhrases = [],
+  suggestions = [],
   error,
   onChange,
 }: {
@@ -356,24 +392,37 @@ function PhraseField({
   description: string;
   tone: "approved" | "prohibited";
   phrases: string[];
+  counterpartPhrases?: readonly string[];
+  suggestions?: readonly string[];
   error?: string;
   onChange: (phrases: string[]) => void;
 }) {
   const [draft, setDraft] = useState("");
   const full = phrases.length >= MAX_PHRASES;
 
-  function add() {
-    const phrase = draft.trim();
+  function addPhrase(raw: string) {
+    const phrase = raw.trim();
     if (!phrase || full) return;
     // Case-insensitive, matching the schema's own dedupe rule. Doing it here
     // too means somebody does not add a chip and watch it vanish on save.
     if (phrases.some((existing) => existing.toLowerCase() === phrase.toLowerCase())) {
-      setDraft("");
       return;
     }
     onChange([...phrases, phrase]);
+  }
+
+  function add() {
+    addPhrase(draft);
     setDraft("");
   }
+
+  const available = full
+    ? []
+    : suggestions.filter(
+        (suggestion) =>
+          !isCoveredByPhrases(suggestion, phrases) &&
+          !isCoveredByPhrases(suggestion, counterpartPhrases),
+      );
 
   return (
     <div className="flex flex-col gap-2">
@@ -408,6 +457,32 @@ function PhraseField({
           <li className="text-[13px] text-site-muted">None yet.</li>
         ) : null}
       </ul>
+
+      {available.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          <p id={`${id}-suggestions`} className="text-[12px] font-semibold text-site-body">
+            {tone === "approved" ? "Suggestions to use" : "Suggestions to avoid"}
+          </p>
+          <ul aria-labelledby={`${id}-suggestions`} className="flex flex-wrap gap-2">
+            {available.map((suggestion) => (
+              <li key={suggestion}>
+                <button
+                  type="button"
+                  onClick={() => addPhrase(suggestion)}
+                  // The visible phrase is inside the accessible name rather
+                  // than replaced by it, so speech input can act on what is on
+                  // screen (WCAG 2.5.3).
+                  aria-label={`Add suggested phrase: ${suggestion}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-site-field bg-white px-2.5 py-1.5 text-[13px] text-site-body transition-colors hover:border-site-blue hover:bg-site-blue-tint hover:text-site-blue-ink"
+                >
+                  <Plus className="size-3.5 shrink-0" aria-hidden />
+                  {suggestion}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="flex items-center gap-2">
         <label htmlFor={`${id}-phrase`} className="sr-only">

@@ -88,6 +88,7 @@ function heldContext(): DraftingContext {
       confidence: 3,
       hospitality: 3,
       toneNotes: null,
+      preferredPhrases: [],
       bannedPhrases: [],
       signOff: null,
     },
