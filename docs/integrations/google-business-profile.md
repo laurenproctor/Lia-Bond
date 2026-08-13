@@ -559,7 +559,9 @@ Guarantees:
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | "not configured on this server" | Missing `GOOGLE_CLIENT_ID` / `SECRET` / `REDIRECT_URI` / `TOKEN_ENCRYPTION_KEY` | Set them; the server log names which. |
-| `redirect_uri_mismatch` at Google | `GOOGLE_OAUTH_REDIRECT_URI` differs from the registered value | They must match exactly — scheme, host, port, path. |
+| `redirect_uri_mismatch` at Google | `GOOGLE_OAUTH_REDIRECT_URI` differs from the registered value | They must match exactly — scheme, host, port, path. Google echoes the offending value in *Request details*. [Registry per environment](./google-oauth-verification.md). |
+| `access_denied`, "has not completed the Google verification process" | Consent screen is in Testing and this account is not a test user | Add the account, or publish. [Publishing status](./google-oauth-verification.md). |
+| Connections move to `action_required` about weekly | Testing-mode refresh tokens expire after 7 days | Publish the app. Not a bug in renewal. [Publishing status](./google-oauth-verification.md). |
 | "authorization link has expired or was already used" | Older than 10 minutes, or replayed | Start again. Consuming is single-use by design. |
 | "started by a different person" | Signed in as another user since starting | Start again from your own account. |
 | "started for a different organization" | Organization switched mid-flow | Switch back and start again. |
@@ -626,6 +628,14 @@ state values, or Google's message text.
    environment.
 
 7. Put the client id and secret in `.env.local` — never in the repository.
+
+Steps 4 and 6 are where this stops being a checklist. Who may use the client,
+what the consent screen tells them, and how long a refresh token survives are
+all decided by the *publishing status* — a setting that looks cosmetic and is
+not: under Testing, every refresh token expires after seven days. Verification,
+the permanent 100-user cap on unverified apps, the redirect-URI registry per
+environment, and the consent-screen errors each of these produces are in
+[google-oauth-verification.md](./google-oauth-verification.md).
 
 Reference: [Basic setup](https://developers.google.com/my-business/content/basic-setup)
 and [Prerequisites](https://developers.google.com/my-business/content/prereqs).
