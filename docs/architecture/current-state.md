@@ -1496,3 +1496,19 @@ Two useful things fell out of doing it:
   pair moved to free slots that still sort before
   `20260809000100_automation_rule_authoring`, which must remain the last word
   on `audit_events_known_event_type`.
+
+## Decisions made adding the rule platform indicator
+
+Every rules surface — the table, the detail header, each template card, and the
+builder — shows which platforms a rule affects. The interesting part is not the
+badge, it is what the badge is allowed to claim.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D179 | Scope is **derived** from a rule's conditions, never stored | A stored answer disagrees with the rule the moment somebody edits a condition. `src/lib/rules/platform-scope.ts` is pure, so the server renders it for a saved rule and the builder recomputes it while conditions are edited, from the same function. |
+| D180 | `source_type` conditions count, not just `platform` ones | Every source type belongs to exactly one platform, and three of the five shipped templates scope themselves by `source_type` rather than by `platform`. Reading only `platform` conditions would have reported "all platforms" for most of the templates on the screen. |
+| D181 | "No conditions" is reported as **matches nothing**, not as "all platforms" | `matchesRule` returns false for an empty condition list on purpose (a rule that says nothing should not fire). Rendering that rule as the broadest one on the screen would be the most misleading thing this feature could do. |
+| D182 | Contradictory conditions get their own outcome, distinct from "no conditions" | They are different facts with different fixes. Two `is` values on the same field can never both hold — including two source types on the *same* platform (`reddit_post` AND `reddit_comment`), which a plain platform-level intersection would happily report as "affects Reddit" for a rule no mention can satisfy. |
+| D183 | Excluding a source type only excludes its platform when it takes the last one | `source_type is_not reddit_post` leaves `reddit_comment`, so the rule still affects Reddit. Reddit is the only platform with two source types today; `PLATFORM_SOURCE_TYPES` is derived from `SOURCE_TYPE_PLATFORM` rather than hard-coded around that, so the second one cannot break it. |
+| D184 | `SOURCE_TYPE_PLATFORM` is reused from `mention.ts`, not redeclared | It already existed there for grouping and routing. A second copy is a second thing to keep in step with the enum — the first draft of this work added one and the duplicate-export error caught it. |
+| D185 | Badges carry no availability state | Considered marking platforms Lia has no connector for (Reddit throws from `getConnector`; Yelp is fixture-only), on the grounds that a Reddit-scoped rule cannot fire today. Decided against on the owner's call: the indicator answers "what does this rule target", and connector readiness is the integrations screen's subject. The consequence, recorded here rather than hidden: a rule scoped to an unimplemented platform looks exactly like one scoped to Google. |

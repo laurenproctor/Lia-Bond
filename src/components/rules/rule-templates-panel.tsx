@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
+import { RulePlatformBadges } from "@/components/rules/rule-platform-badges";
 import { RULE_TEMPLATES } from "@/lib/rules/templates";
 import { cn } from "@/lib/cn";
 
@@ -67,6 +68,18 @@ export function RuleTemplatesPanel({ appliedTemplateId = null }: RuleTemplatesPa
                 ) : null}
               </div>
               <p className="mt-0.5 text-[12.5px] text-gray-500">{template.description}</p>
+              {/*
+                Which platforms this template would watch, derived from its own
+                conditions. Three of the five scope themselves by `source_type`
+                rather than by `platform`, so this is the only place the
+                difference between "Google reviews" and "everything" is visible
+                before instantiating the rule.
+              */}
+              <RulePlatformBadges
+                conditions={template.config.conditions}
+                short
+                className="mt-2"
+              />
               {/*
                 The applied template gets no button: it would link to the URL
                 already open, so pressing it is a no-op navigation that resets

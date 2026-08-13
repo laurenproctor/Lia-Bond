@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { activationProblems } from "@/lib/rules/readiness";
+import { RulePlatformBadges } from "@/components/rules/rule-platform-badges";
 import { ruleSentence } from "@/lib/rules/sentence";
 import type {
   AutomationRule,
@@ -371,8 +372,20 @@ export function RuleBuilder(props: RuleBuilderProps) {
         ) : null}
       </Card>
 
+      {/*
+        The plain-language sentence and the platform scope are the same
+        question asked two ways — "what did I just build?" — so they share a
+        card. Both recompute from `conditions` as it is edited, which is the
+        point of putting the badges here rather than only on the saved rule:
+        adding a `source_type is google_review` condition narrows this from
+        "All platforms" the moment it is chosen, before anything is saved.
+      */}
       <Card className="bg-gray-50">
         <p className="text-[13px] text-gray-700">{sentence}</p>
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <span className="text-[12.5px] text-gray-500">Affects</span>
+          <RulePlatformBadges conditions={conditions} />
+        </div>
       </Card>
 
       <Card>

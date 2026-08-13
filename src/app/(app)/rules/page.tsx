@@ -6,6 +6,7 @@ import { RuleToggle } from "@/components/rules/rule-toggle";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
+import { RulePlatformBadges } from "@/components/rules/rule-platform-badges";
 import { PageHeader } from "@/components/ui/page-header";
 import { AutomationRuleStatusBadge } from "@/components/ui/status-badge";
 import { formatRelativeShort } from "@/lib/format";
@@ -32,6 +33,18 @@ function buildColumns(canToggle: boolean): DataTableColumn<AutomationRule>[] {
           ) : null}
         </span>
       ),
+    },
+    {
+      // Its own column rather than a third line under the rule name: the
+      // question this answers — "which of my rules touch Google?" — is asked
+      // down the table, not across one row, and stacking it into the name cell
+      // makes it unscannable.
+      //
+      // Short labels here and full ones on the detail page. A rule scoped to
+      // three platforms would otherwise set this column's width for every row.
+      id: "platforms",
+      header: "Platforms",
+      cell: (rule) => <RulePlatformBadges conditions={rule.conditions} short />,
     },
     {
       id: "status",
