@@ -33,6 +33,3 @@ supabase/.temp/
 
 # Claude Code personal settings (permissions, local overrides)
 .claude/settings.local.json
-
-# Claude Code personal settings (permissions, local overrides)
-.claude/settings.local.json
