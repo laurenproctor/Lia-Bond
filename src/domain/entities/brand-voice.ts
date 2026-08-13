@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { phraseMatches } from "@/domain/entities/phrase-match";
 import {
   organizationOwnedSchema,
   timestampSchema,
@@ -147,16 +148,21 @@ export const updateBrandVoiceInputSchema = z
     // A phrase Lia must use and must never use is not a preference, it is a
     // contradiction. Cheaper to refuse here than to invent a precedence rule
     // nobody will remember when generation finally reads these lists.
-    const approved = new Set(value.approvedPhrases.map((phrase) => phrase.toLowerCase()));
-    const collisions = value.prohibitedPhrases.filter((phrase) =>
-      approved.has(phrase.toLowerCase()),
+    //
+    // Checked under phrase matching rather than string equality, because that
+    // is how these lists are read everywhere else: with "made our day" on the
+    // avoid list, an approved "it really made our day" is unusable — every use
+    // of it breaks the other rule. Identical spellings still collide, since a
+    // phrase always matches itself.
+    const collisions = value.prohibitedPhrases.filter((prohibited) =>
+      value.approvedPhrases.some((approved) => phraseMatches(approved, prohibited)),
     );
 
     if (collisions.length > 0) {
       ctx.addIssue({
         code: "custom",
         path: ["prohibitedPhrases"],
-        message: `Listed in both use and avoid: ${collisions.join(", ")}. Remove it from one.`,
+        message: `Also covered by a phrase to use: ${collisions.join(", ")}. Remove it from one list.`,
       });
     }
   });
@@ -200,3 +206,40 @@ export const DEFAULT_BRAND_VOICE: UpdateBrandVoiceInput = {
   approvedPhrases: [],
   prohibitedPhrases: [],
 };
+
+/**
+ * Starting points offered on the two phrase lists.
+ *
+ * **Suggestions, never defaults.** `DEFAULT_BRAND_VOICE` ships both lists empty
+ * on purpose — "a default phrase would put words in a customer's mouth" — and
+ * that stands. These are only rendered as buttons somebody chooses to press:
+ * nothing here reaches a saved profile, a prompt, or a reply unless it was
+ * clicked. The value they add is showing what a *useful* entry looks like,
+ * which an empty box with a placeholder does not.
+ *
+ * Written for restaurant groups, and kept to phrases a brand would plausibly
+ * want rather than ones that sound impressive. The avoid list leans on the two
+ * categories that actually cause trouble in public replies: promises the
+ * business cannot keep for every guest, and corporate filler that reads as a
+ * form letter.
+ *
+ * Deliberately disjoint under phrase matching, so pressing any two of them can
+ * never produce the "also covered by a phrase to use" error.
+ */
+export const SUGGESTED_APPROVED_PHRASES: readonly string[] = [
+  "Thank you for taking the time to share this",
+  "We're glad you enjoyed your visit",
+  "We'd love to welcome you back",
+  "Our team will hear about this",
+  "We're sorry we missed the mark",
+  "Please ask for the manager on duty",
+] as const;
+
+export const SUGGESTED_PROHIBITED_PHRASES: readonly string[] = [
+  "We guarantee",
+  "This never happens",
+  "Best in town",
+  "We apologize for any inconvenience",
+  "As per our policy",
+  "You are mistaken",
+] as const;

@@ -210,6 +210,7 @@ describe("buildDraftingContext: brand voice", () => {
       confidence: profile.axes.confidence,
       hospitality: profile.axes.hospitality,
       toneNotes: null,
+      preferredPhrases: profile.approvedPhrases,
       bannedPhrases: profile.prohibitedPhrases,
       signOff: null,
     });
@@ -236,6 +237,7 @@ describe("buildDraftingContext: brand voice", () => {
       confidence: DEFAULT_BRAND_VOICE.axes.confidence,
       hospitality: DEFAULT_BRAND_VOICE.axes.hospitality,
       toneNotes: null,
+      preferredPhrases: [],
       bannedPhrases: [],
       signOff: null,
     });
@@ -291,15 +293,18 @@ describe("buildDraftingContext: frozen snapshot", () => {
       analysis,
     );
 
+    const preferredPhrasesBefore = [...context.voice.preferredPhrases];
     const bannedPhrasesBefore = [...context.voice.bannedPhrases];
     const topicsBefore = [...(context.analysis?.topics ?? [])];
     const warmthBefore = context.voice.warmth;
 
     // Mutate every source object the builder read, after the fact.
+    profile.approvedPhrases.push("mutated after build");
     profile.prohibitedPhrases.push("mutated after build");
     profile.axes.warmth = 1;
     analysis.topics.push("mutated after build");
 
+    expect(context.voice.preferredPhrases).toEqual(preferredPhrasesBefore);
     expect(context.voice.bannedPhrases).toEqual(bannedPhrasesBefore);
     expect(context.voice.warmth).toBe(warmthBefore);
     expect(context.analysis?.topics).toEqual(topicsBefore);

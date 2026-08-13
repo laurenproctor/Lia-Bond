@@ -1,4 +1,10 @@
-import type { BrandVoiceAxes, UpdateBrandVoiceInput } from "@/domain";
+import {
+  findPhraseMatches,
+  phraseMatches,
+  type BrandVoiceAxes,
+  type PhraseMatch,
+  type UpdateBrandVoiceInput,
+} from "@/domain";
 
 /**
  * The brand-voice preview on step 4.
@@ -101,20 +107,29 @@ function applyRegister(sentence: string, formality: Band): string {
 }
 
 /**
- * Weave an approved phrase in, if there is one.
+ * Weave an approved phrase in, if there is one that is not already said.
  *
- * Only the first is used. Stuffing every approved phrase into one reply would
- * produce something no customer would believe a person wrote, and the list is a
+ * Only one is used. Stuffing every approved phrase into one reply would produce
+ * something no customer would believe a person wrote, and the list is a
  * vocabulary Lia may draw on rather than a checklist it must exhaust — which is
  * a distinction the preview has to demonstrate, not just claim.
+ *
+ * Which one is chosen goes through phrase matching. The warm opening already
+ * says "it really made our day", so an approved "made our day" is satisfied
+ * before this function runs; inserting it anyway would show the same thought
+ * twice in one reply, which reads as a bug rather than as a setting being
+ * honoured. When a phrase is already covered the next uncovered one is used,
+ * and when they all are, nothing is added.
  */
 function withApprovedPhrase(sentences: string[], phrases: readonly string[]): string[] {
-  const phrase = phrases[0];
+  const assembled = sentences.join(" ");
+  const phrase = phrases.find(
+    (candidate) =>
+      candidate.trim().length > 0 && !phraseMatches(assembled, candidate),
+  );
   if (!phrase) return sentences;
 
   const trimmed = phrase.trim();
-  if (trimmed.length === 0) return sentences;
-
   const capitalised = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
   const punctuated = /[.!?]$/.test(capitalised) ? capitalised : `${capitalised}.`;
   return [sentences[0] ?? "", punctuated, ...sentences.slice(1)].filter(
@@ -159,14 +174,20 @@ export function buildVoicePreview(voice: UpdateBrandVoiceInput): string {
  * but a customer may prohibit a word this preview happens to use, and silently
  * showing a reply that breaks their own rule would undermine the whole screen.
  * When this returns anything, the preview says so rather than pretending.
+ *
+ * Matched as phrases rather than as substrings, which is both looser and
+ * stricter than the `includes` it replaced: "made our day" now catches "really
+ * made our day", and "our day" no longer catches "flavours our dayboat scallop"
+ * — the old check matched across word boundaries, so it could fire on a word
+ * the customer never wrote.
+ *
+ * Returns the matches, not just the phrases: with a rule this loose, a warning
+ * has to be able to show *what* it matched, or the customer has no way to tell
+ * whether it was right.
  */
-export function prohibitedPhrasesInPreview(
+export function prohibitedPhraseMatchesInPreview(
   preview: string,
   prohibitedPhrases: readonly string[],
-): string[] {
-  const haystack = preview.toLowerCase();
-  return prohibitedPhrases.filter((phrase) => {
-    const needle = phrase.trim().toLowerCase();
-    return needle.length > 0 && haystack.includes(needle);
-  });
+): PhraseMatch[] {
+  return findPhraseMatches(preview, prohibitedPhrases);
 }
