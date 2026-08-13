@@ -13,6 +13,7 @@ import {
   findOnboardingNewsQuery,
   lastSuccessfulNewsPollAt,
   summarizeNewsMonitoring,
+  watchQueryName,
 } from "@/lib/onboarding/news";
 import { isNewsMonitorAvailable } from "@/news/registry";
 
@@ -84,6 +85,7 @@ export default async function OnboardingConnectSourcesPage({
       country: newsSummary.country,
       lastSuccessfulPollAt: lastPollAt,
       initialValues: configuratorInitialValues(onboardingQuery, context.organization),
+      initialValuesPersisted: onboardingQuery !== null,
       keywordSuggestions: keywordSuggestions(context.organization),
     },
     reddit: {
@@ -156,9 +158,9 @@ export default async function OnboardingConnectSourcesPage({
  *
  * The persisted onboarding-managed query when one exists — editing, never
  * shadowing — otherwise defaults built from real organization data: the
- * organization's own name as the first keyword and nothing invented. No
- * fabricated aliases, no fabricated people, and no location names, because
- * step 3 has not chosen locations yet.
+ * organization's own name in the title and as the first keyword, and nothing
+ * invented. No fabricated aliases, no fabricated people, and no location
+ * names, because step 3 has not chosen locations yet.
  */
 function configuratorInitialValues(
   query: MonitoringQuery | null,
@@ -176,7 +178,9 @@ function configuratorInitialValues(
   }
 
   return {
-    name: "Brand watch",
+    // "Ember & Oak watch", not "Brand watch": the same rule step 3 names its
+    // location queries by, so an organization's queries read as one set.
+    name: watchQueryName(organization.name),
     keywords: [organization.name],
     exclusions: [],
     // Derived from the organization's own configured language ("en-US" →

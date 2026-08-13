@@ -247,9 +247,51 @@ parallel write path.
   input, and the public create action forces `user` regardless of what the
   browser sent.
 - **Prefill** comes from real organization data only: the organization's name
-  as the first keyword, its website host as a one-press suggestion. No
-  fabricated aliases, people, or location names — step 3 has not chosen
-  locations yet, and the wizard does not pretend otherwise.
+  as the monitoring's name (`watchQueryName` — "Ember & Oak watch", the same
+  rule step 3 names its location queries by, shortened on the subject rather
+  than the suffix when the organization name exceeds
+  `MAX_MONITORING_QUERY_NAME_LENGTH`) and as the first keyword, with its
+  website host as a one-press suggestion. No fabricated aliases, people, or
+  location names — step 3 has not chosen locations yet, and the wizard does
+  not pretend otherwise.
+- **There is no Save button.** The panel autosaves through the shared
+  `useAutosave` hook (`src/components/autosave/`, promoted out of brand voice
+  so both surfaces share one implementation): an 800 ms settling window, one
+  request in flight at a time, and the shared `SaveStatus` line saying
+  whether what is on screen is on the server. Fields are never disabled while
+  a save runs, and a failure keeps the edits on screen with a retry.
+  - Client-side validation (a name, at least one keyword) short-circuits
+    before the request, so autosave spends nothing discovering what the
+    server would reject anyway.
+  - Both ways out of the panel — **Done** / the close control, and the step's
+    own **Save and continue** — `flush()` first, so the settling window can
+    never swallow the last edit. A flush that fails keeps the panel open;
+    navigating would discard the input over it.
+  - "Save and continue" with the panel open on **untouched defaults** and
+    nothing yet persisted writes those defaults: with the Save button gone
+    that press is the confirmation of them. Closing the panel untouched is
+    not, and writes nothing.
+  - **Audit volume is managed at the two places it can be.** One
+    configuration session used to be one `monitoring_query.updated` event;
+    under autosave it is one per settled edit, and `audit_events` is
+    append-only by construction, so nothing can be merged after the fact.
+    Two levers, both taken:
+    - **A 2 s settling window** (`SETTLING_MS`) rather than the hook's 800 ms
+      default, which folds the way people actually fill this in — one
+      keyword, then the next — into a single write. The panel can afford the
+      longer wait precisely because every exit flushes: unlike the brand
+      voice screen, the timer is not the only thing standing between an edit
+      and the database, so it is tuned for coalescing rather than for safety.
+    - **No event when no field moved.** `saveOnboardingNewsQuery` records
+      only when the diff is non-empty. Under a Save button a no-op press was
+      at least a decision somebody made; under autosave it is a timer firing,
+      and an entry saying nothing could never be cleaned up. Every event that
+      does survive still carries its real before-and-after, so the chain
+      stays continuous.
+
+    What remains — one event per genuinely distinct edit — is the honest
+    record of what happened, and is the trade already accepted for brand
+    voice autosave.
 - **The summary** on the card (`summarizeNewsMonitoring`,
   `lastSuccessfulNewsPollAt`) is derived from persisted queries and
   `news_poll_runs`: enabled-query count, unique keyword count, language and
@@ -318,6 +360,17 @@ account has no locations when the truth is that no account is connected.
 Step 4 reads and writes the **existing** profile through `saveBrandVoice`, the
 same service `/brand-voice` uses. There is no second brand-voice schema and no
 onboarding-only storage, so a voice set here is the voice the product uses.
+
+Edits on step 4 **save themselves**, through the same shared `useAutosave` hook
+and the same `updateBrandVoiceAction` as `/brand-voice`: a slider on release, a
+phrase immediately, then the 800 ms settling window so a burst of edits becomes
+one request, with the shared `SaveStatus` line saying whether what is on screen
+is on the server. Autosave writes the **voice only** — it never advances the
+wizard, because settling step 4 is the person pressing the button, not them
+touching a slider. **Save and continue** flushes anything outstanding first, so
+two writes to the same profile cannot interleave, then completes the step
+exactly as before; a step reached without any autosave landing behaves as it
+always did. A failure keeps the edits on screen.
 
 The two writes — the profile, then the step — are not one transaction (the
 repository interface has none to open). The order is what makes that safe: the

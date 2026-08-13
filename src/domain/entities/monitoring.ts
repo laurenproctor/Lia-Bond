@@ -36,6 +36,15 @@ export const DEFAULT_RELEVANCE_THRESHOLD = 0.35;
 export const DEFAULT_POLL_INTERVAL_MINUTES = MIN_POLL_INTERVAL_MINUTES * 4;
 /** The GNews free tier returns at most this many articles per request. */
 export const MAX_ARTICLES_PER_POLL = 10;
+/**
+ * The longest a query may be named.
+ *
+ * Declared rather than inlined because the generated names — the onboarding
+ * brand watch, the per-location watches — are built from an organization or
+ * location name that is allowed to be longer than this, and the code that
+ * shortens them must not carry its own copy of the limit.
+ */
+export const MAX_MONITORING_QUERY_NAME_LENGTH = 120;
 /** A repeated headline inside this window is treated as syndication (D86). */
 export const SYNDICATION_WINDOW_MS = 72 * 60 * 60 * 1000;
 /**
@@ -71,7 +80,7 @@ export const monitoringQuerySchema = z
   .object({
     /** Null means organization-wide. Set means articles attribute here. */
     locationId: uuidSchema.nullable(),
-    name: z.string().trim().min(1).max(120),
+    name: z.string().trim().min(1).max(MAX_MONITORING_QUERY_NAME_LENGTH),
     queryType: monitoringQueryTypeSchema,
     /** Required terms. Pushed down to the provider. */
     keywords: z.array(termSchema).min(1).max(20),
