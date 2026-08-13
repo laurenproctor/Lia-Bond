@@ -221,7 +221,8 @@ there is no onboarding-only news table, no second validation schema, and no
 parallel write path.
 
 - **Input** is `onboardingNewsMonitoringInputSchema`, a `pick` of the real
-  create schema: name, keywords, exclusions, country, language, enabled. The
+  create schema: name, keywords, exclusions, country, postal code, city,
+  region, language, enabled. The
   advanced fields the wizard never shows get the documented defaults on
   create — `queryType: "brand"`, `locationId: null`, empty publisher lists,
   `DEFAULT_RELEVANCE_THRESHOLD` (0.35), `DEFAULT_POLL_INTERVAL_MINUTES` (240)
@@ -253,7 +254,33 @@ parallel write path.
   `MAX_MONITORING_QUERY_NAME_LENGTH`) and as the first keyword, with its
   website host as a one-press suggestion. No fabricated aliases, people, or
   location names — step 3 has not chosen locations yet, and the wizard does
-  not pretend otherwise.
+  not pretend otherwise. The country prefills from the organization's own
+  configured language tag ("en-GB" → United Kingdom) when that resolves to a
+  country the picker offers; the locality prefills as empty, for the same
+  reason — there is no address on file yet, and a guess here would become a
+  stated fact about where somebody operates.
+- **Market and local anchor.** The country picker is
+  `MONITORING_COUNTRIES` (`src/lib/geo/countries.ts`) — the 30 codes GNews
+  actually filters on, not a curated subset, because a country in the list
+  that the provider ignores is a promise the product cannot keep. Beneath it,
+  an optional postal code auto-fills a city and region through
+  `lookupPostalCodeAction`. Three rules make this safe to lean on:
+  - The postal field is **disabled until a country is chosen**, and changing
+    the country clears the code and the locality with it. This is where the
+    "a postal code needs a country" invariant lives —
+    `monitoringQuerySchema` deliberately does not enforce it, because a
+    partial update carries no country to check against.
+  - **City and region are always editable**, in every country. The lookup
+    resolves an area rather than a precise town in several markets (a UK
+    outward code, a Canadian forward sortation area), and a country with no
+    lookup coverage at all is still offered — the fields are simply typed in.
+  - **A failed lookup fills nothing.** It says what went wrong in Lia's own
+    words and leaves the fields alone. The provider (Zippopotam) is free and
+    unauthenticated, so it has no SLA and nothing is allowed to depend on it.
+  What is saved changes no behaviour today: only the country reaches a poll.
+  The postal code and locality are stored for the provider upgrade that can
+  search regionally (D71), and the card's own copy says so rather than
+  implying local coverage already works.
 - **There is no Save button.** The panel autosaves through the shared
   `useAutosave` hook (`src/components/autosave/`, promoted out of brand voice
   so both surfaces share one implementation): an 800 ms settling window, one

@@ -57,6 +57,70 @@ describe("monitoringQueries", () => {
     expect(after.map((q) => q.id)).not.toContain(created.id);
   });
 
+  it("stores the locality a query was created with", async () => {
+    const created = await dataSource.monitoringQueries.create(ushg.admin(), {
+      ...QUERY,
+      postalCode: "10012",
+      localityCity: "New York",
+      localityRegion: "NY",
+    });
+
+    expect(created.postalCode).toBe("10012");
+    expect(created.localityCity).toBe("New York");
+    expect(created.localityRegion).toBe("NY");
+  });
+
+  it("defaults the locality to null when the create said nothing about it", async () => {
+    const created = await dataSource.monitoringQueries.create(ushg.admin(), QUERY);
+
+    expect(created.postalCode).toBeNull();
+    expect(created.localityCity).toBeNull();
+    expect(created.localityRegion).toBeNull();
+  });
+
+  it("does not erase a stored locality on an update that never mentions it", async () => {
+    // The data-loss case: renaming a query, or toggling it off from the list,
+    // sends a patch with no locality in it. Before the update schema stopped
+    // inheriting `.default(null)`, the absent keys parsed to explicit nulls and
+    // the adapter wrote them.
+    const created = await dataSource.monitoringQueries.create(ushg.admin(), {
+      ...QUERY,
+      postalCode: "10012",
+      localityCity: "New York",
+      localityRegion: "NY",
+    });
+
+    const renamed = await dataSource.monitoringQueries.update(
+      ushg.admin(),
+      created.id,
+      { name: "Renamed watch" },
+    );
+
+    expect(renamed.name).toBe("Renamed watch");
+    expect(renamed.postalCode).toBe("10012");
+    expect(renamed.localityCity).toBe("New York");
+    expect(renamed.localityRegion).toBe("NY");
+  });
+
+  it("clears a locality when an update passes an explicit null", async () => {
+    const created = await dataSource.monitoringQueries.create(ushg.admin(), {
+      ...QUERY,
+      postalCode: "10012",
+      localityCity: "New York",
+      localityRegion: "NY",
+    });
+
+    const cleared = await dataSource.monitoringQueries.update(
+      ushg.admin(),
+      created.id,
+      { postalCode: null, localityCity: null, localityRegion: null },
+    );
+
+    expect(cleared.postalCode).toBeNull();
+    expect(cleared.localityCity).toBeNull();
+    expect(cleared.localityRegion).toBeNull();
+  });
+
   it("excludes a disabled query from the due list", async () => {
     const created = await dataSource.monitoringQueries.create(ushg.admin(), {
       ...QUERY,

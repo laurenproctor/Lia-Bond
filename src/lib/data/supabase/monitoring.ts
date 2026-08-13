@@ -114,6 +114,9 @@ export function createMonitoringRepositories(client: SupabaseClient): {
             allowed_domains: value.allowedDomains,
             denied_domains: value.deniedDomains,
             source_country: value.sourceCountry,
+            postal_code: value.postalCode,
+            locality_city: value.localityCity,
+            locality_region: value.localityRegion,
             language: value.language,
             relevance_threshold: value.relevanceThreshold,
             enabled: value.enabled,
@@ -142,6 +145,11 @@ export function createMonitoringRepositories(client: SupabaseClient): {
         if (value.allowedDomains !== undefined) patch.allowed_domains = value.allowedDomains;
         if (value.deniedDomains !== undefined) patch.denied_domains = value.deniedDomains;
         if (value.sourceCountry !== undefined) patch.source_country = value.sourceCountry;
+        if (value.postalCode !== undefined) patch.postal_code = value.postalCode;
+        if (value.localityCity !== undefined) patch.locality_city = value.localityCity;
+        if (value.localityRegion !== undefined) {
+          patch.locality_region = value.localityRegion;
+        }
         if (value.language !== undefined) patch.language = value.language;
         if (value.relevanceThreshold !== undefined) {
           patch.relevance_threshold = value.relevanceThreshold;
