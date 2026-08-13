@@ -414,6 +414,28 @@ sample from a distribution shown beside a claim that this is how Lia replies.
 The screen labels it *"Preview — an illustration, not a published reply"* and
 states that the example review is made up.
 
+**The same preview now renders on `/brand-voice`.** It lives in
+`src/lib/brand-voice/preview.ts` — it moved out of `src/lib/onboarding/`, where
+being filed under the wizard was what let the two screens diverge. The settings
+page had shown a placeholder reading *"Available once response drafting
+arrives"*; drafting shipped, which made the sentence false, and the deeper
+problem was that the screen somebody returns to was less capable than the one
+they saw once. Response drafting having arrived does **not** make this module
+redundant: a real draft is a better sample and a worse control, because it
+cannot follow a slider and it fails when no provider is configured.
+
+Three things are shared rather than restated, and each was a way the two could
+drift: the reply text (`buildVoicePreview`), which phrases are flagged
+(`prohibitedPhraseMatchesInPreview`), and the sentence used to flag them
+(`describePreviewConflicts`). The phrase-field hint is shared the same way, as
+`PHRASE_LIMIT_HINT` beside the two limits it quotes — `/brand-voice` used to
+state neither the matching rule nor the caps, revealing the 20-phrase limit only
+by refusing a 21st chip. What is deliberately *not* shared is the chrome:
+onboarding sits outside the app shell on the public-site brand, so each surface
+renders its own markup. `tests/brand-voice-onboarding-alignment.test.ts` pins
+the parity by reading both component sources, because what regressed here was
+never a return value — it was one screen importing something the other did not.
+
 ## 10. Invitation-link behavior
 
 Lia does **not** email invitations (D55: Supabase's built-in SMTP on a new
@@ -549,7 +571,7 @@ Eight suites, all against the demo adapter and the real source:
 | `onboarding-progress.test.ts` | settlement, reachability, resume, step table, step-1 input schema, offered options |
 | `onboarding-repository.test.ts` | provisioning, transitions, idempotence, completion refusal, cross-organization isolation |
 | `onboarding-routing.test.ts` | signup, invited signup, completed bypass, resume, role-gated diversion, guard shape, ready framing |
-| `onboarding-preview.test.ts` | determinism, no provider, every axis has an effect, phrase handling |
+| `brand-voice-preview.test.ts` | determinism, no provider, every axis has an effect, phrase handling (was `onboarding-preview.test.ts`; renamed with the module, which both screens now share) |
 | `onboarding-ready.test.ts` | quick-win hierarchy end to end, import status from real runs, no percentage field |
 | `onboarding-permissions.test.ts` | permission matrix, RLS policy text, OAuth allowlist, audit vocabulary, no credentials in client code, mock mode |
 | `onboarding-accessibility.test.ts` | `aria-current`, labels, sliders, hidden decoration, the disabled Reddit control's explanation, the configurator's focus and announcement behaviour, heading order, no product palette |

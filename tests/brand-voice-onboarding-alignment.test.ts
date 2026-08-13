@@ -1,9 +1,19 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import { freshDataSource, harbor, ushg } from "./helpers/scope";
 import { brandVoiceFormSeed } from "@/lib/brand-voice/seed";
 import { saveBrandVoice } from "@/lib/brand-voice/save";
+import {
+  buildVoicePreview,
+  describePreviewConflicts,
+  prohibitedPhraseMatchesInPreview,
+} from "@/lib/brand-voice/preview";
 import type { LiaDataSource } from "@/lib/data/types";
-import { DEFAULT_BRAND_VOICE, type UpdateBrandVoiceInput } from "@/domain";
+import {
+  DEFAULT_BRAND_VOICE,
+  PHRASE_LIMIT_HINT,
+  type UpdateBrandVoiceInput,
+} from "@/domain";
 
 /**
  * Onboarding step 4 and `/brand-voice` are the same setting.
@@ -76,6 +86,111 @@ describe("brand voice set during onboarding", () => {
     const pageSeed = brandVoiceFormSeed(await data.brandVoice.get(scope));
 
     expect(stepSeed).toEqual(pageSeed);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* What the two screens show, not just what they store                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The data was already shared before this; the *presentation* was not.
+ * `/brand-voice` rendered a placeholder reading "available once response
+ * drafting arrives" while step 4 had a working preview, so the screen somebody
+ * returns to was less capable than the one they saw once.
+ *
+ * These read the two component sources directly. That is unusual and it is the
+ * point: what regressed here was never a function's return value, it was one
+ * screen importing a thing the other did not. A test that called
+ * `buildVoicePreview` twice would pass in exactly the world this is guarding
+ * against.
+ */
+const STEP_FORM = readFileSync(
+  "src/components/onboarding/brand-voice-step-form.tsx",
+  "utf8",
+);
+const VOICE_PREVIEW = readFileSync(
+  "src/components/brand-voice/voice-preview.tsx",
+  "utf8",
+);
+const PHRASE_EDITOR = readFileSync(
+  "src/components/brand-voice/phrase-editor.tsx",
+  "utf8",
+);
+const VOICE_FORM = readFileSync("src/components/brand-voice/voice-form.tsx", "utf8");
+const BRAND_VOICE_PAGE = readFileSync("src/app/(app)/brand-voice/page.tsx", "utf8");
+
+describe("both screens render the same preview", () => {
+  it("builds it from the shared module on each surface", () => {
+    for (const source of [STEP_FORM, VOICE_PREVIEW]) {
+      expect(source).toContain("buildVoicePreview");
+      expect(source).toContain("@/lib/brand-voice/preview");
+    }
+  });
+
+  it("warns about a prohibited phrase on each surface", () => {
+    for (const source of [STEP_FORM, VOICE_PREVIEW]) {
+      expect(source).toContain("prohibitedPhraseMatchesInPreview");
+      // Same builder, so the two cannot word the same condition differently.
+      expect(source).toContain("describePreviewConflicts");
+    }
+  });
+
+  it("no longer promises a preview that has not arrived", () => {
+    // The placeholder said "Available once response drafting arrives".
+    // Drafting shipped, which made that sentence false.
+    //
+    // Asserted against the JSX and the import rather than the raw file text:
+    // the page's own doc comment explains what it replaced, and a bare
+    // substring check fails on the explanation.
+    expect(BRAND_VOICE_PAGE).not.toContain("<SectionPlaceholder");
+    expect(BRAND_VOICE_PAGE).not.toContain("ui/section-placeholder");
+  });
+
+  it("renders the preview from live form state, not from a server prop", () => {
+    // A preview handed in from the server cannot follow a slider, which is the
+    // one thing a preview on this screen has to do.
+    expect(VOICE_FORM).toContain("<VoicePreview value={value} />");
+  });
+
+  it("produces the same reply and the same warning for one voice", () => {
+    const voice: UpdateBrandVoiceInput = {
+      ...onboardingChoices,
+      prohibitedPhrases: ["thank you"],
+    };
+
+    // Both screens call exactly this pair, so agreeing here is agreeing on
+    // screen.
+    const reply = buildVoicePreview(voice);
+    const conflicts = prohibitedPhraseMatchesInPreview(
+      reply,
+      voice.prohibitedPhrases,
+    );
+
+    expect(conflicts.length).toBeGreaterThan(0);
+
+    // Quotes the wording the example actually used — "Thank you", capitalised
+    // as the reply opens — rather than echoing back the lowercase phrase that
+    // was typed. With matching this loose, a warning that could not show what
+    // it matched would give the customer no way to tell whether it was right.
+    const described = describePreviewConflicts(conflicts);
+    expect(described).toMatch(/“Thank you”/);
+    expect(described.toLowerCase()).toContain("thank you");
+  });
+});
+
+describe("both screens state the phrase rules", () => {
+  it("uses the one shared hint", () => {
+    for (const source of [STEP_FORM, PHRASE_EDITOR]) {
+      expect(source).toContain("PHRASE_LIMIT_HINT");
+    }
+  });
+
+  it("states the matching rule and both limits", () => {
+    // The settings screen used to reveal the cap only by refusing a 21st chip.
+    expect(PHRASE_LIMIT_HINT).toContain("Extra words are allowed");
+    expect(PHRASE_LIMIT_HINT).toContain("20 phrases");
+    expect(PHRASE_LIMIT_HINT).toContain("80 characters");
   });
 });
 

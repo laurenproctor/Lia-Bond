@@ -23,6 +23,7 @@ import {
   isCoveredByPhrases,
   MAX_PHRASE_LENGTH,
   MAX_PHRASES,
+  PHRASE_LIMIT_HINT,
   SUGGESTED_APPROVED_PHRASES,
   SUGGESTED_PROHIBITED_PHRASES,
   type BrandVoiceAxisKey,
@@ -32,9 +33,10 @@ import {
 import { summarizeBrandVoice } from "@/lib/brand-voice/summary";
 import {
   buildVoicePreview,
+  describePreviewConflicts,
   PREVIEW_REVIEW,
   prohibitedPhraseMatchesInPreview,
-} from "@/lib/onboarding/preview";
+} from "@/lib/brand-voice/preview";
 import { cn } from "@/lib/cn";
 
 /**
@@ -58,15 +60,6 @@ import { cn } from "@/lib/cn";
  * behaves exactly as it did before.
  */
 
-/**
- * States the matching rule where the phrases are typed.
- *
- * A list that matches around extra words is not something anybody guesses from
- * an empty text box, and the difference decides what they type: somebody who
- * assumes exact matching writes out every variation by hand.
- */
-const PHRASE_LIMIT_HINT = `Extra words are allowed inside a phrase — “made our day” also covers “really made our day”. Up to ${MAX_PHRASES} phrases, ${MAX_PHRASE_LENGTH} characters each.`;
-
 export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -81,17 +74,7 @@ export function BrandVoiceStepForm({ initial }: { initial: UpdateBrandVoiceInput
     () => prohibitedPhraseMatchesInPreview(preview, value.prohibitedPhrases),
     [preview, value.prohibitedPhrases],
   );
-  const conflictSummary = useMemo(
-    () =>
-      conflicts
-        .map((match) =>
-          match.matchedText.toLowerCase() === match.phrase.toLowerCase()
-            ? `“${match.matchedText}”`
-            : `“${match.matchedText}” (matching “${match.phrase}”)`,
-        )
-        .join(", "),
-    [conflicts],
-  );
+  const conflictSummary = useMemo(() => describePreviewConflicts(conflicts), [conflicts]);
 
   // The saved profile is deliberately ignored rather than re-seeded into the
   // form. The form already applies the schema's own trim and case-insensitive

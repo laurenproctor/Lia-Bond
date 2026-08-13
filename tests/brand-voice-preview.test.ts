@@ -3,7 +3,7 @@ import {
   buildVoicePreview,
   PREVIEW_REVIEW,
   prohibitedPhraseMatchesInPreview,
-} from "@/lib/onboarding/preview";
+} from "@/lib/brand-voice/preview";
 import {
   BRAND_VOICE_AXES,
   BRAND_VOICE_AXIS_KEYS,
