@@ -307,6 +307,7 @@ export const CONNECTION_HEALTH_LABELS: Record<ConnectionHealthStatus, string> = 
   authorization_required: "Reauthorization required",
   insufficient_permissions: "Missing permissions",
   quota_limited: "Rate limited by Google",
+  quota_not_provisioned: "Google API access not granted",
   provider_unavailable: "Google unavailable",
   unknown_error: "Unknown error",
 };

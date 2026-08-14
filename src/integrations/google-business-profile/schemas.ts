@@ -37,12 +37,36 @@ export const googleOAuthErrorSchema = z.object({
   error_description: z.string().optional(),
 });
 
+/**
+ * One entry in a Google error's `details` array.
+ *
+ * Only `ErrorInfo` is modelled, and only the two fields that matter. The
+ * quota metadata is the point: a `RESOURCE_EXHAUSTED` response carries the
+ * limit that was hit, and a limit of **zero** means the project was never
+ * granted quota in the first place rather than having spent it. That is the
+ * one signal that separates "slow down" from "your API access application has
+ * not been approved" — two failures Google reports identically at the status
+ * line and which need completely different things from the reader.
+ *
+ * `metadata` values are strings, including the numeric ones. Google sends
+ * `"quota_limit_value": "0"`, not `0`.
+ */
+export const googleErrorDetailSchema = z.object({
+  "@type": z.string().optional(),
+  reason: z.string().optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
+});
+
 /** Google's REST failures: `{ error: { code, message, status, details } }`. */
 export const googleApiErrorSchema = z.object({
   error: z.object({
     code: z.number().int().optional(),
     message: z.string().optional(),
     status: z.string().optional(),
+    // Unknown detail shapes are dropped rather than rejected: `details` is an
+    // open union at Google, and an unrecognised entry must not turn a
+    // classifiable error into an `unexpected_response`.
+    details: z.array(z.unknown()).optional(),
   }),
 });
 
