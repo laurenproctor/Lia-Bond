@@ -560,9 +560,28 @@ from `20260801000200` and `grant delete on public.locations to authenticated`.
 
 **Files:**
 - Create: `supabase/tests/tenancy-verification.sql`
-- Create: `scripts/provisioning-race-test.sh`
-- Create: `scripts/mapping-race-test.sh`
-- Edit: `package.json`, `.github/workflows/verify.yml`
+- Create: `supabase/tests/expanded-phase-rehearsal.sql`
+- Create: `scripts/tenancy-race-test.sh`
+- Edit: `package.json`, `scripts/validate-migrations.mjs`, `.github/workflows/verify.yml`
+
+> **Two deviations from this task as first written, both made while building it.**
+>
+> *One race script, not two.* The plan named `provisioning-race-test.sh` and
+> `mapping-race-test.sh`. Each would have carried its own copy of ~200 lines of
+> identical FIFO plumbing, cleanup, and watchdog code, and the house pattern is
+> already one-script-many-rounds — `generation-race-test.sh` holds three races.
+> So both live in `scripts/tenancy-race-test.sh` as two rounds.
+>
+> *`expanded-phase-rehearsal.sql` is new, and it closes a hole in this plan.*
+> `supabase db reset` applies every migration in the directory, contraction
+> included, so the R1 state never exists locally or in CI — and T-26, the
+> assertion that the currently deployed application still works after the
+> expansion migrations land, would have been skipped on every single run. A
+> guarded section that never executes is indistinguishable from one that passed.
+> The rehearsal file reverses the contraction using 20260814000500's own
+> rollback SQL and asserts it took effect; `npm run db:verify-tenancy-expanded`
+> runs the harness against it, and T-29 checks the guard resolved correctly in
+> both directions.
 
 `tenancy-verification.sql` follows `supabase/tests/rls-verification.sql`:
 `begin;`, fixtures resolved by slug in a temporary table, `set role`
@@ -694,7 +713,7 @@ the migration is present, not skip silently — T-29).
         row; **one** `organization.created` audit row.
       - A third session as a **different** actor with the same key → `42501`,
         message containing no uuid.
-- [ ] `scripts/mapping-race-test.sh`, the same technique for D200:
+- [ ] Round 2, the same technique for D200:
       - Two sessions call `create_and_map_location` for the **same** external
         profile id under the same connection, interleaved so A's upsert commits
         while B is parked on the row lock.
@@ -707,7 +726,9 @@ the migration is present, not skip silently — T-29).
 **Scripts and CI**
 - [ ] Add to `package.json`:
       ```
-      "db:verify-tenancy": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/tenancy-verification.sql && bash scripts/provisioning-race-test.sh && bash scripts/mapping-race-test.sh"
+      "db:verify-tenancy":          "… -f rls-verification.sql -f tenancy-verification.sql && bash scripts/tenancy-race-test.sh"
+      "db:verify-tenancy-expanded": "… -f expanded-phase-rehearsal.sql -f tenancy-verification.sql"
+      "db:preflight-tenancy":       "node … scripts/tenancy-preflight.ts"
       ```
 - [ ] Add it to the `database` CI job as its own run, alongside
       `db:verify-execution` and `db:verify-generation`.
