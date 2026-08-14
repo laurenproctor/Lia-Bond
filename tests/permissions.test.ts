@@ -161,3 +161,37 @@ describe("automation_rule.manage", () => {
   it("communications_lead can toggle rules", () =>
     expect(can("communications_lead", "automation_rule.toggle")).toBe(true));
 });
+
+describe("response.publish and response.retract", () => {
+  it("are held by owners, admins, and the communications lead", () => {
+    for (const permission of ["response.publish", "response.retract"] as const) {
+      expect(can("owner", permission)).toBe(true);
+      expect(can("admin", permission)).toBe(true);
+      expect(can("communications_lead", permission)).toBe(true);
+    }
+  });
+
+  it("are withheld from the approver, keeping signing off and sending apart", () => {
+    // The separation of duties this table has kept between writing and
+    // approving would be hollow if the person who approved the text were also
+    // the one who could put it in front of the public.
+    expect(can("approver", "response.publish")).toBe(false);
+    expect(can("approver", "response.retract")).toBe(false);
+    // They keep the decision itself, which is the job they hold.
+    expect(can("approver", "response.decide")).toBe(true);
+  });
+
+  it("are withheld from analysts, viewers, and location managers", () => {
+    for (const permission of ["response.publish", "response.retract"] as const) {
+      for (const role of ["analyst", "viewer", "location_manager"] as const) {
+        expect(can(role, permission)).toBe(false);
+      }
+    }
+  });
+
+  it("do not widen who may decide a draft", () => {
+    // Adding a publish permission must not accidentally hand the
+    // communications lead the approval it is meant to stay separate from.
+    expect(can("communications_lead", "response.decide")).toBe(false);
+  });
+});

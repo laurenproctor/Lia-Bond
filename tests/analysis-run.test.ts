@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { NON_DISCUSSION_INGEST_FIELDS } from "@/domain";
 import type {
   AuditEventType,
   CreateMentionAnalysisInput,
@@ -171,6 +172,7 @@ async function ingestFresh(
     publisherName: null,
     publisherDomain: null,
     monitoringQueryId: null,
+    ...NON_DISCUSSION_INGEST_FIELDS,
     ...overrides,
   });
 
@@ -491,6 +493,7 @@ describe("processed pairs for rule execution", () => {
       publisherName: null,
       publisherDomain: null,
       monitoringQueryId: null,
+      ...NON_DISCUSSION_INGEST_FIELDS,
     });
 
     const result = await analyzeMentions(
@@ -569,6 +572,7 @@ describe("rating-only mentions", () => {
       publisherName: null,
       publisherDomain: null,
       monitoringQueryId: null,
+      ...NON_DISCUSSION_INGEST_FIELDS,
     });
 
     const provider = fakeProvider();
@@ -613,6 +617,7 @@ describe("rating-only mentions", () => {
       publisherName: null,
       publisherDomain: null,
       monitoringQueryId: null,
+      ...NON_DISCUSSION_INGEST_FIELDS,
     });
 
     await analyzeMentions({ dataSource, scope }, { provider: fakeProvider(), limit: 500 });
@@ -1284,6 +1289,7 @@ describe("observability", () => {
       publisherName: null,
       publisherDomain: null,
       monitoringQueryId: null,
+      ...NON_DISCUSSION_INGEST_FIELDS,
     });
 
     const result = await analyzeMentions(

@@ -16,6 +16,9 @@ import type {
   MonitoringQueryType,
   Platform,
   PlatformConnectionStatus,
+  PublicationAttemptStatus,
+  RedditCommunityPostureValue,
+  RedditPollRunKind,
   RecommendedAction,
   ResponseDraftStatus,
   ResponseType,
@@ -319,6 +322,48 @@ export const INTEGRATION_CAPABILITY_STATE_LABELS: Record<
   enabled: "Enabled",
   not_configured: "Not configured",
   unavailable: "Unavailable",
+};
+
+/**
+ * Reddit community postures.
+ *
+ * The three non-permissive labels say what a person has to *do*, not what the
+ * database holds. "Unknown" would be accurate and useless — it is the state of
+ * a community nobody has looked at, and the label's job is to say that
+ * somebody has to.
+ */
+export const REDDIT_COMMUNITY_POSTURE_LABELS: Record<
+  RedditCommunityPostureValue,
+  string
+> = {
+  unknown: "Rules not checked",
+  review_required: "Needs a decision",
+  allowed: "Approved for replies",
+  blocked: "Replies blocked",
+};
+
+export const REDDIT_POLL_RUN_KIND_LABELS: Record<RedditPollRunKind, string> = {
+  search: "Post search",
+  thread_refresh: "Thread refresh",
+  deletion_reconcile: "Deletion check",
+};
+
+/**
+ * Publication attempt states.
+ *
+ * `reconciliation_required` deliberately does not read as a failure. Lia does
+ * not know whether the reply was posted, and telling somebody it failed would
+ * invite exactly the retry the state exists to prevent.
+ */
+export const PUBLICATION_ATTEMPT_STATUS_LABELS: Record<
+  PublicationAttemptStatus,
+  string
+> = {
+  pending: "Publishing",
+  succeeded: "Published",
+  failed: "Failed",
+  reconciliation_required: "Checking with Reddit",
+  superseded: "Superseded",
 };
 
 export const MONITORING_QUERY_TYPE_LABELS: Record<MonitoringQueryType, string> = {
