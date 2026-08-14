@@ -415,6 +415,17 @@ export const AUDIT_ENTITY_TYPES = [
   "automation_rule",
   "brand_voice",
   "monitoring_query",
+  // Three new subjects, because "which thing did this happen to" has three
+  // genuinely different answers, and collapsing any of them would make the
+  // trail unqueryable in exactly the case somebody needs it. A Reddit monitor
+  // is not a `monitoring_query` — different table, different lifecycle. A
+  // community posture is not a `platform_connection` — it is a decision about
+  // somebody else's rules, not about Lia's access. A publication attempt is
+  // not a `response_draft` — the draft is the words, the attempt is the act of
+  // publishing them, and one draft can have several attempts.
+  "reddit_monitoring_query",
+  "reddit_community_posture",
+  "response_publication_attempt",
 ] as const;
 export const auditEntityTypeSchema = vocabulary(AUDIT_ENTITY_TYPES).schema;
 export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>;
@@ -533,6 +544,36 @@ export const AUDIT_EVENT_TYPES = [
   "onboarding.team_skipped",
   "onboarding.completed",
   "onboarding.ready_viewed",
+  // Reddit monitoring. Metadata carries counts, identifiers, and normalised
+  // codes. Two Reddit-specific exclusions are named because they are not
+  // obviously "content" and would otherwise look safe to record: a monitor's
+  // search terms are the customer's own words about their brand, so a trail of
+  // them is a trail of what a restaurant is worried about; and a subreddit
+  // name, while not Reddit's content, is still a fact about the customer that
+  // the monitor row already holds.
+  "reddit_monitor.created",
+  "reddit_monitor.updated",
+  "reddit_monitor.deleted",
+  "reddit_monitor.polled",
+  "reddit_monitor.poll_failed",
+  // A person's recorded decision about whether Lia may reply in one community,
+  // and the automatic return to review when its rules change underneath a
+  // previously granted approval.
+  "reddit_community.decision_recorded",
+  "reddit_community.review_required",
+  // Content that stopped existing at the source. Lia's own row ids and a
+  // reason code only — an audit row about deleted content that quoted it would
+  // defeat itself.
+  "reddit_content.removed",
+  "reddit_content.reconciled",
+  // Publication: the response lifecycle's public half. Claiming the right to
+  // post, the outcome, the uncertain outcome that must be reconciled against
+  // the connected account's own history rather than retried, and a retraction.
+  // No draft text, no provider message, no Reddit content.
+  "response.published",
+  "response.publish_failed",
+  "response.publish_reconciled",
+  "response.retracted",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;

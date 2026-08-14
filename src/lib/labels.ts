@@ -287,6 +287,21 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "onboarding.team_skipped": "Team invitations skipped",
   "onboarding.completed": "Setup completed",
   "onboarding.ready_viewed": "Workspace ready screen opened",
+  "reddit_monitor.created": "Reddit monitor created",
+  "reddit_monitor.updated": "Reddit monitor updated",
+  "reddit_monitor.deleted": "Reddit monitor deleted",
+  "reddit_monitor.polled": "Reddit monitor polled",
+  "reddit_monitor.poll_failed": "Reddit poll failed",
+  "reddit_community.decision_recorded": "Community reply policy decided",
+  "reddit_community.review_required": "Community rules changed, needs review",
+  "reddit_content.removed": "Reddit content removed at source",
+  "reddit_content.reconciled": "Reddit content re-verified",
+  "response.published": "Response published",
+  "response.publish_failed": "Response publishing failed",
+  // Not "failed". Lia does not know whether the reply was posted, and saying
+  // it failed would invite exactly the retry this state exists to prevent.
+  "response.publish_reconciled": "Response publishing checked with the platform",
+  "response.retracted": "Response retracted",
 };
 
 /** Sync-run outcomes, as a person would describe them. */

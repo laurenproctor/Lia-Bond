@@ -3,8 +3,9 @@
 -- Repeatable manual check that the policies in
 -- 20260801000200_row_level_security.sql actually isolate tenants.
 --
--- Execution status: **all 37 checks pass** against a local stack
--- (`supabase start`, then `supabase db reset`), as of the onboarding workflow.
+-- Execution status: **all 58 checks pass** against a local stack
+-- (`supabase start`, then `supabase db reset`), as of Reddit monitoring
+-- (sections 11 and 12). Was 37 through the onboarding workflow.
 --
 -- It did not, until section 8's delete check was corrected. That check expected
 -- an exception from an analyst's DELETE, but a DELETE gated by an RLS `using`
@@ -633,6 +634,350 @@ begin
   );
 
   reset role;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 11. Reddit monitoring.
+--
+-- Four tables and one deliberate non-table. The proofs go in this order:
+-- cross-tenant reads are refused, the two write-gated tables admit exactly the
+-- three roles that hold `monitoring.manage_queries`, the two function-written
+-- tables refuse authenticated DML entirely, and the global rate-budget table
+-- refuses every session outright.
+--
+-- Note on the shape of a refusal, restated because section 8 learned it the
+-- hard way: an INSERT blocked by a `with check` raises 42501, but an UPDATE or
+-- DELETE blocked by a `using` clause silently matches zero rows. The checks
+-- below assert whichever shape the operation actually produces, not whichever
+-- one reads more like a refusal.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  f record;
+  their_query uuid;
+  their_posture uuid;
+  visible integer;
+begin
+  select * into f from rls_fixtures;
+
+  -- Seed one row in each organization, as the service role, so the read checks
+  -- have something that genuinely exists on the other side of the fence.
+  insert into public.reddit_monitoring_queries (organization_id, name, terms)
+  values (f.harbor_id, 'rls fixture - harbor brand watch', array['harbor'])
+  returning id into their_query;
+
+  insert into public.reddit_community_postures (organization_id, subreddit, posture)
+  values (f.harbor_id, 'harborfood', 'unknown')
+  returning id into their_posture;
+
+  perform pg_temp.become(f.ushg_admin);
+
+  select count(*) into visible from public.reddit_monitoring_queries
+   where organization_id = f.harbor_id;
+  perform pg_temp.check(visible = 0, 'ushg admin cannot read harbor reddit monitors');
+
+  select count(*) into visible from public.reddit_community_postures
+   where organization_id = f.harbor_id;
+  perform pg_temp.check(visible = 0, 'ushg admin cannot read harbor community postures');
+
+  select count(*) into visible from public.reddit_poll_runs
+   where organization_id = f.harbor_id;
+  perform pg_temp.check(visible = 0, 'ushg admin cannot read harbor reddit poll runs');
+
+  select count(*) into visible from public.reddit_query_matches
+   where organization_id = f.harbor_id;
+  perform pg_temp.check(visible = 0, 'ushg admin cannot read harbor reddit query matches');
+
+  -- The row is invisible, so an update targeting it silently matches nothing
+  -- rather than raising. Both halves matter: it must not change, and it must
+  -- not be reported as changed.
+  update public.reddit_monitoring_queries set name = 'stolen' where id = their_query;
+  get diagnostics visible = row_count;
+  perform pg_temp.check(visible = 0, 'ushg admin cannot update a harbor reddit monitor');
+
+  update public.reddit_community_postures set posture = 'allowed' where id = their_posture;
+  get diagnostics visible = row_count;
+  perform pg_temp.check(visible = 0, 'ushg admin cannot update a harbor community posture');
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+  inserted_id uuid;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.ushg_admin);
+
+  -- An admin may not write a monitor into somebody else's organization, even
+  -- naming their own id in the row: the `with check` reads the row's
+  -- organization_id, not the session's.
+  begin
+    insert into public.reddit_monitoring_queries (organization_id, name, terms)
+    values (f.harbor_id, 'rls fixture - cross tenant', array['maison']);
+  exception when insufficient_privilege or check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(refused, 'ushg admin cannot insert a reddit monitor into harbor');
+
+  refused := false;
+  begin
+    insert into public.reddit_community_postures (organization_id, subreddit, posture)
+    values (f.harbor_id, 'foodnyc', 'unknown');
+  exception when insufficient_privilege or check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(refused, 'ushg admin cannot insert a community posture into harbor');
+
+  -- And may write one into their own.
+  refused := false;
+  begin
+    insert into public.reddit_monitoring_queries (organization_id, name, terms)
+    values (f.ushg_id, 'rls fixture - own monitor', array['maison laurent'])
+    returning id into inserted_id;
+  exception when insufficient_privilege or check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    not refused and inserted_id is not null,
+    'ushg admin can insert a reddit monitor into their own organization'
+  );
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.ushg_analyst);
+
+  -- Deciding what Lia watches, and whether it may speak in a community, are
+  -- the same class of act as the news-monitoring writes section 8 covers: the
+  -- three roles that hold `monitoring.manage_queries`, and not an analyst.
+  begin
+    insert into public.reddit_monitoring_queries (organization_id, name, terms)
+    values (f.ushg_id, 'rls fixture - analyst denied', array['maison']);
+  exception when insufficient_privilege or check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(refused, 'an analyst cannot insert a reddit monitor');
+
+  refused := false;
+  begin
+    insert into public.reddit_community_postures (organization_id, subreddit, posture)
+    values (f.ushg_id, 'foodnyc', 'allowed');
+  exception when insufficient_privilege or check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(refused, 'an analyst cannot record a community reply decision');
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+  comms_query uuid;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.ushg_comms_lead);
+
+  -- The communications lead is the person who actually reads a subreddit's
+  -- rules in the course of their work, so the decision is theirs to record.
+  begin
+    insert into public.reddit_monitoring_queries (organization_id, name, terms)
+    values (f.ushg_id, 'rls fixture - comms monitor', array['maison laurent'])
+    returning id into comms_query;
+  exception when insufficient_privilege or check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    not refused and comms_query is not null,
+    'a communications lead can insert a reddit monitor'
+  );
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.ushg_admin);
+
+  -- Poll runs and query matches are written by the ingest and claim functions,
+  -- never by a session. A member who could insert a match could move somebody
+  -- else's thread into their own restaurant's queue, because location
+  -- attribution is derived from exactly these rows.
+  begin
+    insert into public.reddit_poll_runs (organization_id, kind, trigger, reddit_monitoring_query_id)
+    values (f.ushg_id, 'search', 'manual', null);
+  exception when insufficient_privilege or check_violation or not_null_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(refused, 'an admin cannot insert a reddit poll run directly');
+
+  refused := false;
+  begin
+    insert into public.reddit_query_matches
+      (organization_id, reddit_monitoring_query_id, mention_id, match_score)
+    values (f.ushg_id, gen_random_uuid(), gen_random_uuid(), 1.0);
+  exception when insufficient_privilege or check_violation or foreign_key_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(refused, 'an admin cannot insert a reddit query match directly');
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+  visible integer;
+begin
+  select * into f from rls_fixtures;
+  perform pg_temp.become(f.ushg_admin);
+
+  -- The provider-global rate budget is not customer data and is not readable
+  -- by a session at all. RLS is enabled with zero policies and every grant
+  -- revoked, so both a read and a write are refused outright.
+  begin
+    select count(*) into visible from public.reddit_rate_limit_state;
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  perform pg_temp.check(refused, 'an admin cannot read the global reddit rate budget');
+
+  refused := false;
+  begin
+    insert into public.reddit_rate_limit_state (client_key_id, remaining)
+    values ('rls-fixture', 100);
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  perform pg_temp.check(refused, 'an admin cannot write the global reddit rate budget');
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+
+  -- Service role, deliberately: this is a schema check, not a policy check.
+  -- An empty `terms` array is a monitor that matches everything, and it was
+  -- accepted by the first draft of `rmq_terms_bounded` because
+  -- `array_length('{}', 1)` is **null**, not zero, and a CHECK only rejects
+  -- `false`. Pinned here so the coalesce cannot be removed as tidying.
+  begin
+    insert into public.reddit_monitoring_queries (organization_id, name, terms)
+    values (f.ushg_id, 'rls fixture - empty terms', array[]::text[]);
+  exception when check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'a reddit monitor with no required terms is refused (array_length null trap)'
+  );
+
+  -- The mirror: a monitor that names terms is accepted, so the constraint is
+  -- rejecting the empty case rather than everything.
+  refused := false;
+  begin
+    insert into public.reddit_monitoring_queries (organization_id, name, terms)
+    values (f.ushg_id, 'rls fixture - real terms', array['maison laurent']);
+  exception when check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(not refused, 'a reddit monitor with terms is accepted');
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 12. Composite tenant foreign keys on the Reddit tables.
+--
+-- The policies above stop a session reaching across the fence. These prove the
+-- *schema* stops it too, for a caller that is not a session at all — the
+-- service role, and the ingest functions running as their owner. A match row
+-- pointing at one organization's monitor and another's mention would make
+-- location attribution derive from a thread the customer cannot see.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  f record;
+  harbor_query uuid;
+  ushg_mention uuid;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+
+  insert into public.reddit_monitoring_queries (organization_id, name, terms)
+  values (f.harbor_id, 'rls fixture - fk harbor', array['harbor'])
+  returning id into harbor_query;
+
+  select id into ushg_mention from public.mentions
+   where organization_id = f.ushg_id limit 1;
+
+  -- Harbor's monitor, USHG's mention, claiming to be a USHG row.
+  begin
+    insert into public.reddit_query_matches
+      (organization_id, reddit_monitoring_query_id, mention_id, match_score)
+    values (f.ushg_id, harbor_query, ushg_mention, 1.0);
+  exception when foreign_key_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'a reddit query match cannot join one organization''s monitor to another''s mention'
+  );
+
+  -- And the same row claiming to be a Harbor one, which fails on the other leg.
+  refused := false;
+  begin
+    insert into public.reddit_query_matches
+      (organization_id, reddit_monitoring_query_id, mention_id, match_score)
+    values (f.harbor_id, harbor_query, ushg_mention, 1.0);
+  exception when foreign_key_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'a reddit query match cannot claim a mention belonging to another organization'
+  );
+
+  refused := false;
+  begin
+    insert into public.reddit_poll_runs
+      (organization_id, kind, trigger, reddit_monitoring_query_id)
+    values (f.ushg_id, 'search', 'scheduled', harbor_query);
+  exception when foreign_key_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'a reddit poll run cannot be attributed to another organization''s monitor'
+  );
 end;
 $$;
 

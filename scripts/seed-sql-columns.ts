@@ -81,6 +81,12 @@ export const SEED_TABLE_COLUMNS = {
     "language", "publishedAt", "receivedAt", "status", "sentiment", "riskLevel",
     "relevanceScore", "engagementScore", "rawPayload",
     "publisherName", "publisherDomain", "isSyndicated", "monitoringQueryId",
+    // Discussion fields. Written rather than excluded, unlike the sync-history
+    // fields below: a community, a score, and a comment count are part of what
+    // the fixture thread *is*, in the same way its title and body are — not a
+    // claim that an import happened.
+    "conversationRootExternalId", "sourceCommunity", "sourceScore",
+    "sourceCommentCount", "sourceIsLocked", "sourceIsArchived", "sourceIsNsfw",
     "createdAt", "updatedAt",
   ],
   mention_analyses: [
@@ -218,5 +224,10 @@ export const SEED_COLUMN_EXCLUSIONS: Record<string, readonly string[]> = {
     "externalResourceName", "authorAvatarUrl", "authorIsAnonymous",
     "sourceUpdatedAt", "sourceReplyText", "sourceReplyUpdatedAt",
     "sourceMetadata", "lastSyncedAt",
+    // Same reasoning, for the two discussion fields that are sync history
+    // rather than thread content: a verification instant would claim the
+    // deletion-reconciliation pass has run against these fixtures, and a
+    // removal instant would claim content was withdrawn that never existed.
+    "sourceRemovedAt", "sourceLastVerifiedAt",
   ],
 };
