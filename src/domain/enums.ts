@@ -542,6 +542,19 @@ export const AUDIT_EVENT_TYPES = [
   // "where did this restaurant record come from" is the question, and one
   // answer is a person and the other is Google.
   "location.created",
+  // The three location-change events partition the editable fields between
+  // them, and the partition is the point. `location.updated` covers identity,
+  // address, slug, and timezone; it is deliberately **not** emitted for a
+  // status or manager change, because those have their own events. A generic
+  // event that also fired for them would make "who changed this restaurant's
+  // address" return manager reassignments too, and the specific events would
+  // stop being worth having. An edit touching two partitions emits two events;
+  // a manager-only edit emits one.
+  "location.updated",
+  // Lifecycle: setup / active / review / inactive. A reporting and retirement
+  // state, not a processing switch — nothing in the product pauses collection,
+  // analysis, or rule execution on the strength of it.
+  "location.status_changed",
   // Integration lifecycle. Every consequential connection change appears here;
   // none of these events may carry tokens, authorization codes, or state values.
   "integration.oauth_started",

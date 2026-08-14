@@ -219,6 +219,18 @@ export function conflictTarget(table: string): string {
  * against a real database the moment `mentions` had more than zero rows.
  */
 export const SEED_COLUMN_EXCLUSIONS: Record<string, readonly string[]> = {
+  organizations: [
+    // Runtime idempotency evidence, not seed data. `provision_request_key`
+    // records which client submission created an organization, so that a
+    // double-clicked form returns the first organization instead of minting a
+    // second (see 20260814000100). A seeded tenant was not created by any
+    // submission, so there is no key to record — and inventing one would make
+    // the column read as though a browser somewhere had produced these rows.
+    // Same reasoning as `mentions`' sync-history columns below: null is the
+    // honest value for every seeded row, in every environment, so the column
+    // is excluded rather than seeded at null.
+    "provisionRequestKey",
+  ],
   users: [
     // STORED GENERATED from first_name and last_name (see the user_name_parts
     // migration). Postgres refuses an INSERT that names a generated column,

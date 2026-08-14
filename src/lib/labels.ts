@@ -248,6 +248,8 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "integration.profile_connected": "Profile connected",
   "integration.profile_mapped": "Profile mapped to a location",
   "location.created_from_integration": "Location created from an integration",
+  "location.updated": "Location details updated",
+  "location.status_changed": "Location status changed",
   "integration.disconnected": "Integration disconnected",
   "integration.credentials_revoked": "Credentials revoked",
   // Named for what actually happened. "Revocation failed" is the honest label:
