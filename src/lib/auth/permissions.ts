@@ -27,6 +27,8 @@ export const PERMISSIONS = [
   "automation_rule.manage",
   "brand_voice.update",
   "location.update_manager",
+  "location.create",
+  "location.update",
   "organization.manage_members",
   "organization.update",
   "onboarding.manage",
@@ -156,6 +158,41 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // reason this permission is new rather than a reuse of `response.decide`.
   "brand_voice.update": ["owner", "admin", "communications_lead"],
   "location.update_manager": ["owner", "admin"],
+  // Adding a restaurant to the portfolio, and editing what one is.
+  //
+  // Neither is a reuse of `location.update_manager`, deliberately. That one is
+  // about *who holds authority over a site*, which is why it is narrower than
+  // the general write gate — folding "edit the address" into it makes the name
+  // a lie in one direction or the other. Nor a reuse of `onboarding.manage`:
+  // first-run setup and ongoing administration are different authorities with
+  // different lifetimes, and an organization that finished onboarding a year
+  // ago still needs to add its eleventh restaurant.
+  //
+  // Same two roles as `location.update_manager` today, so the split costs
+  // nothing now and gives a future "regional director may edit their own
+  // sites" role somewhere to attach.
+  //
+  // These match the database exactly once the contraction migration
+  // (20260814000500) lands: `locations_insert` and `locations_update` name
+  // owner and admin and nobody else. Before that migration the policies are
+  // still the old `can_write_in_organization`, which is wider — the expansion
+  // phase deliberately keeps them that way so the currently deployed
+  // application keeps working, and this permission is the narrower gate in the
+  // meantime.
+  //
+  // Location managers are absent for the same reason they are absent from
+  // `integration.manage_profiles`: creating a restaurant record is an
+  // organization-wide decision with no location to scope them to, and under
+  // the old policy a location manager could reassign `manager_user_id` to
+  // themselves — the exact widening `location.update_manager` exists to stop.
+  //
+  // Communications leads are absent too, and that is not a demotion: mapping a
+  // Google listing still brings a location into existence for them, through
+  // `create_and_map_location`, which cannot produce one without binding a
+  // profile to it. Creation as a side effect of mapping, never as a capability
+  // of its own.
+  "location.create": ["owner", "admin"],
+  "location.update": ["owner", "admin"],
   "organization.manage_members": ["owner", "admin"],
   // Who runs the roster and who defines the organization's identity are
   // different questions — this is deliberately not a reuse of

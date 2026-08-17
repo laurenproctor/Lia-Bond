@@ -465,6 +465,25 @@ describe("saving mappings", () => {
     expect(types).toContain("integration.profile_connected");
     expect(types).toContain("integration.profile_mapped");
     expect(types).toContain("location.created_from_integration");
+
+    // Counts, not just presence.
+    //
+    // The create branch no longer writes these out here — it calls
+    // `locations.createAndMapFromIntegration`, which writes all three inside
+    // the same transaction as the location and the binding, so that a location
+    // can never exist without its provenance. The failure that swap invites is
+    // the opposite of a missing event: leaving the old `recordAuditEvent` calls
+    // in place alongside the new ones, which doubles every row and is invisible
+    // to a `toContain` assertion.
+    //
+    // Two decisions here: one `map_existing` (which still audits from the
+    // service) and one `create_location` (which audits from the repository).
+    // So exactly one location creation, and exactly two of each profile event.
+    const count = (type: string) => types.filter((entry) => entry === type).length;
+
+    expect(count("location.created_from_integration")).toBe(1);
+    expect(count("integration.profile_connected")).toBe(2);
+    expect(count("integration.profile_mapped")).toBe(2);
   });
 
   it("skips what the user chose to skip, and records nothing for it", async () => {

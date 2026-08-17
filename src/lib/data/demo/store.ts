@@ -69,6 +69,18 @@ interface RuntimeStore {
    * would carry it into anything that ever serialises an `OAuthState`.
    */
   stateHashes: Map<string, string>;
+  /**
+   * Provisioning request key → the organization it created.
+   *
+   * Beside the records for the same reason `stateHashes` is: the key is
+   * idempotency plumbing, not a fact about an organization that any screen
+   * renders, and putting it on the domain object would carry it into anything
+   * that ever serialises one. The database keeps it as a column with a partial
+   * unique index — the index *is* the lock there — but nothing reads it back
+   * except the replay arm, which is why `provision_request_key` is also
+   * excluded from the seed generator's column list.
+   */
+  provisionRequestKeys: Map<string, string>;
   credentials: Map<string, SealedCredentialRecord>;
   /**
    * Synchronisation history.
@@ -150,6 +162,7 @@ function freshRuntimeStore(): RuntimeStore {
   return {
     oauthStates: [],
     stateHashes: new Map(),
+    provisionRequestKeys: new Map(),
     credentials: new Map(),
     syncRuns: [],
     syncRunSequence: 0,

@@ -1493,6 +1493,53 @@ not touched by this plan at all.*
 
 ---
 
+### Task F2b: Merge reconciliation with `reddit-monitoring-foundation`
+
+**Files:**
+- Create: `supabase/migrations/2026081x000100_audit_vocabulary_merge.sql` (at merge time, numbered after both branches)
+
+Discovered 2026-08-17, on resuming. `reddit-monitoring-foundation` is five
+commits off the same base as this branch and adds
+`20260813000600_reddit_audit_vocabulary.sql`, which redefines
+`audit_events_known_event_type` with thirteen new literals — and sorts *before*
+this branch's `20260814000400`, whose list was copied from `20260812000700` and
+therefore predates them.
+
+On a merged history, mine applies last and drops all thirteen, including
+`response.published` and `response.publish_failed`. This is D93 exactly.
+
+- [ ] **Do not edit either branch's migration.** Each is honest about what its
+      branch knew, and rewriting one to know about the other is how the history
+      stops explaining itself. D93 settled this: the union goes in a new
+      migration where a reader can see it was a merge artefact.
+- [ ] Create the merge migration carrying the union of both lists, numbered so
+      it sorts after `20260814000400`, and make it the new last word.
+- [ ] `src/domain/enums.ts` takes both sides of the merge, so
+      `tests/audit-vocabulary-migrations.test.ts` — which parses the real SQL in
+      both directions — is what proves the union is complete. It is the reason
+      this fails loudly at merge rather than silently in production.
+- [ ] Resolve the other overlapping files by taking both sides:
+      `src/lib/labels.ts`, `src/lib/auth/permissions.ts`,
+      `scripts/seed-sql-columns.ts`, `package.json`,
+      `.github/workflows/verify.yml`. Review rather than auto-resolve
+      `src/lib/data/demo/index.ts` and `src/lib/data/supabase/index.ts` — both
+      branches add methods to the same object literals.
+- [ ] Re-run `npm run db:verify-tenancy` after the merge. **T-20 is the one to
+      watch:** it deletes a location and asserts every reference nulls cleanly.
+      See the note below.
+
+**Unrelated defect found on that branch while checking this, worth fixing there
+rather than here.** `rmq_location_same_org` in `20260813000700` is a composite
+foreign key with a *bare* `on delete set null`, and
+`reddit_monitoring_queries.organization_id` is `not null` — so deleting a
+location raises `23502` instead of clearing `location_id`. It is the same trap
+D206 records for this branch's four constraints; the fix is
+`on delete set null (location_id)`. Not reachable from any request path (nothing
+hard-deletes a location, and `20260814000500` revokes the privilege), but
+reachable from service-role paths, migrations, and T-20 itself.
+
+---
+
 ### Task F3: Rollout and rollback
 
 **Files:**

@@ -243,6 +243,7 @@ export async function saveGoogleLocationMappings(
       const previousLocationId = existing?.locationId ?? null;
 
       let locationId: string;
+      let profile: PlatformProfile;
 
       if (decision.action === "map_existing") {
         // Membership of the caller's own organization, re-checked server-side.
@@ -262,87 +263,112 @@ export async function saveGoogleLocationMappings(
         }
 
         locationId = decision.locationId;
+
+        profile = await context.dataSource.platformProfiles.upsert(context.scope, {
+          platformConnectionId: input.connectionId,
+          locationId,
+          externalProfileId: live.externalProfileId,
+          externalProfileName: live.displayName,
+          externalAccountId: input.externalAccountId,
+          profileUrl: validProfileUrl(live.profileUrl),
+          status: "active",
+          verificationState: live.verificationState ?? null,
+          providerMetadata: profileMetadata(live),
+          lastConfirmedAt: confirmedAt,
+        });
+
+        // Two events, because they answer different questions. "Which external
+        // profiles did we start monitoring" is a connection question; "which
+        // restaurant is this listing" is a location question, and an auditor
+        // chasing a misrouted review needs the second one.
+        if (!existing) {
+          await recordAuditEvent(context, {
+            eventType: "integration.profile_connected",
+            entityType: "platform_profile",
+            entityId: profile.id,
+            previousState: null,
+            newState: {
+              externalProfileId: profile.externalProfileId,
+              externalProfileName: profile.externalProfileName,
+            },
+            metadata: { platform: connection.platform },
+          });
+        }
+
+        if (previousLocationId !== locationId) {
+          await recordAuditEvent(context, {
+            eventType: "integration.profile_mapped",
+            entityType: "platform_profile",
+            entityId: profile.id,
+            previousState: { locationId: previousLocationId },
+            newState: { locationId },
+            metadata: {
+              platform: connection.platform,
+              externalProfileId: profile.externalProfileId,
+              createdLocation: false,
+            },
+          });
+        }
       } else {
+        // Creating the location and binding the listing to it are one call,
+        // and one transaction.
+        //
+        // This used to be four steps out here — create the location, audit it,
+        // upsert the profile, audit that — and the location could commit while
+        // any of the three that follow it failed, leaving a restaurant in the
+        // portfolio that no Google listing pointed at. `createAndMapFromIntegration`
+        // makes that unrepresentable: the profile set is required, the binding
+        // happens inside, and nothing commits unless all of it does.
+        //
+        // It is also what lets `locations_insert` narrow to owner/admin while
+        // a communications lead keeps mapping listings. The function derives
+        // the organization from the connection and checks
+        // `integration.manage_profiles`'s own role list, so mapping authority
+        // stays where it was without handing anybody the ability to create a
+        // location on its own.
+        //
+        // **No audit events here, deliberately.** All three —
+        // `location.created_from_integration`, `integration.profile_connected`
+        // for a profile row this call created, and `integration.profile_mapped`
+        // — are written inside the same transaction as the writes they
+        // describe. Adding them back here would double every one of them.
         const address = addressFromProfile(live);
-        const created = await context.dataSource.locations.create(context.scope, {
-          name: decision.name,
-          ...address,
-          timezone: decision.timezone,
-          // Onboarding, not active: a restaurant that arrived through a Google
-          // listing has not been set up in Lia, and marking it active would
-          // flatter every portfolio roll-up that counts active locations.
-          status: "setup",
-          managerUserId: null,
-        });
-
-        result.createdLocations.push(created);
-        locationIds.add(created.id);
-        locationId = created.id;
-
-        await recordAuditEvent(context, {
-          eventType: "location.created_from_integration",
-          entityType: "location",
-          entityId: created.id,
-          previousState: null,
-          newState: { name: created.name, slug: created.slug, status: created.status },
-          metadata: {
-            platform: connection.platform,
-            externalProfileId: live.externalProfileId,
+        const mapped = await context.dataSource.locations.createAndMapFromIntegration(
+          context.scope,
+          {
+            platformConnectionId: input.connectionId,
+            profiles: [
+              {
+                externalProfileId: live.externalProfileId,
+                externalProfileName: live.displayName,
+                externalAccountId: input.externalAccountId,
+                profileUrl: validProfileUrl(live.profileUrl),
+                verificationState: live.verificationState ?? null,
+                providerMetadata: profileMetadata(live),
+              },
+            ],
+            name: decision.name,
+            ...address,
+            timezone: decision.timezone,
           },
-        });
-      }
+        );
 
-      const profile = await context.dataSource.platformProfiles.upsert(context.scope, {
-        platformConnectionId: input.connectionId,
-        locationId,
-        externalProfileId: live.externalProfileId,
-        externalProfileName: live.displayName,
-        externalAccountId: input.externalAccountId,
-        profileUrl: validProfileUrl(live.profileUrl),
-        status: "active",
-        verificationState: live.verificationState ?? null,
-        providerMetadata: profileMetadata(live),
-        lastConfirmedAt: confirmedAt,
-      });
+        const bound = mapped.profiles[0];
+        // The function returns one row per profile it bound, and it was given
+        // exactly one. An empty result would mean the contract changed.
+        if (!bound) throw conflict("That Google location could not be mapped.");
+
+        locationId = mapped.location.id;
+        profile = bound;
+        result.createdLocations.push(mapped.location);
+        locationIds.add(mapped.location.id);
+      }
 
       claimedLocationIds.add(locationId);
       if (previousLocationId && previousLocationId !== locationId) {
         claimedLocationIds.delete(previousLocationId);
       }
       result.mappedProfiles.push(profile);
-
-      // Two events, because they answer different questions. "Which external
-      // profiles did we start monitoring" is a connection question; "which
-      // restaurant is this listing" is a location question, and an auditor
-      // chasing a misrouted review needs the second one.
-      if (!existing) {
-        await recordAuditEvent(context, {
-          eventType: "integration.profile_connected",
-          entityType: "platform_profile",
-          entityId: profile.id,
-          previousState: null,
-          newState: {
-            externalProfileId: profile.externalProfileId,
-            externalProfileName: profile.externalProfileName,
-          },
-          metadata: { platform: connection.platform },
-        });
-      }
-
-      if (previousLocationId !== locationId) {
-        await recordAuditEvent(context, {
-          eventType: "integration.profile_mapped",
-          entityType: "platform_profile",
-          entityId: profile.id,
-          previousState: { locationId: previousLocationId },
-          newState: { locationId },
-          metadata: {
-            platform: connection.platform,
-            externalProfileId: profile.externalProfileId,
-            createdLocation: decision.action === "create_location",
-          },
-        });
-      }
     } catch (error) {
       // Per-row rather than aborting the batch: a user who mapped nine
       // locations correctly and one that collided should keep the nine.
