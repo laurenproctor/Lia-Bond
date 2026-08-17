@@ -15,6 +15,7 @@ import {
 import { requireSession } from "@/lib/auth/session";
 import { getDataSource } from "@/lib/data";
 import { appOrigin } from "@/lib/env";
+import { setActiveOrganizationCookie } from "@/lib/tenancy/organization-context";
 
 /**
  * Invitations.
@@ -170,6 +171,20 @@ export async function acceptInvitationAction(
       session.id,
     );
 
+    // Select the organization they just joined.
+    //
+    // Without this, acceptance is silent about where it put you: the active
+    // organization stays whatever it was. That was invisible while an invitee
+    // could only ever belong to one organization — `getOrganizationContext`
+    // falls back to the first membership, which was the right one by accident.
+    // It stops being right the moment somebody belongs to two, which is now an
+    // ordinary thing to do, and the symptom would be accepting an invitation
+    // and landing in the wrong workspace.
+    await setActiveOrganizationCookie(result.organizationId);
+
+    // The layout, not just settings: the sidebar, the switcher, and the badge
+    // counts all read the active organization, and all three just changed.
+    revalidatePath("/", "layout");
     revalidatePath("/settings");
     return result;
   });

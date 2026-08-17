@@ -829,10 +829,23 @@ export function createDemoDataSource(): LiaDataSource {
         const taken = new Set(store().organizations.map((row) => row.slug));
         const timestamp = nowIso();
 
+        // Keyed off the slug rather than the name, because the slug is the part
+        // that is actually unique.
+        //
+        // `seedId` is a deterministic hash, so `organization:${name}:${userId}`
+        // returned the *same id* both times one person created two
+        // organizations with the same name — two rows sharing a primary key,
+        // which Postgres would never produce: it uses `gen_random_uuid()` and
+        // resolves the name collision on the slug instead. Same-name creation
+        // stopped being hypothetical the moment organizations could be created
+        // from inside the product, and `uniqueSlug` has already appended a
+        // suffix by this point, so it is the honest key.
+        const slug = uniqueSlug(name, taken, "organization");
+
         const organization = {
-          id: seedId(`organization:${name}:${input.userId}`),
+          id: seedId(`organization:${slug}`),
           name,
-          slug: uniqueSlug(name, taken, "organization"),
+          slug,
           industry: input.industry?.trim() || "Restaurant group",
           websiteUrl: null,
           defaultTimezone: input.timezone?.trim() || "UTC",

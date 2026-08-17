@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Check, ChevronsUpDown, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Check, ChevronsUpDown, Loader2, Plus } from "lucide-react";
 import { switchOrganizationAction } from "@/app/actions/organization";
 import { cn } from "@/lib/cn";
 import { MEMBERSHIP_ROLE_LABELS } from "@/lib/labels";
@@ -30,6 +32,7 @@ export function OrgSwitcher({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const containerRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
 
   useEffect(() => {
     if (!open) return;
@@ -62,6 +65,23 @@ export function OrgSwitcher({
         return;
       }
       setOpen(false);
+
+      // Navigate, rather than staying put and re-rendering.
+      //
+      // Switching used to leave the browser on whatever URL it was on. On
+      // `/overview` that is invisible; on any record-detail route it is a 404,
+      // because the page re-renders under the new organization's scope and asks
+      // it for the old organization's record id. The lookup fails safely — that
+      // is the scope working — but `notFound()` is a poor way to learn you
+      // changed tenant.
+      //
+      // `/overview` unconditionally, rather than "stay put when the route is
+      // tenant-agnostic": that safe set is not stable. `/mentions`,
+      // `/responses`, and `/escalations` all carry record ids in query params
+      // today, and a rule that has to be re-derived every time a screen gains a
+      // selection parameter will be wrong within a workflow or two. One
+      // destination cannot rot.
+      router.push("/overview");
     });
   }
 
@@ -104,16 +124,22 @@ export function OrgSwitcher({
       </button>
 
       {open ? (
-        <div
-          role="listbox"
-          aria-label="Organization"
-          className="absolute top-full left-0 z-30 mt-1.5 w-[min(17rem,calc(100vw-2rem))] overflow-hidden rounded-card border border-gray-200 bg-white shadow-panel"
-        >
+        <div className="absolute top-full left-0 z-30 mt-1.5 w-[min(17rem,calc(100vw-2rem))] overflow-hidden rounded-card border border-gray-200 bg-white shadow-panel">
           <p className="px-3 pt-3 pb-1 text-[11px] font-semibold tracking-wide text-gray-500 uppercase">
             Your organizations
           </p>
 
-          <ul className="max-h-64 overflow-y-auto pb-1.5">
+          {/* `role="listbox"` belongs on the list, not on the popover.
+              Everything a listbox contains is announced as an option, and the
+              popover also holds an error line and the create link — neither of
+              which is an organization anybody can select. Putting the role here
+              keeps the options list honest and leaves the rest as ordinary
+              content. */}
+          <ul
+            role="listbox"
+            aria-label="Organization"
+            className="max-h-64 overflow-y-auto pb-1.5"
+          >
             {organizations.map((entry) => (
               <li key={entry.organization.id}>
                 <button
@@ -145,6 +171,23 @@ export function OrgSwitcher({
               {error}
             </p>
           ) : null}
+
+          {/* Outside the listbox, deliberately: it is not one of the caller's
+              organizations and must not be announced as a selectable option.
+              Rendered for everyone regardless of their role here — creating an
+              organization is a property of holding an account, not of any
+              standing in the one currently active, so there is no permission to
+              check and none should be added. */}
+          <div className="border-t border-gray-200 p-1.5">
+            <Link
+              href="/organizations/new"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] font-medium text-gray-700 hover:bg-gray-50"
+            >
+              <Plus className="size-4 shrink-0 text-gray-400" aria-hidden />
+              Create organization
+            </Link>
+          </div>
         </div>
       ) : null}
     </div>

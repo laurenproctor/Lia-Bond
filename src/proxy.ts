@@ -77,6 +77,14 @@ export const PRODUCT_PATHS = [
   // wizard writes to an organization, so there is nothing an anonymous visitor
   // could do here but see a redirect from the layout instead of a sign-in form.
   "/onboarding",
+  // Creating an organization. Here for the same reason `/onboarding` is, and it
+  // is not optional: the route sits outside `(app)` precisely because it cannot
+  // depend on an organization existing, so nothing above it would bounce an
+  // anonymous request. Left off this list it would fall through the denylist to
+  // a page that calls `requireSession()` and throws, which is the 500 this gate
+  // exists to turn into a redirect. Segment-matched, so `/organizations/new`
+  // and anything added under it are covered by the one entry.
+  "/organizations",
   "/api",
 ];
 
