@@ -5,7 +5,7 @@ import {
   LocationComparisonCard,
   type LocationRow,
 } from "@/components/overview/location-comparison-card";
-import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import { FilterBar } from "@/components/ui/filter-bar";
@@ -17,7 +17,8 @@ import { SelectFilter } from "@/components/ui/select-filter";
 import { LocationStatusBadge } from "@/components/ui/status-badge";
 import { formatDuration, formatNumber, formatPercent, formatRating } from "@/lib/format";
 import { getDataSource } from "@/lib/data";
-import { getOrganizationScope } from "@/lib/tenancy/organization-context";
+import { can } from "@/lib/auth/permissions";
+import { getOrganizationContext } from "@/lib/tenancy/organization-context";
 import type { Kpi } from "@/lib/view-models/kpi";
 import type { Location } from "@/domain";
 import type { LocationMetrics } from "@/lib/data/types";
@@ -160,7 +161,9 @@ function buildPortfolioKpis(rows: PortfolioRow[]): Kpi[] {
 }
 
 export default async function LocationsPage() {
-  const scope = await getOrganizationScope();
+  const context = await getOrganizationContext();
+  const scope = context.scope;
+  const canCreate = can(context.role, "location.create");
   const dataSource = await getDataSource();
 
   const [locations, locationMetrics, members] = await Promise.all([
@@ -196,9 +199,18 @@ export default async function LocationsPage() {
         title="Locations"
         description="Portfolio performance, connected profiles, and per-location settings."
         actions={
-          <Button variant="primary" icon={Plus}>
-            Add location
-          </Button>
+          // Rendered only for roles that can act. A disabled button telling
+          // somebody they may not do the thing is the pattern D188 rejected on
+          // the rules screen: no action at all beats a dead control.
+          //
+          // Row navigation, search, and the status filter are still inert —
+          // they are the next task. This is here so the screens behind it are
+          // reachable at all.
+          canCreate ? (
+            <ButtonLink href="/locations/new" variant="primary" icon={Plus}>
+              Add location
+            </ButtonLink>
+          ) : null
         }
       >
         <FilterBar>
