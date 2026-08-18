@@ -422,12 +422,28 @@ lightest authenticated request Google offers on this scope.
 | `authorization_required` | Grant revoked or unreadable | `action_required` |
 | `insufficient_permissions` | Scope missing | `action_required` |
 | `quota_limited` | Rate limited | `connected` |
+| `quota_not_provisioned` | Google has granted the project **no** quota | `action_required` |
 | `provider_unavailable` | Google 5xx or timeout | `connected` |
 | `unknown_error` | Unclassified | `connected` |
 
 Quota limits and outages are Google's problem and they pass — telling an
 operator their integration is broken would send them to a consent screen that
 fixes nothing.
+
+`quota_not_provisioned` is the exception, and it is worth understanding why it
+is separate from `quota_limited`. Both arrive from Google as
+`RESOURCE_EXHAUSTED`, and the only thing that distinguishes them is the
+`quota_limit_value` in the error's `ErrorInfo` detail: a limit that reads `0`
+was never granted rather than spent. That difference decides everything
+downstream. Throttling passes on its own, so it is not retried into an error
+message and it does not disturb the connection's status. A limit of zero is
+permanent until somebody acts in Google Cloud (§16), so it is **not** retried —
+backoff only reaches the same failure more slowly — and it moves the connection
+to `action_required`, because a connection that will fetch nothing until an
+application is approved is not honestly described as connected.
+
+It stays out of `HEALTH_STATUSES_NEEDING_ACTION` even so: that list means
+"re-consenting fixes this", and here re-consenting fixes nothing.
 
 `token_expiring` is only reported when there is **no** refresh token. With one,
 an expiring access token is routine and renews itself.
@@ -567,7 +583,9 @@ Guarantees:
 | "started for a different organization" | Organization switched mid-flow | Switch back and start again. |
 | "no Business Profile accounts" | The Google user administers none | Sign in with an account that manages the listings, or be granted access in Google. |
 | "missing a Google permission" | `business.manage` declined | Reauthorize and accept every permission. |
-| "rate-limiting requests" | Google quota | Wait. Request a higher quota in Cloud Console. |
+| "rate-limiting requests" | Genuine throttling — a quota that exists and was spent | Wait. Request a higher quota in Cloud Console. |
+| "has not granted this server access to the Business Profile APIs yet" | Quota is zero: the API access application is unapproved, or approved on a different Cloud project than the one this `GOOGLE_CLIENT_ID` belongs to | Check the application (§16). Waiting and raising quota both do nothing until it is approved. |
+| Connecting succeeds, then fails immediately with a quota error | Same as above. Almost always this, in fact: the account listing is one request on a seconds-old grant, so there is no request volume to have exceeded. | As above. |
 | Locations list is empty | Wrong account selected | Use the account selector; groups often hold several. |
 | "already mapped to a different Google location" | One Lia location, two Google listings | Change or skip one. |
 | Reconnect leaves mappings inactive | Reconnected as a *new* connection rather than reauthorizing | Use Reauthorize. |
