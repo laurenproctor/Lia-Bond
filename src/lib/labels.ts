@@ -16,6 +16,9 @@ import type {
   MonitoringQueryType,
   Platform,
   PlatformConnectionStatus,
+  PublicationAttemptStatus,
+  RedditCommunityPostureValue,
+  RedditPollRunKind,
   RecommendedAction,
   ResponseDraftStatus,
   ResponseType,
@@ -284,6 +287,21 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "onboarding.team_skipped": "Team invitations skipped",
   "onboarding.completed": "Setup completed",
   "onboarding.ready_viewed": "Workspace ready screen opened",
+  "reddit_monitor.created": "Reddit monitor created",
+  "reddit_monitor.updated": "Reddit monitor updated",
+  "reddit_monitor.deleted": "Reddit monitor deleted",
+  "reddit_monitor.polled": "Reddit monitor polled",
+  "reddit_monitor.poll_failed": "Reddit poll failed",
+  "reddit_community.decision_recorded": "Community reply policy decided",
+  "reddit_community.review_required": "Community rules changed, needs review",
+  "reddit_content.removed": "Reddit content removed at source",
+  "reddit_content.reconciled": "Reddit content re-verified",
+  "response.published": "Response published",
+  "response.publish_failed": "Response publishing failed",
+  // Not "failed". Lia does not know whether the reply was posted, and saying
+  // it failed would invite exactly the retry this state exists to prevent.
+  "response.publish_reconciled": "Response publishing checked with the platform",
+  "response.retracted": "Response retracted",
 };
 
 /** Sync-run outcomes, as a person would describe them. */
@@ -320,6 +338,48 @@ export const INTEGRATION_CAPABILITY_STATE_LABELS: Record<
   enabled: "Enabled",
   not_configured: "Not configured",
   unavailable: "Unavailable",
+};
+
+/**
+ * Reddit community postures.
+ *
+ * The three non-permissive labels say what a person has to *do*, not what the
+ * database holds. "Unknown" would be accurate and useless — it is the state of
+ * a community nobody has looked at, and the label's job is to say that
+ * somebody has to.
+ */
+export const REDDIT_COMMUNITY_POSTURE_LABELS: Record<
+  RedditCommunityPostureValue,
+  string
+> = {
+  unknown: "Rules not checked",
+  review_required: "Needs a decision",
+  allowed: "Approved for replies",
+  blocked: "Replies blocked",
+};
+
+export const REDDIT_POLL_RUN_KIND_LABELS: Record<RedditPollRunKind, string> = {
+  search: "Post search",
+  thread_refresh: "Thread refresh",
+  deletion_reconcile: "Deletion check",
+};
+
+/**
+ * Publication attempt states.
+ *
+ * `reconciliation_required` deliberately does not read as a failure. Lia does
+ * not know whether the reply was posted, and telling somebody it failed would
+ * invite exactly the retry the state exists to prevent.
+ */
+export const PUBLICATION_ATTEMPT_STATUS_LABELS: Record<
+  PublicationAttemptStatus,
+  string
+> = {
+  pending: "Publishing",
+  succeeded: "Published",
+  failed: "Failed",
+  reconciliation_required: "Checking with Reddit",
+  superseded: "Superseded",
 };
 
 export const MONITORING_QUERY_TYPE_LABELS: Record<MonitoringQueryType, string> = {

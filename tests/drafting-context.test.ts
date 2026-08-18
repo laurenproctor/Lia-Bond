@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DraftingPromptContext } from "@/ai/anthropic/drafting-prompt";
 import {
   DEFAULT_BRAND_VOICE,
+  NON_DISCUSSION_INGEST_FIELDS,
   type BrandVoiceProfile,
   type Location,
   type Mention,
@@ -70,6 +71,7 @@ function baseMention(overrides: Partial<Mention> = {}): Mention {
     publisherDomain: null,
     isSyndicated: false,
     monitoringQueryId: null,
+    ...NON_DISCUSSION_INGEST_FIELDS,
     createdAt: "2026-08-10T12:05:00.000Z",
     updatedAt: "2026-08-10T12:05:00.000Z",
     ...overrides,
