@@ -186,11 +186,38 @@ export const PLATFORM_CONNECTION_STATUS_LABELS: Record<
   error: "Connection error",
 };
 
+/**
+ * What each location status means, operationally.
+ *
+ * Written down here, beside the labels, because the labels are the only place
+ * most people ever meet these words and a meaning kept somewhere else drifts
+ * from the word within a workflow or two.
+ *
+ * - **setup** — the record exists but the restaurant is not in service yet.
+ *   Excluded from portfolio roll-ups and the comparison card. Every manually
+ *   created and every integration-created location starts here.
+ * - **active** — in service, counted everywhere.
+ * - **review** — an operator flag meaning "watch this one". Counted in
+ *   roll-ups exactly like `active`, because it describes attention rather than
+ *   service.
+ * - **inactive** — retired. Excluded from roll-ups. Every mention, mapping,
+ *   draft, escalation, metric, and audit row is retained, and reactivating
+ *   restores the location with its history intact.
+ *
+ * **No pipeline branches on any of them.** Google review sync, news polling,
+ * analysis, and rule execution are all status-blind, so a retired location goes
+ * on receiving whatever its mapped profiles bring in. That is why `inactive`
+ * reads "Inactive" and not "Paused": pausing is a thing this product does not
+ * do yet, and a label promising it would be the interface lying about the code.
+ * The location screen says so in as many words. When a real pause arrives it
+ * should be its own control covering every pipeline, not a lifecycle value
+ * quietly acquiring a second meaning.
+ */
 export const LOCATION_STATUS_LABELS: Record<LocationStatus, string> = {
   setup: "Onboarding",
   active: "Active",
   review: "Under review",
-  inactive: "Paused",
+  inactive: "Inactive",
 };
 
 export const MEMBERSHIP_ROLE_LABELS: Record<MembershipRole, string> = {
