@@ -77,7 +77,9 @@ nothing with it but the root layout's font.
 | `/responses` | Response library, plus a server-rendered detail pane selected via `?selected=` that embeds the existing response composer — approve, reject, and save draft all work; approving a dirty composer carries its text into the same write as the decision; publish remains disabled | repositories |
 | `/escalations` | Escalation centre, plus a server-rendered, read-only detail pane selected via `?selected=` showing the case's audit trail from `audit_events` | repositories |
 | `/insights` | Cross-channel analytics | repositories + typed fixture |
-| `/locations` | Portfolio and per-location settings | repositories |
+| `/locations` | Portfolio, with working `?q=` search and `?status=` filter and rows that open the location | repositories |
+| `/locations/new` | Add a location by hand. Owner/admin; every other role gets an explanation and no form | repositories |
+| `/locations/[locationId]` | One location: details, mapped profiles and their connection health, per-location metrics | repositories |
 | `/rules` | Automation rules | repositories |
 | `/integrations` | Platform connections and capabilities | repositories |
 | `/integrations/google-business-profile` | Google connection detail, health, disconnect | repositories |
@@ -94,6 +96,7 @@ nothing with it but the root layout's font.
 | `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
 | `/sign-up` | Creates an account **and** the organization it owns. Outside the app shell. | Supabase Auth + `provision_organization` |
 | `/invite/[token]` | Accept an invitation. Public — the invitee has no account yet. | `invitation_preview` / `accept_invitation` |
+| `/organizations/new` | Create an organization from inside the product. Signed-in, **outside the app shell** — the shell resolves an organization before rendering, which is the condition this screen exists to fix. | `provision_organization` |
 | `/forgot-password` | Requests a reset link. Outside the app shell. | Supabase Auth |
 | `/reset-password` | Sets a new password using the recovery session. Outside the app shell. | Supabase Auth |
 | `/auth/callback` | Where an emailed auth link lands; establishes the session | Supabase Auth |
@@ -171,6 +174,24 @@ read (due query rows; organization ids), and neither is reachable from a
 request path. The per-row `OrganizationScope` the cron routes then build from
 each id is what carries tenancy from there — see D88 and Authentication.
 
+**Belonging to several organizations is ordinary now, not an affordance of the
+data model.** `memberships` always allowed it and `listForUser` always returned
+every one, but nothing in the product could create a second organization, so in
+practice almost every account had exactly one. `/organizations/new` changes
+that, and it changes what a bug in this area costs: `getOrganizationContext`
+falls back to the caller's first membership when the cookie names one they do
+not hold, which for a single-membership account produces the right answer
+whatever the code does. Every test that touches organization selection therefore
+uses the seed's one genuinely multi-organization account, because a
+single-membership assertion proves nothing.
+
+Four call sites now write the selection — switching, creating, accepting an
+invitation while signed in, and accepting one during signup — and all four go
+through `setActiveOrganizationCookie` in `src/lib/tenancy/organization-context.ts`.
+Five attributes spelled out four times is four chances for one of them to drift,
+and a missing `httpOnly` is a regression no test notices because the feature
+keeps working.
+
 The active organization is stored in the `lia_active_organization` cookie
 (`httpOnly`, `sameSite=lax`). The organization slug is deliberately **not** in the
 URL: `CLAUDE.md` fixes the route list (`/overview`, `/mentions`, …), and prefixing
@@ -188,18 +209,25 @@ Supabase Auth, email and password. `src/lib/auth/session.ts` exposes
   `lia_demo_user` cookie so role behaviour can be exercised with no database.
 
 That split was designed before a provider existed, and it held: wiring one was a
-change to `middleware.ts`, a sign-in route, and a sign-out action — `getSession()`
+change to `src/proxy.ts`, a sign-in route, and a sign-out action — `getSession()`
 itself did not change, and neither did any call site.
 
 ```text
 request
-  └─ middleware.ts               ← refreshes the token, redirects if signed out
+  └─ src/proxy.ts                ← refreshes the token, redirects if signed out
        └─ getSession()           ← the verified user, or null
             └─ getOrganizationContext()
                  └─ repositories ← queries run as that user; RLS applies
 ```
 
-**Middleware does two things a page cannot.** A server component cannot set a
+> **Correction, 2026-08-18.** This document said `middleware.ts` throughout.
+> The file is `src/proxy.ts` — Next.js 16 renamed the convention and this
+> repository followed it, but the prose here did not. Every reference below is
+> corrected; the behaviour it describes never changed. Recorded rather than
+> silently rewritten, because a reader working from an older commit will find
+> the old name in their checkout and should know why.
+
+**The proxy does two things a page cannot.** A server component cannot set a
 cookie, so a refreshed access token could not survive the request without it —
 `createSupabaseServerClient` swallows the write for exactly that reason. And it
 turns an unauthenticated request into a redirect rather than a 500.
@@ -207,7 +235,7 @@ turns an unauthenticated request into a redirect rather than a 500.
 It is **not** a security boundary. It runs on a browser-supplied cookie. The
 enforcement is row-level security in Postgres, where `auth.uid()` comes from the
 verified JWT — a forged cookie yields a session that can read nothing. Deleting
-the middleware would make the app unpleasant, not insecure.
+the proxy would make the app unpleasant, not insecure.
 
 **`auth.users.id` must equal `public.users.id`.** Every policy resolves through
 `auth.uid() = memberships.user_id`, and `memberships.user_id` references
@@ -216,7 +244,7 @@ then sees nothing at all. `npm run auth:seed` creates the seeded logins with
 their exact UUIDs for this reason.
 
 **`/api/cron` is the one route family that bypasses this gate on purpose.**
-`middleware.ts`'s `SESSIONLESS_PATHS` lists it explicitly, because Vercel Cron
+`src/proxy.ts`'s `SESSIONLESS_PATHS` lists it explicitly, because Vercel Cron
 invokes these routes with no browser session at all — gating them here would
 redirect every scheduled invocation to `/sign-in` before the handler's own
 check ever ran. Authorization is a shared secret (`CRON_SECRET`) instead,
@@ -423,7 +451,7 @@ they did.
 ```
 
 The callback is a **route handler, not a page**, for the same reason refresh
-lives in middleware: a server component cannot set a cookie, so the session
+lives in the proxy: a server component cannot set a cookie, so the session
 would be established and immediately lost.
 
 It accepts two link shapes, because which one arrives is decided by how the
@@ -1548,6 +1576,208 @@ badge, it is what the badge is allowed to claim.
 | D183 | Excluding a source type only excludes its platform when it takes the last one | `source_type is_not reddit_post` leaves `reddit_comment`, so the rule still affects Reddit. Reddit is the only platform with two source types today; `PLATFORM_SOURCE_TYPES` is derived from `SOURCE_TYPE_PLATFORM` rather than hard-coded around that, so the second one cannot break it. |
 | D184 | `SOURCE_TYPE_PLATFORM` is reused from `mention.ts`, not redeclared | It already existed there for grouping and routing. A second copy is a second thing to keep in step with the enum — the first draft of this work added one and the duplicate-export error caught it. |
 | D185 | Badges carry no availability state | Considered marking platforms Lia has no connector for (Reddit throws from `getConnector`; Yelp is fixture-only), on the grounds that a Reddit-scoped rule cannot fire today. Decided against on the owner's call: the indicator answers "what does this rule target", and connector readiness is the integrations screen's subject. The consequence, recorded here rather than hidden: a rule scoped to an unimplemented platform looks exactly like one scoped to Google. |
+
+## Decisions made building multi-organization and location management
+
+Any authenticated user can now create an organization from inside the product,
+switch between the ones they belong to, and add and administer locations in the
+active one. Six migrations, split across two releases by an expand-contract
+rollout; the contraction had not shipped when this was written.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D191 | `/organizations/new` sits at `src/app/organizations/`, outside both route groups, and `/organizations` joins `PRODUCT_PATHS` | It cannot live in `(app)`: that layout calls `redirectIfOnboarding()` and `getOrganizationContext()` before rendering, and both need an organization the caller may not have — the exact condition the screen exists to fix. It must not live in `(site)`, which is public. `/onboarding` already occupies this position and the chrome is reused because it is the same moment in the same journey. Without the `PRODUCT_PATHS` entry an anonymous request falls through the denylist to a page that calls `requireSession()` and throws, which is the 500 the gate exists to convert into a redirect. |
+| D192 | `organization.created` is written inside `provision_organization`, never by the action | Three independent reasons, any one sufficient. `insert` on `audit_events` is revoked from `authenticated` (D162), so the action *cannot*; going through the service-role adapter would be an ambient privilege escalation inside a request path. `recordAuditEvent` needs an `OrganizationScope`, which does not exist until the organization does. And an organization existing with no creation event is a hole in the trail. Follows `raise_escalation` (D159). The row carries `organization_id` — the column RLS resolves through, so omitting it would both fail the constraint and hide the row from the tenant it describes. The demo adapter writes it too, from the same place, or the two adapters disagree about how many events a call produces. |
+| D193 | One `setActiveOrganizationCookie` for all four writers | Five attributes duplicated four ways is four chances for one to drift, and a wrong `path` or missing `httpOnly` is a security regression no test notices because the feature keeps working either way. |
+| D194 | Switching organizations navigates to `/overview`, unconditionally | Switching used to leave the browser where it was. On `/overview` that is invisible; on any record-detail route the page re-renders under the new scope, asks it for the old organization's record id, and 404s. The lookup failing is the scope working — but `notFound()` is a poor way to learn you changed tenant. Not "stay put when the route is tenant-neutral": that safe set is not stable, since `/mentions`, `/responses`, and `/escalations` all carry record ids in query params, and a rule re-derived whenever a screen gains a selection parameter will be wrong within a workflow or two. |
+| D195 | `provision_organization` is dropped and recreated with one canonical six-argument signature, and its idempotency is the insert itself | `CREATE OR REPLACE` cannot change an input signature — adding parameters produces an *overload*, leaving the old body callable and PostgREST resolving whichever matches the argument names a client sends. And a replay lookup followed by an insert loses the race it exists to solve: two concurrent calls can both miss it, one wins the unique index and the other gets `23505` instead of the id it asked for. `ON CONFLICT … DO NOTHING RETURNING` makes the insert the decision; a null return means create nothing else and resolve the winner through an actor-scoped lookup, which is safe against uncommitted state because the conflict arm waits for the other transaction before reporting zero rows. Proven under genuine concurrency by `scripts/tenancy-race-test.sh`, not by the sequential harness checks, which a read-then-insert implementation passes happily. |
+| D196 | Slug collisions need no new mechanism, but do need a test | The derivation, the 40-character cap, and the `-2`/`-3` loop already existed. What changed is that collisions became *expected* rather than exceptional, so the behaviour is pinned rather than left as an untested fallback. |
+| D197 | An account with no memberships goes to `/organizations/new` | It used to fall through to the requested destination, on the stated grounds that "the app shell reports 'your account is not a member of any organization yet'". It does not and never did: that sentence is a `DataError` thrown inside a layout, and the route error boundary renders a generic `ErrorState` with a Retry button that can only fail again. The honest destination is the one that fixes the condition. |
+| D198 | `/locations/new` and `/locations/[locationId]` inside `(app)` | `/rules/new` and `/rules/[ruleId]` are the established convention for this exact shape, down to `generateMetadata` reading the record and `notFound()` on a missing *or foreign* id. Following it means the loading state, error boundary, and permission-denied rendering are already solved. |
+| D199 | New `location.create` and `location.update`, owner/admin | Not a reuse of `location.update_manager`: that is about who holds authority over a site, which is why it is narrower than the general write gate, and folding "edit the address" into it makes the name a lie in one direction or the other. Not a reuse of `onboarding.manage`: first-run setup and ongoing administration are different authorities, and an organization that finished onboarding a year ago still needs its eleventh restaurant. |
+| D200 | `create_and_map_location`: creation is a side effect of binding, never a capability of its own | The database cannot tell a mapping insert from a hand-typed one, so narrowing `locations_insert` to owner/admin would have taken mapping away from communications leads, who are accountable for it. An earlier draft gave them a create-only function instead — which they could have called repeatedly to mint arbitrary orphaned locations, since restricting `status` and `manager` only narrows what the orphans look like. The shipped function takes the profile set being mapped, upserts and locks it, and commits the location, the binding, and three audit events together or not at all. It cannot produce a location without producing a mapping for it. This **narrows D17 rather than reversing it**: the batch is still a loop of independent, per-row-reported decisions; what became atomic is one decision that was never independent, since a location without its profile was always half-applied. |
+| D201 | `manager_user_id` gets a composite FK to `memberships` in the existing key order, and suspension keeps the assignment | The column referenced `users`, so nothing in the database required the manager to belong to the organization at all. The FK uses `(organization_id, manager_user_id)` against the unique that has existed since the initial schema, so no reversed index is added — an index nothing queries is a write cost with no reader. Suspension keeps the assignment because it is the reversible option for somebody on leave; silently unassigning their six restaurants and making an owner reconstruct the mapping on their return is a worse surprise than a label, and RLS already stops the suspended person reaching anything. Removal nulls the column, matching the rule that removal deletes the membership rather than the account. |
+| D202 | The four location statuses get written meanings, `inactive` is labelled "Inactive", and nothing gates processing on status | `inactive` was labelled "Paused" while Google review sync, news polling, analysis, and rule execution were all status-blind — the word promised a behaviour that was never built. An earlier draft made `inactive` skip Google review sync, which would have made it half-true: one pipeline stopping while three carry on is harder to reason about than none stopping. A real pause belongs in its own control covering every pipeline, not in a lifecycle value quietly acquiring a second meaning. |
+| D203 | Manual creation is a new action, never a reuse of `createOnboardingLocationAction` | That action also completes onboarding step 3, seeds monitoring queries, and returns the wizard's next path. Calling it from `/locations/new` would mark a three-month-old organization's setup complete because somebody added a restaurant. The two share the repository method and the field component and nothing else. |
+| D204 | Three location audit events, partitioned by field and mutually exclusive | `location.updated` covers identity, address, slug, and timezone; `location.status_changed` and `location.manager_changed` cover the other two. A manager-only edit emits exactly one event and **not** the generic one — if `location.updated` also fired for status and manager changes, every query for "who changed this restaurant's address" would return retirements and reassignments too, and the specific events would answer nothing. The field list is one declaration so three call sites cannot drift. |
+| D205 | Search and status filtering live in the URL, and apply to the table only | `?q=` and `?status=` make the view shareable and refresh-proof, following `RuleStatusTabs`. What the browser settled: filtering the comparison card as well as the table produced a page contradicting itself — the KPI read "Active locations 4" while the card beneath read "0 active locations". Both true of different sets; stacked vertically, nonsense. One rule — the filter changes the table — is legible; two scopes are not. |
+| D206 | Every composite FK on a nullable column uses a column-specific `ON DELETE SET NULL` | A bare `set null` nulls *every* referencing column, and `organization_id` is `not null` on all four tables — so deleting a membership or a location would raise `23502` instead of clearing the optional reference. PostgreSQL 15 added the column list for exactly this shape, and the migration asserts the server version rather than assuming it. The superseded single-column FK is dropped by a name resolved from `pg_constraint`, since inline constraint names are PostgreSQL's own construction and are not guaranteed identical across environments. |
+| D207 | A trigger enforces active membership on assignment, and only on assignment | A foreign key cannot carry a predicate on the referenced row, so the composite FK proves membership but not that it is active. The trigger's two early returns are the design: a null manager always passes, which is what lets the FK's `SET NULL` through on membership deletion; and on `UPDATE` an unchanged manager always passes, which is what makes suspension keep the assignment. `update of <columns>` fires whenever a column appears in the `SET` list even when the value is identical, so the `is not distinct from` guard lives in the body rather than being trusted to the trigger clause. Because a `BEFORE` trigger runs ahead of constraint checking it answers every case the FK would, so the harness disables it to prove the FK independently — and asserts that with the trigger off a *suspended* member is accepted, which is the whole reason the trigger exists. |
+| D208 | `mentions.platform_profile_id` is closed here, and every cross-table foreign key is inventoried from the catalog | Deferring a known tenant-integrity hole inside the stage whose purpose is tenant integrity defeats the stage, and the prerequisite unique was being added anyway. The rest are inventoried by a `pg_constraint` query rather than a reading of the migrations, so nothing is missed, and the still-defective set becomes SEC-1 below rather than a line in a gap list. |
+| D209 | The rollout is expand-contract across three releases | "Push the migrations immediately before or at deploy" has no safe side: database-first breaks communications-lead mapping the moment `locations_insert` narrows under the old application, application-first calls functions that do not exist, and rolling the application back after the database change restores a version whose mapping path is now blocked. Shortening the window is not eliminating it. The property this buys: after R1 the application can be rolled back and still work, and after R2 it can be rolled back and still work, because R3 has not run. |
+| D210 | Privileges revoke `service_role` as well as `public` and `anon`, and the claims match the SQL | Supabase's bootstrap grants `EXECUTE` on every new function to `postgres, anon, authenticated, service_role` through default privileges, so revoking `public` leaves three of them holding it. An earlier draft revoked `public` and `anon` while the prose said "authenticated only" — the SQL and the documentation cannot disagree. Both RPCs take their actor from `auth.uid()`, which is null for a service-role client, so the grant bought nothing and cost a surface. This also closes a gap `provision_organization` had carried since workflow 05: it was callable with the anon key, safe by *body* rather than by grant. The trigger function is revoked from all four, and the harness proves the trigger still fires afterwards rather than trusting that `CREATE TRIGGER` checks the privilege only at creation time. |
+
+## Known gaps after multi-organization and location management
+
+- **A concurrent location edit can lose one.** `locations.update` is
+  read-then-write with no optimistic-concurrency token, so two admins saving the
+  same location within a few seconds leaves the loser's edit silently
+  overwritten and the loser un-notified. The same position
+  `brand_voice_profiles` is in. A `revision` column is the fix, and it is not
+  here because nothing else in the product has one yet and inventing the pattern
+  on a screen edited rarely by two or three people is the wrong place to start.
+- **No pipeline is location-status aware** (D202). A retired location goes on
+  receiving whatever its mapped profiles bring in. Deliberate: a real pause is
+  its own control across every pipeline.
+- **Organization deletion, ownership relinquishment, and leaving an organization
+  do not exist.** Consequence worth stating: somebody who creates an
+  organization by mistake cannot remove it, and the last-owner trigger means
+  they cannot demote themselves out of it either. The most obvious next piece of
+  work in this area.
+- **Nothing caps how many organizations one account may create.** The request
+  key stops accidents; it does not stop volume.
+- **The cross-tenant foreign keys in SEC-1 above** remain enforced only by
+  application scoping.
+- **Neither new RPC has run against hosted.** Both are exercised against a local
+  Postgres by `db:verify-tenancy` and its race harness, which is further than
+  most of this repository's write paths have got, but the hosted push is still
+  ahead (see the rollout above).
+- **The location screens have been driven in a browser; the organization-creation
+  form has not been submitted in one.** Its states are covered by
+  `tests/organization-creation.test.ts` against a real demo adapter, and the
+  screen renders correctly for both the has-memberships and no-memberships
+  cases, but no browser has actually pressed the button end to end.
+
+## Multi-organization rollout (expand-contract)
+
+Six migrations, **two releases apart**. Nothing here is automated.
+
+| Version | File | Release |
+| --- | --- | --- |
+| `20260814000100` | `organization_provisioning_idempotency.sql` — drop/recreate `provision_organization` with the six-argument signature, the request key, the audit writer, and the corrected grants | R1 |
+| `20260814000200` | `location_tenant_integrity.sql` — four composite FKs with column-specific `SET NULL`, the active-manager trigger | R1 |
+| `20260814000300` | `location_mapping_rpc.sql` — `create_and_map_location` | R1 |
+| `20260814000400` | `location_audit_vocabulary.sql` — `location.updated`, `location.status_changed` | R1 |
+| `20260814000500` | `location_write_roles_contraction.sql` — narrow `locations_insert`/`update`, drop the delete policy, revoke `DELETE` | **R3** |
+
+### Why the split
+
+A database migration and an application deploy are not one atomic operation, and
+"push immediately before or at deploy" has no safe side:
+
+- **Database first.** `locations_insert` narrows while the deployed application
+  still inserts directly — communications-lead mapping breaks immediately.
+- **Application first.** It calls a six-argument function and an RPC that do not
+  exist.
+- **Rollback after either.** The previous application's mapping path is now
+  blocked by a policy it knows nothing about.
+
+Expand-contract removes the window rather than shortening it.
+
+### Sequence
+
+1. **R1 — expansion.** Push `…000100`–`…000400`. Do **not** push `…000500`.
+   The deployed application keeps working: four-argument `provision_organization`
+   calls resolve through the new defaults, `locations_insert` is still wide, the
+   new FKs reject only cross-tenant writes that the preflight proves do not
+   exist, and the trigger fires only on assignment.
+2. **F0 — compatibility gate. Blocking.** Against the expanded hosted database,
+   with the **currently deployed** application still running: create an
+   organization through sign-up, and map a Google location as a communications
+   lead. Both must succeed. Harness checks T-28 and T-26 are the local proofs;
+   this is the production one. Any failure stops R2 and triggers the R1 rollback
+   recorded in each migration's header.
+3. **R2 — application.** Deploy. Smoke test: create an organization from
+   `/organizations/new`, confirm it becomes active and lands on onboarding step
+   one, confirm the `organization.created` row exists with a non-null
+   `organization_id`; then map a Google listing and confirm the location **and**
+   its binding both exist with three audit rows.
+   Rollback is redeploying the previous version, and it works, because R3 has
+   not run.
+4. **R3 — contraction.** After the R2 rollback window closes, push `…000500`.
+   Re-verify: a communications lead's direct `INSERT` into `locations` is
+   refused, their mapping still succeeds, and
+   `has_table_privilege('authenticated', 'public.locations', 'delete')` is false.
+   Rolling the application back past R2 **after** this point breaks
+   communications-lead mapping — which is why R3 waits.
+
+### Verification
+
+```bash
+export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '"')"
+npm run db:preflight-tenancy       # read-only, against hosted, before pushing
+npm run db:verify-tenancy          # 150 checks + both concurrency races
+npm run db:verify-tenancy-expanded # the same file with the contraction reversed
+npm run db:verify-rls
+npm run db:verify-execution
+npm run db:verify-generation
+```
+
+`db:verify-tenancy-expanded` exists because `supabase db reset` applies every
+migration in the directory, contraction included — so the R1 state, which
+production genuinely occupies for a while, is not otherwise reachable locally or
+in CI. Without it T-26 would be skipped on every run, and a guarded section that
+never executes looks exactly like one that passed.
+
+## SEC-1 — cross-tenant foreign-key closure
+
+**Open security item, not a gap-list entry.** Filed with a priority and exit
+criteria so it can be closed rather than admired.
+
+Some foreign keys between organization-owned tables let a row in organization A
+reference a row in organization B. The database permits it; only application
+scoping prevents it. That has been true since the initial schema, and it was
+tolerable while an account belonging to two organizations was an edge case the
+product could not even produce.
+
+**Multi-organization support is what changes the risk.** Holding memberships in
+several organizations and switching between them is now ordinary product
+behaviour, so "a request carrying organization A's scope while the caller
+legitimately holds ids from organization B" stops being unlikely and starts
+being routine. An application-only guard now stands in front of a common case
+rather than a rare one.
+
+### Inventory
+
+Generated from the catalog, not from a reading of the migrations:
+
+```sql
+with org_owned as (
+  select c.relname
+  from pg_class c
+  join pg_attribute a on a.attrelid = c.oid and a.attname = 'organization_id'
+  where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
+)
+select con.conrelid::regclass, con.conname, con.confrelid::regclass,
+       pg_get_constraintdef(con.oid)
+from pg_constraint con
+where con.contype = 'f'
+  and con.connamespace = 'public'::regnamespace
+  and con.conrelid::regclass::text in (select relname from org_owned)
+  and con.confrelid::regclass::text in (select relname from org_owned)
+order by 1, 2;
+```
+
+As of 2026-08-18, against a database with every migration applied:
+
+| Priority | Reference | Verdict |
+| --- | --- | --- |
+| — | `automation_rule_executions` ×4, `generation_attempts` ×2, `escalations.trigger_analysis_id`, `mention_analyses.mention_id`, `mentions.location_id`, `mentions.platform_profile_id`, `platform_profiles.location_id`, `monitoring_queries.location_id`, `locations.manager_user_id` | **Composite.** Structural. The last four were closed by this workflow. |
+| **P1** | `mentions.platform_connection_id`, `platform_profiles.platform_connection_id` (both `not null`) | **Defective.** Connection rows drive credential lookup and sync targeting, so misattribution here is the closest any of these gets to the credential boundary. |
+| **P1** | `mentions.monitoring_query_id` (nullable) | **Defective.** A news mention attributed to another tenant's query, and therefore surfaced in their poll history and rejection diagnostics. |
+| **P2** | `response_drafts.mention_id`, `approvals.response_draft_id` (both `not null`) | **Defective.** A draft or an approval decision recorded against another tenant's mention — customer-facing text in the wrong approval queue. |
+| **P2** | `escalations.mention_id` | **Defective in principle, closed in practice.** `escalations_occurrence_same_mention` constrains the pair transitively — but only when `trigger_analysis_id` is set, and that column is **nullable**. D159 makes occurrence identity mandatory by raising `22004` inside `raise_escalation` rather than by a `NOT NULL`, so this is protected by contract rather than by constraint. Closing it is either a composite FK or a `NOT NULL`; the second is cheaper and says the same thing. |
+| **P3** | `platform_sync_runs.platform_connection_id` / `platform_profile_id`, `news_poll_runs.monitoring_query_id`, `news_rejected_candidates.monitoring_query_id` / `news_poll_run_id`, `platform_connection_secrets.platform_connection_id` | **Defective.** History and diagnostics attributed to the wrong tenant. Misleading rather than harmful — but it is the evidence trail operators reason from. |
+| **P3** | `mention_analyses.analysis_run_id` (nullable) | **Defective.** Run attribution. Hardened to `on delete restrict` by D160 for an unrelated reason; the tenant match is unenforced, and run ids are unreachable from a request path today. |
+
+Two single-column FKs are **deliberately retained** alongside a composite on the
+same column — `mentions.location_id` and `mention_analyses.mention_id`. The
+composite carries the tenant invariant and the retained simple one carries the
+`ON DELETE` action, because `20260811000100`'s composites were written without
+one. That arrangement is correct and is not a pattern to reproduce; the four
+constraints added by this workflow carry their own column-specific action and
+drop the superseded single (D206).
+
+### Exit criteria
+
+Every **P1** and **P2** row is either composite or carries a written exception,
+each with a hosted preflight run and a harness assertion — the same treatment
+the four closed here received. Every column listed is `not null` except where
+noted, so most fixes are a plain composite FK with no referential action.
+
+What makes this a separate pass rather than a widening of this one: each touches
+an ingest or approval path with its own test surface, and several have never run
+against real Google.
 
 ## Decisions made building the empty rules screen
 

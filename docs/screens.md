@@ -240,3 +240,41 @@ Required modules:
 - Plain-language voice summary
 
 Reference: `public/reference-screens/13-brand-voice-studio.png`
+
+## Locations
+
+`/locations` is the portfolio: KPI roll-ups, the active-location comparison
+card, and a table of every location. Search (`?q=`) and status (`?status=`) live
+in the URL, so a filtered view is shareable and survives a refresh. **The filter
+applies to the table and nothing else** — the KPI row and the comparison card
+are portfolio views, and a "Portfolio rating" that moved while somebody typed
+would not be a portfolio rating. Rows open the location. Two empty states, not
+one: "no locations yet" offers a way to add one, "none match" offers a way to
+clear the filter.
+
+`/locations/new` adds one by hand. Owner and admin only; every other role gets
+an explanation, a way back, and **no form** — a disabled eleven-field form
+communicates the same refusal at ten times the cost and reads as broken rather
+than as somebody else's job.
+
+`/locations/[locationId]` is the management screen: per-location metrics, the
+details form (or the same read-only definition list, for a role that cannot
+edit), and the profiles mapped to it with their connection health. It shows the
+profile's mapping state and the connection's health separately, because a
+profile can be active on a connection that needs reauthorizing — which is
+exactly the case somebody opens this screen to diagnose.
+
+A location's manager is chosen from active members of the organization. A
+manager whose membership was suspended *after* they were assigned stays visible
+as a disabled option: dropping them would make the form look like nobody runs
+the restaurant and would silently unassign them on save, and offering them as a
+live choice would be a control the database refuses.
+
+## Creating an organization
+
+`/organizations/new` is signed-in and sits outside the app shell, because the
+shell resolves an organization before it renders anything and this is the screen
+for somebody who has none — or wants one they do not have yet. Two states: an
+account belonging to nothing gets no escape hatch, since there is nowhere else
+in the product for it to be; an account that already belongs somewhere gets a
+way back.
