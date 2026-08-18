@@ -228,11 +228,17 @@ export function LocationFields({
           />
         </Field>
 
+        {/* Full width in both modes. The option labels carry a GMT offset and a
+            region — "(GMT−05:00) Eastern Time (US & Canada)" — which a native
+            select cannot wrap or ellipsise gracefully; at half width the
+            selected value clipped mid-word to "…(US & Canad". Found by looking
+            at the rendered screen, which is the only way this repo can catch a
+            layout problem: the test suite computes no layout. */}
         <Field
           id={fieldId("timezone")}
           label="Time zone"
           error={errorOf("timezone")}
-          className={mode === "edit" ? undefined : "sm:col-span-2"}
+          className="sm:col-span-2"
         >
           <SelectShell>
             <select
