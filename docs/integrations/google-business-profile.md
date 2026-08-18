@@ -612,6 +612,35 @@ state values, or Google's message text.
    integration rather than a pending form. The console work below takes
    minutes; the wait does not.
 
+   **The form has eligibility preconditions that have nothing to do with the
+   code, and one of them runs on a 60-day clock.** They gate the applicant —
+   Lia — not the customer whose locations get connected. Google's
+   [Prerequisites](https://developers.google.com/my-business/content/prereqs)
+   states them as: *"Manage a Google Business Profile that is verified and
+   active for 60+ days"* and *"Have a website representing the business listed
+   on the GBP"*, submitted from *"an email listed as owner/manager on your
+   business's GBP"*.
+
+   | Precondition | Why it bites |
+   | --- | --- |
+   | A Business Profile for **Lia itself**, verified, **60+ days old** | A SaaS with no storefront still needs one. A profile claimed the week of submission is rejected on age alone — and the remedy is waiting, not re-applying. This is the long pole; start it before anything else in this file. |
+   | The GBP's **website** must be `lia.bond` | The profile and the OAuth branding must describe the same business. |
+   | Submit as an **owner** | Google's page says "owner/manager"; submissions from manager-level accounts are widely reported to bounce. Use an owner and remove the ambiguity. |
+   | The Cloud **project number** | On the Cloud Console dashboard. The *number*, not the project ID — they are different values and the form wants the numeric one. |
+
+   Apply at the [GBP API contact
+   form](https://support.google.com/business/contact/api_default), choosing
+   **"Application for Basic API Access"**.
+
+   Google's stated review window is 7–10 business days; reported outcomes range
+   from about 4 days to 6 weeks.
+
+   **How to tell whether it landed.** There is no status page. Read the quota
+   for the Business Profile APIs in the Cloud Console: **0 QPM means still
+   pending, 300 QPM means approved.** That is the only reliable signal, and it
+   is worth checking directly rather than waiting on an email that may go to a
+   different address than expected.
+
 3. **Enable the APIs Lia actually calls.** Google's setup page lists eight;
    these three are the ones this codebase reaches, and enabling all eight is
    harmless if you would rather not think about it.

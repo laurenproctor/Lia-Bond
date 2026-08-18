@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" width="1440" height="900" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .t   { font-size: 30px; font-weight: 700; fill: #0b1020; }
+    .sub { font-size: 16px; fill: #4b5563; }
+    .box-t { font-size: 15px; font-weight: 650; fill: #0b1020; }
+    .box-d { font-size: 12.5px; fill: #4b5563; }
+    .num { font-size: 11px; font-weight: 700; fill: #6d28d9; letter-spacing: .06em; }
+    .chip { font-size: 10.5px; font-weight: 650; letter-spacing: .02em; }
+    .rd-t { font-size: 15px; font-weight: 650; fill: #7c2d12; }
+    .rd-d { font-size: 12.5px; fill: #9a3412; }
+    .ap-t { font-size: 19px; font-weight: 700; fill: #4c1d95; }
+    .ap-d { font-size: 13px; fill: #5b21b6; }
+    .panel-t { font-size: 14px; font-weight: 650; fill: #0b1020; }
+    .li { font-size: 12.5px; fill: #374151; }
+    .foot { font-size: 12px; fill: #6b7280; }
+    .arrow { stroke: #9ca3af; stroke-width: 2; fill: none; }
+  </style>
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/>
+    </marker>
+  </defs>
+
+  <rect width="1440" height="900" fill="#ffffff"/>
+
+  <text class="t" x="60" y="62">Lia — how a Reddit reply is produced</text>
+  <text class="sub" x="60" y="92">Every posted comment passes a named human approver at the business. Nothing posts automatically.</text>
+
+  <!-- Reddit: read -->
+  <rect x="60" y="150" width="448" height="96" rx="10" fill="#fff4ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text class="rd-t" x="84" y="182">Reddit Data API — read</text>
+  <text class="rd-d" x="84" y="206">Search and listing endpoints, polled per query on an interval,</text>
+  <text class="rd-d" x="84" y="226">with an identified user-agent and within published rate limits.</text>
+
+  <!-- Reddit: write -->
+  <rect x="1052" y="150" width="328" height="96" rx="10" fill="#fff4ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text class="rd-t" x="1076" y="182">Reddit Data API — write</text>
+  <text class="rd-d" x="1076" y="206">POST /api/comment, under the</text>
+  <text class="rd-d" x="1076" y="226">customer's own OAuth token.</text>
+
+  <!-- read arrow down -->
+  <path class="arrow" d="M160 246 L160 370" marker-end="url(#a)"/>
+  <!-- write arrow up -->
+  <path class="arrow" d="M1216 330 L1216 246" marker-end="url(#a)"/>
+
+  <!-- 1 Search -->
+  <rect x="60" y="370" width="200" height="180" rx="10" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text class="num" x="80" y="396">STEP 1</text>
+  <text class="box-t" x="80" y="418">Search</text>
+  <text class="box-d" x="80" y="442">Public posts and<tspan x="80" dy="17">comments matching a</tspan><tspan x="80" dy="17">customer's brand and</tspan><tspan x="80" dy="17">location keywords.</tspan></text>
+  <rect x="80" y="508" width="152" height="20" rx="5" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <text class="chip" x="88" y="522" fill="#047857">rollout ≥ read_only</text>
+
+  <!-- 2 Gate -->
+  <rect x="308" y="370" width="200" height="180" rx="10" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text class="num" x="328" y="396">STEP 2</text>
+  <text class="box-t" x="328" y="418">Relevance gate</text>
+  <text class="box-d" x="328" y="442">Deterministic scoring.<tspan x="328" dy="17">No model call. Rejects</tspan><tspan x="328" dy="17">are kept with a reason</tspan><tspan x="328" dy="17">so it can be audited.</tspan></text>
+
+  <!-- 3 Store -->
+  <rect x="556" y="370" width="200" height="180" rx="10" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text class="num" x="576" y="396">STEP 3</text>
+  <text class="box-t" x="576" y="418">Store</text>
+  <text class="box-d" x="576" y="442">Text, author, subreddit,<tspan x="576" dy="17">score, timestamp,</tspan><tspan x="576" dy="17">permalink — isolated</tspan><tspan x="576" dy="17">per customer by RLS.</tspan></text>
+
+  <!-- 4 Draft -->
+  <rect x="804" y="370" width="200" height="180" rx="10" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text class="num" x="824" y="396">STEP 4</text>
+  <text class="box-t" x="824" y="418">Draft</text>
+  <text class="box-d" x="824" y="442">An AI-assisted reply<tspan x="824" dy="17">suggestion, in the</tspan><tspan x="824" dy="17">business's own voice.</tspan><tspan x="824" dy="17">Never sent anywhere.</tspan></text>
+  <rect x="824" y="508" width="160" height="20" rx="5" fill="#fffbeb" stroke="#fde68a"/>
+  <text class="chip" x="832" y="522" fill="#b45309">AI inference permitted</text>
+
+  <!-- 5 Approval -->
+  <rect x="1052" y="330" width="328" height="230" rx="12" fill="#f5f3ff" stroke="#6d28d9" stroke-width="3"/>
+  <text class="num" x="1076" y="362">STEP 5</text>
+  <text class="ap-t" x="1076" y="390">Human approval</text>
+  <text class="ap-d" x="1076" y="416">A named person at the business reads<tspan x="1076" dy="19">the draft and approves, edits, or</tspan><tspan x="1076" dy="19">discards it. Their identity and the</tspan><tspan x="1076" dy="19">decision are written to an audit trail.</tspan></text>
+  <line x1="1076" y1="500" x2="1356" y2="500" stroke="#ddd6fe" stroke-width="1.5"/>
+  <text class="ap-d" x="1076" y="522" font-weight="650">No approval, no post. There is no</text>
+  <text class="ap-d" x="1076" y="541" font-weight="650">automatic path to Reddit.</text>
+
+  <!-- flow arrows -->
+  <path class="arrow" d="M260 460 L300 460" marker-end="url(#a)"/>
+  <path class="arrow" d="M508 460 L548 460" marker-end="url(#a)"/>
+  <path class="arrow" d="M756 460 L796 460" marker-end="url(#a)"/>
+  <path class="arrow" d="M1004 460 L1044 460" marker-end="url(#a)"/>
+
+  <rect x="1216" y="272" width="164" height="20" rx="5" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <text class="chip" x="1224" y="286" fill="#047857">rollout = read_write</text>
+
+  <!-- panels -->
+  <rect x="60" y="620" width="640" height="196" rx="10" fill="#fef2f2" stroke="#fecaca" stroke-width="1.5"/>
+  <text class="panel-t" x="84" y="652" fill="#991b1b">What Lia never does</text>
+  <text class="li" x="84" y="680" fill="#7f1d1d">— Post, reply, or edit without a named human approval<tspan x="84" dy="20">— Post under a Lia-owned account, persona, or pseudonym</tspan><tspan x="84" dy="20">— Vote, send private messages, or take moderation actions</tspan><tspan x="84" dy="20">— Create Reddit accounts, or post proactively into threads</tspan><tspan x="84" dy="20">— Sell, license, or redistribute Reddit content</tspan><tspan x="84" dy="20">— Train machine-learning models on Reddit content</tspan></text>
+
+  <rect x="740" y="620" width="640" height="196" rx="10" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text class="panel-t" x="764" y="652">Gates enforced in code, all failing closed</text>
+  <text class="li" x="764" y="680">— REDDIT_ROLLOUT_STAGE: off | read_only | read_write, default off<tspan x="764" dy="20">— REDDIT_AI_INFERENCE: separate switch, so monitoring can ship</tspan><tspan x="764" dy="20">   without drafting if the agreement requires it</tspan><tspan x="764" dy="20">— REDDIT_ACCESS_APPROVAL_REF: a dated marker naming the</tspan><tspan x="764" dy="20">   agreement, required before anything calls Reddit at all</tspan><tspan x="764" dy="20">— Credentials sealed with AES-256-GCM; never leave the server</tspan></text>
+
+  <text class="foot" x="60" y="862">Lia — reputation monitoring for restaurants and restaurant groups. lia.bond · github.com/laurenproctor/Lia-Bond · Gates: src/lib/env.ts</text>
+</svg>
