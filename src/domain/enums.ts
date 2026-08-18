@@ -121,6 +121,14 @@ export const CONNECTION_HEALTH_STATUSES = [
   "authorization_required",
   "insufficient_permissions",
   "quota_limited",
+  /**
+   * Distinct from `quota_limited`, and the distinction is the whole point: a
+   * rate limit clears by itself and this never does. Google allows the
+   * Business Profile APIs zero quota until an access application is approved,
+   * so the connection is authorised, healthy-looking, and completely unable to
+   * fetch anything.
+   */
+  "quota_not_provisioned",
   "provider_unavailable",
   "unknown_error",
 ] as const;

@@ -368,6 +368,118 @@ describe("provider error normalisation", () => {
     expect(error.retryable).toBe(true);
   });
 
+  it("separates a zero quota from genuine throttling", async () => {
+    // The failure that made a correct integration look broken: Google reports
+    // "your project has no quota" exactly like "you are going too fast", and
+    // only the quota metadata says which. Advising a retry on the first is
+    // advice that can never come good.
+    const exhausted = connectorWith([
+      [
+        ACCOUNTS_URL,
+        {
+          status: 429,
+          body: {
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              message: "Quota exceeded for quota metric 'Requests'.",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                  reason: "RATE_LIMIT_EXCEEDED",
+                  metadata: { quota_limit_value: "600" },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    ]);
+    const throttled = (await exhausted.connector
+      .listExternalAccounts(session())
+      .catch((thrown: unknown) => thrown)) as IntegrationError;
+
+    expect(throttled.code).toBe("quota_exceeded");
+    expect(throttled.retryable).toBe(true);
+
+    const unapproved = connectorWith([
+      [
+        ACCOUNTS_URL,
+        {
+          status: 429,
+          body: {
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              message: "Quota exceeded for quota metric 'Requests'.",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                  reason: "RATE_LIMIT_EXCEEDED",
+                  metadata: { quota_limit_value: "0" },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    ]);
+    const blocked = (await unapproved.connector
+      .listExternalAccounts(session())
+      .catch((thrown: unknown) => thrown)) as IntegrationError;
+
+    expect(blocked.code).toBe("quota_not_provisioned");
+    // The point of the split: retrying a limit of zero only fails slower.
+    expect(blocked.retryable).toBe(false);
+    expect(blocked.message).toMatch(/Waiting will not help/);
+  });
+
+  it("reads a zero quota on a legacy v4 403 too", async () => {
+    // v1 sends 429 for this and legacy v4 sends 403, so the metadata is
+    // checked on both rather than inferred from the status code.
+    const { connector } = connectorWith([
+      [
+        ACCOUNTS_URL,
+        {
+          status: 403,
+          body: {
+            error: {
+              status: "RESOURCE_EXHAUSTED",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                  metadata: { quota_limit_value: "0" },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    ]);
+
+    await expect(connector.listExternalAccounts(session())).rejects.toThrow(
+      expect.objectContaining({ code: "quota_not_provisioned" }),
+    );
+  });
+
+  it("falls back to throttling when Google sends no quota metadata", async () => {
+    // Unrecognised detail shapes must not become an unexpected_response, and
+    // absent metadata must not become a confident "not provisioned".
+    const { connector } = connectorWith([
+      [
+        ACCOUNTS_URL,
+        {
+          status: 429,
+          body: { error: { status: "RESOURCE_EXHAUSTED", details: [{ unknown: 1 }] } },
+        },
+      ],
+    ]);
+
+    await expect(connector.listExternalAccounts(session())).rejects.toThrow(
+      expect.objectContaining({ code: "quota_exceeded" }),
+    );
+  });
+
   it("treats 5xx as a provider outage", async () => {
     const { connector } = connectorWith([[ACCOUNTS_URL, { status: 503, body: {} }]]);
 

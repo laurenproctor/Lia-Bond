@@ -369,6 +369,14 @@ export function buildCandidates(
 function statusForHealth(health: ConnectionHealthStatus): PlatformConnectionStatus {
   if (HEALTH_STATUSES_NEEDING_ACTION.includes(health)) return "action_required";
   if (health === "token_expiring") return "action_required";
+  // Zero quota is the exception to the rule below. It does not pass, because
+  // nothing about it is transient: the connection will fetch precisely nothing
+  // until somebody acts in Google Cloud, and reporting that as "connected" is
+  // what let this failure masquerade as a working integration.
+  //
+  // Kept out of HEALTH_STATUSES_NEEDING_ACTION on purpose — that list means
+  // "re-consent fixes this", and here it fixes nothing.
+  if (health === "quota_not_provisioned") return "action_required";
   // Quota limits and provider outages are Google's problem and they pass. A
   // rate limit is not a reason to tell an operator their integration is broken.
   return "connected";
@@ -454,6 +462,8 @@ function healthFromError(error: IntegrationError): ConnectionHealthStatus {
       return "insufficient_permissions";
     case "quota_exceeded":
       return "quota_limited";
+    case "quota_not_provisioned":
+      return "quota_not_provisioned";
     case "provider_unavailable":
       return "provider_unavailable";
     default:

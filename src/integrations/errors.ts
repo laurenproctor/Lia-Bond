@@ -20,8 +20,19 @@ export type IntegrationErrorCode =
   | "credentials_expired"
   /** Authenticated, but the granted scopes do not cover the request. */
   | "insufficient_scope"
-  /** The provider rate-limited or quota-limited us. Transient, retryable. */
+  /** The provider rate-limited us. Transient, retryable. */
   | "quota_exceeded"
+  /**
+   * The project has no quota for these APIs at all — not a spent allowance.
+   *
+   * Google grants the Business Profile APIs a default quota of **zero** and
+   * only raises it once the API access application is approved, so a perfectly
+   * valid token returns a quota error on its very first call. It reports
+   * identically to throttling, which makes it the single most misleading
+   * failure in this integration: waiting, which is what a rate limit asks for,
+   * never fixes it. Split out from `quota_exceeded` so the message can say so.
+   */
+  | "quota_not_provisioned"
   /** 5xx, timeout, network failure. Transient, retryable. */
   | "provider_unavailable"
   /** The account or location exists but is not available to this credential. */
@@ -68,6 +79,13 @@ export class IntegrationError extends Error {
   }
 }
 
+/**
+ * `quota_not_provisioned` is deliberately absent.
+ *
+ * It is the one quota failure that will never come right on its own: the limit
+ * is zero until a human at Google approves an application, so retrying spends
+ * the backoff budget to arrive at the same error more slowly.
+ */
 const RETRYABLE_CODES: IntegrationErrorCode[] = [
   "quota_exceeded",
   "provider_unavailable",
@@ -83,6 +101,11 @@ export const INTEGRATION_ERROR_MESSAGES: Record<IntegrationErrorCode, string> = 
     "This connection is missing a Google permission Lia needs. Reauthorize and accept every requested permission.",
   quota_exceeded:
     "Google is rate-limiting requests from Lia right now. Try again in a few minutes.",
+  // Says what to do rather than what happened, because "quota" sends people to
+  // the quota page to request an increase — which does nothing until the
+  // access application itself is approved.
+  quota_not_provisioned:
+    "Google has not granted this server access to the Business Profile APIs yet, so it is refusing every request. Waiting will not help. Your administrator needs to check the Business Profile API access application in Google Cloud.",
   provider_unavailable:
     "Google did not respond. This is usually temporary — try again shortly.",
   resource_unavailable:
@@ -121,6 +144,7 @@ const HEALTH_BY_CODE: Record<IntegrationErrorCode, ConnectionHealthStatus> = {
   credentials_expired: "authorization_required",
   insufficient_scope: "insufficient_permissions",
   quota_exceeded: "quota_limited",
+  quota_not_provisioned: "quota_not_provisioned",
   provider_unavailable: "provider_unavailable",
   resource_unavailable: "unknown_error",
   invalid_request: "unknown_error",
