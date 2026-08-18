@@ -8,6 +8,15 @@ export interface SearchInputProps {
   label: string;
   placeholder?: string;
   defaultValue?: string;
+  /**
+   * Makes the input controlled.
+   *
+   * Optional so the uncontrolled callers stay as they are. It exists because a
+   * caller that can *reset* the search — a "Clear filters" button, a URL the
+   * person navigated to — needs the box to follow, and an input holding its own
+   * state cannot be told to. Supply this and `onChange` together.
+   */
+  value?: string;
   onChange?: (value: string) => void;
   className?: string;
 }
@@ -16,14 +25,20 @@ export function SearchInput({
   label,
   placeholder = "Search…",
   defaultValue = "",
+  value: controlledValue,
   onChange,
   className,
 }: SearchInputProps) {
   const id = useId();
-  const [value, setValue] = useState(defaultValue);
+  const [internalValue, setInternalValue] = useState(defaultValue);
+
+  const isControlled = controlledValue !== undefined;
+  const value = isControlled ? controlledValue : internalValue;
 
   function update(next: string) {
-    setValue(next);
+    // The internal copy is still kept in sync when uncontrolled; when
+    // controlled the parent owns it and writing here would fight them.
+    if (!isControlled) setInternalValue(next);
     onChange?.(next);
   }
 
