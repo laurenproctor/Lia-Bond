@@ -422,12 +422,28 @@ lightest authenticated request Google offers on this scope.
 | `authorization_required` | Grant revoked or unreadable | `action_required` |
 | `insufficient_permissions` | Scope missing | `action_required` |
 | `quota_limited` | Rate limited | `connected` |
+| `quota_not_provisioned` | Google has granted the project **no** quota | `action_required` |
 | `provider_unavailable` | Google 5xx or timeout | `connected` |
 | `unknown_error` | Unclassified | `connected` |
 
 Quota limits and outages are Google's problem and they pass — telling an
 operator their integration is broken would send them to a consent screen that
 fixes nothing.
+
+`quota_not_provisioned` is the exception, and it is worth understanding why it
+is separate from `quota_limited`. Both arrive from Google as
+`RESOURCE_EXHAUSTED`, and the only thing that distinguishes them is the
+`quota_limit_value` in the error's `ErrorInfo` detail: a limit that reads `0`
+was never granted rather than spent. That difference decides everything
+downstream. Throttling passes on its own, so it is not retried into an error
+message and it does not disturb the connection's status. A limit of zero is
+permanent until somebody acts in Google Cloud (§16), so it is **not** retried —
+backoff only reaches the same failure more slowly — and it moves the connection
+to `action_required`, because a connection that will fetch nothing until an
+application is approved is not honestly described as connected.
+
+It stays out of `HEALTH_STATUSES_NEEDING_ACTION` even so: that list means
+"re-consenting fixes this", and here re-consenting fixes nothing.
 
 `token_expiring` is only reported when there is **no** refresh token. With one,
 an expiring access token is routine and renews itself.
@@ -567,7 +583,9 @@ Guarantees:
 | "started for a different organization" | Organization switched mid-flow | Switch back and start again. |
 | "no Business Profile accounts" | The Google user administers none | Sign in with an account that manages the listings, or be granted access in Google. |
 | "missing a Google permission" | `business.manage` declined | Reauthorize and accept every permission. |
-| "rate-limiting requests" | Google quota | Wait. Request a higher quota in Cloud Console. |
+| "rate-limiting requests" | Genuine throttling — a quota that exists and was spent | Wait. Request a higher quota in Cloud Console. |
+| "has not granted this server access to the Business Profile APIs yet" | Quota is zero: the API access application is unapproved, or approved on a different Cloud project than the one this `GOOGLE_CLIENT_ID` belongs to | Check the application (§16). Waiting and raising quota both do nothing until it is approved. |
+| Connecting succeeds, then fails immediately with a quota error | Same as above. Almost always this, in fact: the account listing is one request on a seconds-old grant, so there is no request volume to have exceeded. | As above. |
 | Locations list is empty | Wrong account selected | Use the account selector; groups often hold several. |
 | "already mapped to a different Google location" | One Lia location, two Google listings | Change or skip one. |
 | Reconnect leaves mappings inactive | Reconnected as a *new* connection rather than reauthorizing | Use Reauthorize. |
@@ -593,6 +611,35 @@ state values, or Google's message text.
    token returns quota errors on every call — which reads like a broken
    integration rather than a pending form. The console work below takes
    minutes; the wait does not.
+
+   **The form has eligibility preconditions that have nothing to do with the
+   code, and one of them runs on a 60-day clock.** They gate the applicant —
+   Lia — not the customer whose locations get connected. Google's
+   [Prerequisites](https://developers.google.com/my-business/content/prereqs)
+   states them as: *"Manage a Google Business Profile that is verified and
+   active for 60+ days"* and *"Have a website representing the business listed
+   on the GBP"*, submitted from *"an email listed as owner/manager on your
+   business's GBP"*.
+
+   | Precondition | Why it bites |
+   | --- | --- |
+   | A Business Profile for **Lia itself**, verified, **60+ days old** | A SaaS with no storefront still needs one. A profile claimed the week of submission is rejected on age alone — and the remedy is waiting, not re-applying. This is the long pole; start it before anything else in this file. |
+   | The GBP's **website** must be `lia.bond` | The profile and the OAuth branding must describe the same business. |
+   | Submit as an **owner** | Google's page says "owner/manager"; submissions from manager-level accounts are widely reported to bounce. Use an owner and remove the ambiguity. |
+   | The Cloud **project number** | On the Cloud Console dashboard. The *number*, not the project ID — they are different values and the form wants the numeric one. |
+
+   Apply at the [GBP API contact
+   form](https://support.google.com/business/contact/api_default), choosing
+   **"Application for Basic API Access"**.
+
+   Google's stated review window is 7–10 business days; reported outcomes range
+   from about 4 days to 6 weeks.
+
+   **How to tell whether it landed.** There is no status page. Read the quota
+   for the Business Profile APIs in the Cloud Console: **0 QPM means still
+   pending, 300 QPM means approved.** That is the only reliable signal, and it
+   is worth checking directly rather than waiting on an email that may go to a
+   different address than expected.
 
 3. **Enable the APIs Lia actually calls.** Google's setup page lists eight;
    these three are the ones this codebase reaches, and enabling all eight is

@@ -668,6 +668,15 @@ interface MentionSeed {
   publisherName?: string | null;
   publisherDomain?: string | null;
   isSyndicated?: boolean;
+  // Discussion fields. Optional because only Reddit mentions are threads;
+  // every other source keeps `NEW_MENTION_DEFAULTS`' null/false.
+  conversationRootExternalId?: string | null;
+  sourceCommunity?: string | null;
+  sourceScore?: number | null;
+  sourceCommentCount?: number | null;
+  sourceIsLocked?: boolean;
+  sourceIsArchived?: boolean;
+  sourceIsNsfw?: boolean;
 }
 
 function mention(seed: MentionSeed): Mention {
@@ -709,6 +718,21 @@ function mention(seed: MentionSeed): Mention {
     publisherName: seed.publisherName ?? null,
     publisherDomain: seed.publisherDomain ?? null,
     isSyndicated: seed.isSyndicated ?? false,
+    // Discussion fields. A root post is its own conversation root, so the
+    // fixtures only name one on a comment — the factory fills the rest in
+    // from the mention's own id, which is what a real ingest does too.
+    conversationRootExternalId:
+      seed.conversationRootExternalId ??
+      (seed.sourceType === "reddit_post" ? seed.externalId : null),
+    sourceCommunity: seed.sourceCommunity ?? null,
+    sourceScore: seed.sourceScore ?? null,
+    sourceCommentCount: seed.sourceCommentCount ?? null,
+    sourceIsLocked: seed.sourceIsLocked ?? false,
+    sourceIsArchived: seed.sourceIsArchived ?? false,
+    sourceIsNsfw: seed.sourceIsNsfw ?? false,
+    // Deliberately not seeded: `sourceLastVerifiedAt` and `sourceRemovedAt`
+    // would claim a verification pass that never ran against these fixtures,
+    // the same reason `lastSyncedAt` stays null.
     createdAt: seed.publishedAt,
     updatedAt: seed.publishedAt,
   };
@@ -976,7 +1000,9 @@ const mentions: Mention[] = [
     riskLevel: "medium",
     relevanceScore: 0.89,
     engagementScore: 0.72,
-    rawPayload: { subreddit: "r/FoodNYC", upvotes: 284, comment_count: 96, upvote_ratio: 0.91 },
+    sourceCommunity: "foodnyc",
+    sourceScore: 284,
+    sourceCommentCount: 96,
   }),
   mention({
     label: MENTION_LABELS.redditRude,
@@ -995,7 +1021,9 @@ const mentions: Mention[] = [
     riskLevel: "high",
     relevanceScore: 0.87,
     engagementScore: 0.55,
-    rawPayload: { subreddit: "r/FoodNYC", upvotes: 96, comment_count: 41, upvote_ratio: 0.84 },
+    sourceCommunity: "foodnyc",
+    sourceScore: 96,
+    sourceCommentCount: 41,
   }),
   mention({
     label: MENTION_LABELS.redditAnniversary,
@@ -1014,7 +1042,9 @@ const mentions: Mention[] = [
     riskLevel: "low",
     relevanceScore: 0.82,
     engagementScore: 0.83,
-    rawPayload: { subreddit: "r/nyc", upvotes: 412, comment_count: 33, upvote_ratio: 0.97 },
+    sourceCommunity: "nyc",
+    sourceScore: 412,
+    sourceCommentCount: 33,
   }),
   mention({
     label: MENTION_LABELS.redditComment,
@@ -1034,7 +1064,9 @@ const mentions: Mention[] = [
     riskLevel: "low",
     relevanceScore: 0.74,
     engagementScore: 0.31,
-    rawPayload: { subreddit: "r/FoodNYC", upvotes: 47 },
+    conversationRootExternalId: "t3_1abcde",
+    sourceCommunity: "foodnyc",
+    sourceScore: 47,
   }),
   mention({
     label: MENTION_LABELS.newsSpring,

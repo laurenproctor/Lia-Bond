@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getGoogleConnector } from "@/integrations/registry";
-import { IntegrationError, toIntegrationMessage } from "@/integrations/errors";
+import {
+  IntegrationError,
+  integrationError,
+  toIntegrationMessage,
+} from "@/integrations/errors";
 import { mutationContext, type MutationContext } from "@/lib/actions/guard";
 import { can } from "@/lib/auth/permissions";
 import { DataError, toUserMessage } from "@/lib/data/errors";
@@ -78,6 +82,41 @@ async function settleOnboardingSource(context: MutationContext): Promise<void> {
     await completeSourceStep(context);
   } catch (error) {
     console.error("[integrations:google:callback] onboarding step not recorded", error);
+  }
+}
+
+/**
+ * Run the first Google request a new grant ever makes, reading a quota failure
+ * for what it can only mean here.
+ *
+ * A rate limit is a statement about request *volume*, and this is one request,
+ * seconds after consent, on credentials that have never been used. There is no
+ * volume to have exceeded. So `quota_exceeded` at this exact point is not
+ * throttling however Google labelled it — it is a project with no Business
+ * Profile API quota, which is the state every Cloud project sits in until the
+ * access application is approved.
+ *
+ * `classifyApiError` already catches this whenever Google attaches the quota
+ * metadata that proves the limit is zero. This covers the case where it does
+ * not, and it is worth covering separately because this is precisely where
+ * people meet the failure: the connection completes, Google says "slow down",
+ * and the advice to wait a few minutes is wrong forever.
+ *
+ * Scoped to this one call deliberately. Anywhere else in the app a quota error
+ * genuinely can be throttling, and the ordinary reading must stand there.
+ */
+async function firstCall<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof IntegrationError && error.code === "quota_exceeded") {
+      throw integrationError("quota_not_provisioned", {
+        providerStatus: error.providerStatus,
+        providerReason: error.providerReason,
+        cause: error,
+      });
+    }
+    throw error;
   }
 }
 
@@ -163,12 +202,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // connect the row is created from the account this call returns. A refresh
     // cannot happen here anyway — the access token is seconds old — and
     // whatever the connector ends up holding is persisted immediately below.
-    const accounts = await connector.listExternalAccounts({
-      credentials,
-      async onRefreshed() {
-        /* No connection exists yet. Nothing to persist against. */
-      },
-    });
+    const accounts = await firstCall(() =>
+      connector.listExternalAccounts({
+        credentials,
+        async onRefreshed() {
+          /* No connection exists yet. Nothing to persist against. */
+        },
+      }),
+    );
 
     const account = accounts[0];
     if (!account) {

@@ -86,6 +86,12 @@ export const SEED_TABLE_COLUMNS = {
     // content, and `provider_api` says so. The three companion columns are
     // excluded below, where saying anything would be a fabrication.
     "captureMethod",
+    // Discussion fields. Written rather than excluded, unlike the sync-history
+    // fields below: a community, a score, and a comment count are part of what
+    // the fixture thread *is*, in the same way its title and body are — not a
+    // claim that an import happened.
+    "conversationRootExternalId", "sourceCommunity", "sourceScore",
+    "sourceCommentCount", "sourceIsLocked", "sourceIsArchived", "sourceIsNsfw",
     "createdAt", "updatedAt",
   ],
   mention_analyses: [
@@ -236,5 +242,10 @@ export const SEED_COLUMN_EXCLUSIONS: Record<string, readonly string[]> = {
     // anything but null would not merely be dishonest — it would fail to load.
     // `captureMethod` itself *is* written; see SEED_TABLE_COLUMNS.
     "capturedByUserId", "capturedAt", "yelpActivityOccurrenceId",
+    // Same reasoning, for the two discussion fields that are sync history
+    // rather than thread content: a verification instant would claim the
+    // deletion-reconciliation pass has run against these fixtures, and a
+    // removal instant would claim content was withdrawn that never existed.
+    "sourceRemovedAt", "sourceLastVerifiedAt",
   ],
 };

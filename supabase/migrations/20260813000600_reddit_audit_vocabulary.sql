@@ -1,38 +1,24 @@
--- Audit vocabulary for Yelp Assisted.
+-- Reddit monitoring, community policy, and publication audit vocabulary
+-- (Task 3 of the Reddit plan).
 --
--- Redefines `audit_events_known_event_type` in full: Postgres cannot extend a
--- check constraint, so every migration that adds an event name has to restate
--- the whole list. That is why `tests/audit-vocabulary-migrations.test.ts`
--- parses these files with the real Postgres grammar and compares the result
--- against `AUDIT_EVENT_TYPES` in both directions — the failure mode this
--- guards against is a redefinition assembled from a stale copy, which silently
--- drops event types the application still emits (D93).
+-- Redefines `audit_events_known_event_type` in full: Postgres has no "add a
+-- value to a check constraint" statement, and a partial redefinition silently
+-- drops every value it omits (see 20260807000700_audit_vocabulary_merge.sql).
+-- `tests/audit-vocabulary-migrations.test.ts` pins this list against
+-- `AUDIT_EVENT_TYPES` in `src/domain/enums.ts`, which is why the whole current
+-- list is carried forward below rather than only the additions.
 --
--- The list below therefore also carries the thirteen Reddit and publication
--- names added by 20260813000600, which this migration does not own and must
--- not drop.
+-- Reddit sharpens the standing rule that audit metadata carries no content.
+-- Two Reddit-specific things are named here because they are not obviously
+-- "content" and would otherwise look safe to record:
 --
--- Six new events, and the naming of each one is the point:
+--   * a monitor's search terms are the customer's own words about their brand,
+--     and a trail of them is a trail of what a restaurant is worried about;
+--   * a subreddit name is not Reddit's content, but a community a customer is
+--     watching is still a fact about that customer, and the audit trail is not
+--     where it belongs when the monitor row already holds it.
 --
---   * `integration.listing_checked` / `..._failed` rather than reusing
---     `integration.reviews_synced`. Nothing was synced. Sharing the name would
---     make a Yelp counter check and a Google review import indistinguishable in
---     any query over the trail, which is exactly the conflation this whole
---     feature is arranged to avoid.
---   * `yelp_activity.detected` describes a change in a counter, not a review.
---     Its metadata carries the before and after numbers and the kind of change,
---     and there is deliberately no metadata key for a number of new reviews —
---     the counters cannot support one.
---   * `mention.captured_manually` records that a person typed a review in. The
---     metadata carries the derived deduplication key and whether a duplicate
---     warning was overridden; never the review text, matching every other
---     mention event.
---   * `response.publication_confirmed` / `..._unconfirmed`. The second is a
---     correction, not a retraction: a retraction means a published reply was
---     taken down from the platform, and this means the reply was never posted
---     and Lia's record was wrong. Naming them the same thing would put
---     "we removed a bad reply" and "somebody mis-clicked" in one bucket, and
---     the first is the one that has to be provable later.
+-- New entity types land alongside, for the same reason and in the same shape.
 
 alter table public.audit_events
   drop constraint audit_events_known_event_type;
@@ -56,13 +42,6 @@ alter table public.audit_events
       -- text lengths only — response text embeds customer situations, and the
       -- trail records that an edit happened, not the prose.
       'response.edited',
-      -- Assisted posting. A person stating they posted an approved response on
-      -- a platform Lia cannot reach, and the correction path for somebody who
-      -- said so by mistake. Neither claims provider verification; the metadata
-      -- names the publication method so a reader cannot mistake one for an API
-      -- publication.
-      'response.publication_confirmed',
-      'response.publication_unconfirmed',
       'escalation.assigned',
       'escalation.status_changed',
       'automation_rule.enabled',
@@ -103,19 +82,6 @@ alter table public.audit_events
       'integration.credentials_revocation_failed',
       'integration.reviews_synced',
       'integration.review_sync_failed',
-      -- Yelp Assisted listing checks. Attributed to the platform_profile that
-      -- was checked, matching 'integration.reviews_synced': "which
-      -- restaurant's listing moved" is the question an auditor has. Metadata
-      -- carries the two counters, a normalised error code, and nothing else.
-      'integration.listing_checked',
-      'integration.listing_check_failed',
-      -- A change Lia observed between two listing checks. Never a claim about
-      -- how many reviews were written.
-      'yelp_activity.detected',
-      -- A review a person typed into Lia. Metadata carries the source, the
-      -- rating, the derived deduplication key, and whether a duplicate warning
-      -- was deliberately overridden — never the review text.
-      'mention.captured_manually',
       'mention.analyzed',
       'mention.analysis_failed',
       'escalation.created_from_analysis',
@@ -145,11 +111,11 @@ alter table public.audit_events
       'onboarding.team_skipped',
       'onboarding.completed',
       'onboarding.ready_viewed',
-      -- Reddit monitoring, restated from 20260813000600. Metadata carries
-      -- counts, identifiers, and normalised codes — never a post or comment
-      -- body, never a subreddit name typed by a person into a query, never a
-      -- Reddit username, and never a monitor's search terms, which are the
-      -- customer's own words about their brand.
+      -- Reddit monitoring. Metadata carries counts, identifiers, and
+      -- normalised codes — never a post or comment body, never a subreddit
+      -- name typed by a person into a query, never a Reddit username, and
+      -- never a monitor's search terms, which are the customer's own words
+      -- about their brand.
       'reddit_monitor.created',
       'reddit_monitor.updated',
       'reddit_monitor.deleted',
@@ -169,8 +135,6 @@ alter table public.audit_events
       -- to post, the outcome, the uncertain outcome that must be reconciled
       -- against the connected account's own history rather than retried, and
       -- a retraction. No draft text, no provider message, no Reddit content.
-      -- Distinct from the assisted pair above: these are what Lia did through
-      -- an API, those are what a person told Lia they did by hand.
       'response.published',
       'response.publish_failed',
       'response.publish_reconciled',
@@ -179,25 +143,26 @@ alter table public.audit_events
   );
 
 comment on constraint audit_events_known_event_type on public.audit_events is
-  'Closed list of audit event names. Every migration that adds one restates the whole list, because Postgres cannot extend a check constraint — tests/audit-vocabulary-migrations.test.ts pins this against AUDIT_EVENT_TYPES in both directions so a redefinition assembled from a stale copy cannot silently drop an event the application still emits.';
+  'Closed list, mirroring AUDIT_EVENT_TYPES in src/domain/enums.ts. No event may carry tokens, prompts, review text, reviewer names, article titles, URLs, publisher names, Reddit post or comment text, Reddit usernames, subreddit names, or monitor search terms in metadata.';
 
 -- ---------------------------------------------------------------------------
--- Entity type.
+-- Entity types.
 --
--- `audit_entity_type` is a Postgres enum rather than a check constraint, so a
--- new value is added rather than the list being restated. `if not exists`
--- because a rerun on a partially-migrated database must not fail.
+-- `audit_entity_type` is a Postgres enum rather than a check constraint, so
+-- these are additive and irreversible: a value cannot be dropped, and a
+-- rollback is an application revert that stops emitting it.
 --
--- Its own subject rather than `platform_profile`, because "what happened to
--- this listing connection" and "what did Lia observe about it on Tuesday" are
--- different questions — an auditor asking the second would otherwise have to
--- read every event on the profile to find the observations among them.
+-- Three new subjects, because "which thing did this happen to" has three
+-- genuinely different answers here, and collapsing any of them onto an
+-- existing type would make the trail unqueryable in exactly the case somebody
+-- needs it. A Reddit monitor is not a `monitoring_query` — different table,
+-- different lifecycle, different owner. A community posture is not a
+-- `platform_connection` — it is a decision about somebody else's rules, not
+-- about Lia's access. A publication attempt is not a `response_draft` — the
+-- draft is the words, the attempt is the act of publishing them, and the whole
+-- point of separating them is that one draft can have several attempts.
 -- ---------------------------------------------------------------------------
 
-alter type audit_entity_type add value if not exists 'yelp_activity_occurrence';
-
--- Rollback note: Postgres enums cannot have values removed, and a check
--- constraint's previous definition is not recoverable from the catalog. Rolling
--- this back means a forward-repair migration restating the prior list; the
--- enum value simply stops being written. See the rollback section of
--- docs/integrations/yelp-assisted.md.
+alter type audit_entity_type add value if not exists 'reddit_monitoring_query';
+alter type audit_entity_type add value if not exists 'reddit_community_posture';
+alter type audit_entity_type add value if not exists 'response_publication_attempt';

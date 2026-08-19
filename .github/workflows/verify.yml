@@ -59,3 +59,10 @@ jobs:
         run: |
           export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
           npm run db:verify-yelp
+      # Same arrangement again: the Reddit harness resets first, so it cannot
+      # inherit the generation fixtures, and the race script cleans up its own
+      # throwaway organization whatever happens.
+      - name: Run the reddit harness against freshly migrated Postgres
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+          npm run db:verify-reddit

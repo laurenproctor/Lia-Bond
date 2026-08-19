@@ -8,6 +8,7 @@ import {
 import {
   googleAccountsResponseSchema,
   googleApiErrorSchema,
+  googleErrorDetailSchema,
   googleLocationsResponseSchema,
   googleOAuthErrorSchema,
   googleReviewsResponseSchema,
@@ -155,24 +156,63 @@ function classifyOAuthError(reason: string, status: number): IntegrationErrorCod
 }
 
 /**
+ * Was the limit that got hit actually zero?
+ *
+ * Google reports "you are going too fast" and "your project was never granted
+ * any quota" with the same status, the same code, and near-identical prose.
+ * The only place they differ is the `ErrorInfo` detail, which carries the limit
+ * that was exceeded — and a limit of `"0"` cannot have been spent.
+ *
+ * Reading it matters because the two failures need opposite advice. Throttling
+ * says wait. Zero quota says stop waiting and go approve the API access
+ * application, which is the state every new Google Cloud project starts in and
+ * the one that makes a correct integration look broken.
+ *
+ * Absent or unparseable metadata returns false, which lands on the existing
+ * rate-limit reading — the safe direction to be wrong in, since it advises a
+ * harmless retry rather than sending someone to a console for nothing.
+ */
+export function isZeroQuota(details: readonly unknown[] | undefined): boolean {
+  if (!details) return false;
+
+  return details.some((detail) => {
+    const parsed = googleErrorDetailSchema.safeParse(detail);
+    if (!parsed.success) return false;
+
+    const value = parsed.data.metadata?.quota_limit_value;
+    return value !== undefined && Number(value) === 0;
+  });
+}
+
+/**
  * REST API failures, classified by status.
  *
  * 403 is genuinely ambiguous at Google: it covers both "your token does not
  * carry this scope" and "you have exhausted your quota". The `status` string in
  * the body is what separates them, so it is inspected rather than guessed at.
+ *
+ * `RESOURCE_EXHAUSTED` is then ambiguous a second time — spent quota versus no
+ * quota — and `isZeroQuota` is what separates *those*. Both arrive as 429 on
+ * the v1 APIs and as 403 on legacy v4, so the detail is checked on each rather
+ * than inferred from the status code.
  */
 function classifyApiError(
   status: number,
   googleStatus: string | undefined,
+  details?: readonly unknown[],
 ): IntegrationErrorCode {
   if (status === 401) return "credentials_expired";
   if (status === 403) {
-    if (googleStatus === "RESOURCE_EXHAUSTED") return "quota_exceeded";
+    if (googleStatus === "RESOURCE_EXHAUSTED") {
+      return isZeroQuota(details) ? "quota_not_provisioned" : "quota_exceeded";
+    }
     if (googleStatus === "PERMISSION_DENIED") return "insufficient_scope";
     return "insufficient_scope";
   }
   if (status === 404) return "resource_unavailable";
-  if (status === 429) return "quota_exceeded";
+  if (status === 429) {
+    return isZeroQuota(details) ? "quota_not_provisioned" : "quota_exceeded";
+  }
   if (status >= 500) return "provider_unavailable";
   if (status >= 400) return "invalid_request";
   return "unknown";
@@ -379,10 +419,14 @@ export function createGoogleClient(config: GoogleClientConfig) {
     if (!response.ok) {
       const parsed = googleApiErrorSchema.safeParse(payload);
       const googleStatus = parsed.success ? parsed.data.error.status : undefined;
-      throw integrationError(classifyApiError(response.status, googleStatus), {
-        providerStatus: response.status,
-        providerReason: googleStatus ?? null,
-      });
+      const details = parsed.success ? parsed.data.error.details : undefined;
+      throw integrationError(
+        classifyApiError(response.status, googleStatus, details),
+        {
+          providerStatus: response.status,
+          providerReason: googleStatus ?? null,
+        },
+      );
     }
 
     return payload;
@@ -426,10 +470,14 @@ export function createGoogleClient(config: GoogleClientConfig) {
 
         const parsed = googleApiErrorSchema.safeParse(payload);
         const googleStatus = parsed.success ? parsed.data.error.status : undefined;
-        throw integrationError(classifyApiError(response.status, googleStatus), {
-          providerStatus: response.status,
-          providerReason: googleStatus ?? null,
-        });
+        const details = parsed.success ? parsed.data.error.details : undefined;
+        throw integrationError(
+          classifyApiError(response.status, googleStatus, details),
+          {
+            providerStatus: response.status,
+            providerReason: googleStatus ?? null,
+          },
+        );
       } catch (error) {
         lastError = error;
 

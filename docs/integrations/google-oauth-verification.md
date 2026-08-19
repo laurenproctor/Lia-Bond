@@ -22,7 +22,27 @@ other.
 
 Passing OAuth verification with no API access approval leaves you with a clean
 consent screen and an API that refuses to serve reviews. The reverse leaves you
-with working endpoints nobody can reach. Submit both in the same sitting.
+with working endpoints nobody can reach. Both are needed.
+
+**API access goes first, and not by a little.** An earlier version of this file
+said to submit both in the same sitting. That is wrong, for two independent
+reasons:
+
+- **The demo video depends on it.** OAuth verification requires showing the
+  granted data actually in use (§5.4) — reviews importing into Lia. Reviews
+  come from the v4 API, whose quota is zero until the access request is
+  approved. Film before then and the recording stops exactly where the reviewer
+  is looking, which is the single most common reason a submission is sent back.
+- **API access has a 60-day precondition.** The form requires a verified
+  Business Profile *for Lia itself*, active 60+ days, with `lia.bond` as its
+  website. See
+  [google-business-profile.md §16](./google-business-profile.md#16-google-cloud-console-setup).
+  If that profile does not exist yet, nothing else on this page is on the
+  critical path — creating it is.
+
+So the real order is: create and verify Lia's own Business Profile → wait out
+60 days → submit the API access request → confirm quota moved from 0 to 300 QPM
+→ *then* record the video and submit for OAuth verification.
 
 ## 2. Publishing status decides more than it looks like it does
 
@@ -100,8 +120,11 @@ verification**. The dialog wants:
 - the demo video URL, unlisted on YouTube. §5.
 - up to three documentation links for the related features, if any exist.
 
-**Step 5 — the other approval.** Submit the [Business Profile API access
-request](https://developers.google.com/my-business/content/prereqs). §1.
+**Step 5 — check that the other approval already landed.** Business Profile API
+access is a *precondition* of this submission, not a parallel errand: Step 4's
+video cannot show reviews syncing until that quota is non-zero. Confirm it in
+the Cloud Console (300 QPM, not 0) before submitting. §1, and
+[google-business-profile.md §16](./google-business-profile.md#16-google-cloud-console-setup).
 
 ### Afterwards
 

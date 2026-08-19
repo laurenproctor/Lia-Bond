@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   ChevronRight,
+  MessagesSquare,
   Newspaper,
   PencilLine,
   Plug,
@@ -33,6 +34,9 @@ const ENTITY_ICONS: Record<AuditEntityType, LucideIcon> = {
   brand_voice: Sparkles,
   monitoring_query: Newspaper,
   yelp_activity_occurrence: Plug,
+  reddit_monitoring_query: MessagesSquare,
+  reddit_community_posture: ShieldAlert,
+  response_publication_attempt: Send,
 };
 
 const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
@@ -52,6 +56,11 @@ const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
   // Amber rather than neutral: a detected change is something to go and look
   // at, which is what this tone means everywhere else it is used.
   yelp_activity_occurrence: "amber",
+  reddit_monitoring_query: "neutral",
+  // A community decision gates whether Lia may speak in public at all, so it
+  // reads with the same weight as an escalation rather than as configuration.
+  reddit_community_posture: "amber",
+  response_publication_attempt: "purple",
 };
 
 export interface RecentActivityCardProps {

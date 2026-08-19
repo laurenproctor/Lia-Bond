@@ -2179,6 +2179,18 @@ export function createDemoDataSource(): LiaDataSource {
           capturedByUserId: null,
           capturedAt: null,
           yelpActivityOccurrenceId: null,
+          // Discussion fields, carried through rather than defaulted: a Reddit
+          // ingest names a real thread here, and every other source names the
+          // absence of one.
+          conversationRootExternalId: value.conversationRootExternalId,
+          sourceCommunity: value.sourceCommunity,
+          sourceScore: value.sourceScore,
+          sourceCommentCount: value.sourceCommentCount,
+          sourceIsLocked: value.sourceIsLocked,
+          sourceIsArchived: value.sourceIsArchived,
+          sourceIsNsfw: value.sourceIsNsfw,
+          sourceRemovedAt: value.sourceRemovedAt,
+          sourceLastVerifiedAt: value.sourceLastVerifiedAt,
           createdAt: nowIso(),
           updatedAt: nowIso(),
         };

@@ -19,6 +19,8 @@ export const PERMISSIONS = [
   "response.generate",
   "response.confirm_publication",
   "mention.capture_manual",
+  "response.publish",
+  "response.retract",
   "escalation.assign",
   "escalation.update_status",
   "automation_rule.toggle",
@@ -106,6 +108,27 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // `integration.sync_reviews` is organization-wide by design and could never
   // express it.
   "mention.capture_manual": ["owner", "admin", "communications_lead"],
+  // Pressing publish is the act that puts words under a customer's name in
+  // front of the public. Deliberately **not** the same list as
+  // `response.decide`: approvers sign text off, and the separation of duties
+  // this table has kept since D-day between writing and approving would be
+  // hollow if the approver could also be the one to send it. The
+  // communications lead who owns the text carries it out, once somebody else
+  // has approved it — and `claim_response_publication` refuses an unapproved
+  // draft regardless of who is asking, so this row narrows the door rather
+  // than being the lock.
+  //
+  // Analysts, viewers, and location managers are absent. A location manager
+  // has no location to be scoped to here for the same reason they are absent
+  // from `response.edit`: a draft carries none.
+  "response.publish": ["owner", "admin", "communications_lead"],
+  // Retraction is an emergency stop, so it sits with the same people rather
+  // than one notch higher. Making it an owner-only act would mean the person
+  // who noticed the problem has to find somebody else before a bad reply comes
+  // down, and minutes matter more here than authority does. Guarded instead by
+  // an explicit confirmation and by the database proving Lia published the
+  // comment it is about to delete.
+  "response.retract": ["owner", "admin", "communications_lead"],
   "escalation.assign": ["owner", "admin", "communications_lead"],
   "escalation.update_status": [
     "owner",

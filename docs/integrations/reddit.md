@@ -1,23 +1,45 @@
-# Reddit — access, approval, and what write access costs
+# Reddit — access, approval, and the shape of the integration
 
 Companion to `docs/integrations/google-business-profile.md`. That one documents
 a connector that exists; this one documents the paperwork that has to clear
-before a Reddit connector can be built at all.
+before a Reddit connector may be *used*.
 
-**Status: not implemented.** No connector, monitor, persistence, or poller
-exists in this repository, and `getConnector("reddit")` throws. `reddit` is
-platform-enum vocabulary, seed fixtures, and the presentation route
-`/reddit/[id]`. See `docs/architecture/current-state.md`. The environment
-variables in `.env.example` are read by nothing today.
+**Status: gated.** The deployment gates exist (`src/lib/env.ts`,
+`tests/env-reddit.test.ts`) and resolve to `off` until Reddit's approval is
+recorded. No connector, monitor, persistence, or poller exists yet, and
+`getConnector("reddit")` still throws. `reddit` is platform-enum vocabulary,
+seed fixtures, and the presentation route `/reddit/[id]`. See
+`docs/architecture/current-state.md`.
+
+**The approval record is `docs/integrations/reddit-access-approval.md`.** That
+file, not this one, is what a live deployment is configured from. This one is
+background: how the request works and what the terms are likely to demand.
 
 **Verification note.** Reddit's help centre returns HTTP 403 to automated
 fetches, so the specifics below were assembled from search summaries of the
-official articles plus secondary reporting, on 2026-08-13. Anything marked
-*unconfirmed* should be read off the live page before you act on it. The shape
-of the process — request, review, contract — is consistent across every
-source; the numbers are not.
+official articles plus secondary reporting, on 2026-08-13. The shape of the
+process — request, review, contract — is consistent across every source; the
+numbers are not, and the numbers have been moved out of this document's
+operational sections into §8, where they are labelled as what they are. Read
+the live pages before acting on any of it.
 
 ---
+
+## 0. What Lia can actually see
+
+Pinned here because it is the single claim most likely to be overstated on a
+marketing page, in a capability card, or in a sales conversation:
+
+> Lia searches matching Reddit posts and monitors comments in those threads;
+> it does not search every Reddit comment.
+
+Reddit's `/search` endpoint searches posts — "links" — not the global comment
+corpus. Lia discovers posts that match a monitor's terms, then refreshes the
+comment trees *inside those posts*. A brand mentioned only in a comment on an
+unrelated thread that no monitor matched is not discovered, and no amount of
+tuning the monitors changes that. Any copy implying otherwise is wrong, and
+`/reddit/[id]`'s capability text has to say the limitation out loud rather than
+leaving a customer to infer coverage Lia does not have.
 
 ## 1. What Lia needs, and why it is the expensive kind of access
 
@@ -40,9 +62,10 @@ day one.
 
 ## 2. Requesting access
 
-Self-service registration reportedly closed in late 2025; a new OAuth client
-now requires prior approval (*unconfirmed*). Assume approval gates everything
-and plan the schedule around it.
+Assume approval gates everything and plan the schedule around it. Whether
+self-service registration still exists at all is disputed — see §8 — and it
+does not change the plan either way: commercial use needs the agreement
+regardless of how the OAuth client was created.
 
 1. **Read the two policies first.** *Developer Platform & Accessing Reddit
    Data* and the *Responsible Builder Policy* (updated 2026-06-05), both in
@@ -76,9 +99,10 @@ handling. Answer as specifically as the repository allows:
 
 ## 3. Redirect URIs
 
-Reddit's registration form takes **one** redirect URI, where Google's takes a
+Plan for **one** redirect URI per Reddit app, where Google's client takes a
 list — so local and production are two separate apps with two separate client
-ids (*unconfirmed; check the form*). Register the apex only: `www.lia.bond` is
+ids. Read the form before relying on this (§8). Register the apex only:
+`www.lia.bond` is
 redirected to it by `next.config.ts`, and a redirect landing mid-callback
 arrives on a host the session cookie does not cover.
 
@@ -136,15 +160,24 @@ news.
 
 ## 6. Rate limits and cost
 
-| Tier | Limit | Note |
-| --- | --- | --- |
-| Free | 100 queries/minute per OAuth client id, averaged over a ten-minute window | Non-commercial only. Not available to Lia. |
-| Commercial | Negotiated | Reported to start around **$12,000/month** — secondary sourcing, *unconfirmed*, and the single number most worth verifying before this feature is committed to a roadmap. |
-| Enterprise | Negotiated licensing | — |
+**There is no public commercial rate limit and no public commercial price.**
+Both are negotiated, and both belong in
+`docs/integrations/reddit-access-approval.md` once they are known. Do not plan
+capacity, cost, or customer count against a figure from anywhere else — this
+document included.
 
-A `User-Agent` in Reddit's requested form is required regardless of tier;
-generic, shared, or absent agents are throttled far harder than identified
-ones. Shape: `<platform>:<app id>:<version> (by /u/<username>)`.
+Two things are known well enough to build against:
+
+- The free tier's published limit (100 queries/minute per OAuth client id,
+  averaged over ten minutes) is **not available to Lia**, because it is
+  non-commercial only. Its shape is still informative: the budget is per OAuth
+  client, not per customer, so limits are consumed across every tenant at once
+  and have to be enforced globally rather than per organization.
+- A `User-Agent` in Reddit's requested form is required regardless of tier;
+  generic, shared, or absent agents are throttled far harder than identified
+  ones. Shape: `<platform>:<app id>:<version> (by /u/<username>)`. `env.ts`
+  validates it at startup rather than letting a malformed one degrade into a
+  429 in production.
 
 ## 7. Sources
 
@@ -153,3 +186,21 @@ ones. Shape: `<platform>:<app id>:<version> (by /u/<username>)`.
 - [Reddit Data API Terms & Commercial Use (2026)](https://prowlo.com/blog/reddit-data-api) — secondary
 - [Reddit Data API in 2026: How to Get Access](https://www.redditapis.com/blogs/reddit-data-api-2026) — secondary, and published by a vendor selling alternatives; weigh accordingly
 - [Reddit locks down its public data, says use now requires a contract](https://techcrunch.com/2024/05/09/reddit-locks-down-its-public-data-in-new-content-policy-says-use-now-requires-a-contract) — TechCrunch, 2024
+
+## 8. Research notes — unverified, not product facts
+
+Kept because they were expensive to assemble and are a reasonable starting
+point for a conversation with Reddit. **None of it is confirmed**, none of it
+was read off an official page, and nothing here may be quoted to a customer,
+used to size a roadmap, or encoded in code, tests, or capability copy. The
+figures moved here from the operational sections above precisely because they
+kept reading as settled when they are not.
+
+| Claim | Sourcing | Status |
+| --- | --- | --- |
+| Commercial access starts around **$12,000/month** | Secondary reporting only, one of the sources a vendor selling alternatives | Unverified. The single number most worth checking before this feature is committed to a roadmap, and the one most likely to be stale. |
+| Self-service app registration closed in late 2025 | Secondary reporting | Unverified. Does not change the plan: commercial use needs the agreement either way. |
+| The registration form accepts exactly one redirect URI | Secondary reporting | Unverified. Check the live form; if it takes a list, one app can cover local and production. |
+
+Replace this section with facts from the signed agreement, or delete it, once
+`docs/integrations/reddit-access-approval.md` is filled in.

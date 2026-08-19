@@ -1951,6 +1951,15 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
               publisher_domain: value.publisherDomain,
               is_syndicated: value.isSyndicated,
               monitoring_query_id: value.monitoringQueryId,
+              conversation_root_external_id: value.conversationRootExternalId,
+              source_community: value.sourceCommunity,
+              source_score: value.sourceScore,
+              source_comment_count: value.sourceCommentCount,
+              source_is_locked: value.sourceIsLocked,
+              source_is_archived: value.sourceIsArchived,
+              source_is_nsfw: value.sourceIsNsfw,
+              source_removed_at: value.sourceRemovedAt,
+              source_last_verified_at: value.sourceLastVerifiedAt,
             },
             { onConflict: "platform_connection_id,source_type,external_id" },
           )
@@ -2023,6 +2032,15 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           last_synced_at: value.syncedAt,
           publisher_name: value.publisherName,
           publisher_domain: value.publisherDomain,
+          conversation_root_external_id: value.conversationRootExternalId,
+          source_community: value.sourceCommunity,
+          source_score: value.sourceScore,
+          source_comment_count: value.sourceCommentCount,
+          source_is_locked: value.sourceIsLocked,
+          source_is_archived: value.sourceIsArchived,
+          source_is_nsfw: value.sourceIsNsfw,
+          source_removed_at: value.sourceRemovedAt,
+          source_last_verified_at: value.sourceLastVerifiedAt,
         };
 
         if (existing) {

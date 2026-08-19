@@ -110,6 +110,53 @@ export const mentionSchema = z
      * no clustering flag of its own (D86).
      */
     isSyndicated: z.boolean(),
+
+    /* ---------------------------------------------------------------------- */
+    /* Discussion fields                                                       */
+    /*                                                                        */
+    /* Platform-neutral, following the same precedent the news fields set: a   */
+    /* threaded public discussion is not a Reddit idea, and forking the inbox  */
+    /* for one would repeat the mistake D21 refused. Every one of these is     */
+    /* source-owned — a refresh overwrites them, and none of them is reachable */
+    /* from Lia's own workflow state.                                          */
+    /* ---------------------------------------------------------------------- */
+
+    /**
+     * The post at the top of the thread this belongs to.
+     *
+     * A root post sets this to its own external id; a comment sets it to the
+     * root post's. That self-reference is deliberate — it makes "everything in
+     * this thread" one equality filter rather than a union of two queries, and
+     * it means a thread with no comments yet is still a thread.
+     */
+    conversationRootExternalId: z.string().max(300).nullable(),
+    /** The community, canonical and bare: `askculinary`, never `r/AskCulinary`. */
+    sourceCommunity: z.string().max(120).nullable(),
+    /** The source's own score. Volatile — refreshed, never treated as history. */
+    sourceScore: z.number().int().nullable(),
+    sourceCommentCount: z.number().int().min(0).nullable(),
+    /** Replies are closed. Publishing must refuse rather than discover this. */
+    sourceIsLocked: z.boolean(),
+    sourceIsArchived: z.boolean(),
+    sourceIsNsfw: z.boolean(),
+    /**
+     * When the source stopped carrying this content.
+     *
+     * Set when a refresh finds a post or comment deleted or removed. Not a
+     * tombstone for its own sake: it is what the retention contract counts
+     * from, and what stops Lia showing a customer's team words their author
+     * has withdrawn.
+     */
+    sourceRemovedAt: timestampSchema.nullable(),
+    /**
+     * When Lia last confirmed this record still exists at the source.
+     *
+     * Distinct from `lastSyncedAt`, which says when a sync last wrote it. This
+     * says when its continued existence was last checked, which is the clock
+     * the deletion window actually runs on — and the one an operator watches
+     * to know whether Lia is keeping up with its obligations.
+     */
+    sourceLastVerifiedAt: timestampSchema.nullable(),
     /**
      * The monitoring query that first found this article.
      *
@@ -173,6 +220,17 @@ export const NEW_MENTION_DEFAULTS = {
   publisherDomain: null,
   isSyndicated: false,
   monitoringQueryId: null,
+  // Discussion fields. Every pre-existing fixture predates Reddit monitoring;
+  // null and false are the honest defaults rather than a fabricated thread.
+  conversationRootExternalId: null,
+  sourceCommunity: null,
+  sourceScore: null,
+  sourceCommentCount: null,
+  sourceIsLocked: false,
+  sourceIsArchived: false,
+  sourceIsNsfw: false,
+  sourceRemovedAt: null,
+  sourceLastVerifiedAt: null,
   // Capture provenance. Every pre-existing fixture came from a provider, so
   // `provider_api` is the honest default rather than a placeholder.
   captureMethod: "provider_api",
@@ -221,6 +279,17 @@ export const createMentionInputSchema = mentionSchema
     publisherDomain: z.string().max(253).nullable().default(null),
     isSyndicated: z.boolean().default(false),
     monitoringQueryId: uuidSchema.nullable().default(null),
+    // Discussion fields, defaulted for the same reason: a Google review is not
+    // a thread and has no community, score, or lock state to name.
+    conversationRootExternalId: z.string().max(300).nullable().default(null),
+    sourceCommunity: z.string().max(120).nullable().default(null),
+    sourceScore: z.number().int().nullable().default(null),
+    sourceCommentCount: z.number().int().min(0).nullable().default(null),
+    sourceIsLocked: z.boolean().default(false),
+    sourceIsArchived: z.boolean().default(false),
+    sourceIsNsfw: z.boolean().default(false),
+    sourceRemovedAt: timestampSchema.nullable().default(null),
+    sourceLastVerifiedAt: timestampSchema.nullable().default(null),
     // Capture provenance, defaulted so every existing caller — Google's sync,
     // the news poll, the seed — keeps compiling and keeps saying the true
     // thing about itself. Only the manual-capture service names these, and it
@@ -321,6 +390,18 @@ export const ingestMentionInputSchema = mentionSchema
      * `SOURCE_OWNED_MENTION_FIELDS` on purpose.
      */
     monitoringQueryId: uuidSchema.nullable().default(null),
+    // Discussion fields. Extended rather than picked, so every existing ingest
+    // caller — Google, news — keeps compiling and defaults to "not a thread"
+    // rather than being forced to describe one.
+    conversationRootExternalId: z.string().max(300).nullable().default(null),
+    sourceCommunity: z.string().max(120).nullable().default(null),
+    sourceScore: z.number().int().nullable().default(null),
+    sourceCommentCount: z.number().int().min(0).nullable().default(null),
+    sourceIsLocked: z.boolean().default(false),
+    sourceIsArchived: z.boolean().default(false),
+    sourceIsNsfw: z.boolean().default(false),
+    sourceRemovedAt: timestampSchema.nullable().default(null),
+    sourceLastVerifiedAt: timestampSchema.nullable().default(null),
   });
 
 /**
@@ -337,6 +418,40 @@ export type IngestMentionInput = z.infer<typeof ingestMentionInputSchema>;
 
 /** What an ingest did to the record. Drives the counts a sync reports. */
 export type MentionIngestOutcome = "created" | "updated" | "unchanged";
+
+/**
+ * "This source is not a threaded discussion."
+ *
+ * Spread by every ingest caller that is not Reddit. The alternative was to let
+ * the schema defaults cover them silently, and that would break the rule this
+ * type is built on: an ingest is a deliberate overwrite of a live record, so
+ * every source-owned field is named at the call site rather than defaulted
+ * into existence. A Google review genuinely has no community, score, or lock
+ * state, and saying so once by name is both honest and the thing that makes
+ * the next discussion source a compile error here rather than a silent null.
+ */
+export const NON_DISCUSSION_INGEST_FIELDS = {
+  conversationRootExternalId: null,
+  sourceCommunity: null,
+  sourceScore: null,
+  sourceCommentCount: null,
+  sourceIsLocked: false,
+  sourceIsArchived: false,
+  sourceIsNsfw: false,
+  sourceRemovedAt: null,
+  sourceLastVerifiedAt: null,
+} as const satisfies Pick<
+  IngestMentionInput,
+  | "conversationRootExternalId"
+  | "sourceCommunity"
+  | "sourceScore"
+  | "sourceCommentCount"
+  | "sourceIsLocked"
+  | "sourceIsArchived"
+  | "sourceIsNsfw"
+  | "sourceRemovedAt"
+  | "sourceLastVerifiedAt"
+>;
 
 /**
  * The fields an ingest owns.
@@ -368,6 +483,18 @@ export const SOURCE_OWNED_MENTION_FIELDS = [
   "sourceMetadata",
   "publisherName",
   "publisherDomain",
+  // Discussion fields. Every one is source-owned: a refresh is the only thing
+  // that knows a thread was locked, archived, re-scored, or removed, and none
+  // of them is a decision a person made in Lia.
+  "conversationRootExternalId",
+  "sourceCommunity",
+  "sourceScore",
+  "sourceCommentCount",
+  "sourceIsLocked",
+  "sourceIsArchived",
+  "sourceIsNsfw",
+  "sourceRemovedAt",
+  "sourceLastVerifiedAt",
 ] as const satisfies readonly (keyof IngestMentionInput & keyof Mention)[];
 
 /**
@@ -426,6 +553,15 @@ export function applySourceFields(
     lastSyncedAt: input.syncedAt,
     publisherName: input.publisherName,
     publisherDomain: input.publisherDomain,
+    conversationRootExternalId: input.conversationRootExternalId,
+    sourceCommunity: input.sourceCommunity,
+    sourceScore: input.sourceScore,
+    sourceCommentCount: input.sourceCommentCount,
+    sourceIsLocked: input.sourceIsLocked,
+    sourceIsArchived: input.sourceIsArchived,
+    sourceIsNsfw: input.sourceIsNsfw,
+    sourceRemovedAt: input.sourceRemovedAt,
+    sourceLastVerifiedAt: input.sourceLastVerifiedAt,
     // Deliberately absent: `monitoringQueryId` is not source-owned. See the
     // field's doc comment on `mentionSchema`.
     updatedAt,

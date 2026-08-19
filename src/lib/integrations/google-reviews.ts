@@ -3,6 +3,7 @@ import "server-only";
 import {
   EMPTY_SYNC_COUNTS,
   isSuccessfulSyncRun,
+  NON_DISCUSSION_INGEST_FIELDS,
   type IngestMentionInput,
   type JsonObject,
   type PlatformConnection,
@@ -216,6 +217,8 @@ export function reviewToMentionInput(
     publisherName: null,
     publisherDomain: null,
     monitoringQueryId: null,
+    // Nor is it a threaded discussion: no community, no score, no lock state.
+    ...NON_DISCUSSION_INGEST_FIELDS,
   };
 }
 
