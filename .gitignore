@@ -33,3 +33,20 @@ supabase/.temp/
 
 # Claude Code personal settings (permissions, local overrides)
 .claude/settings.local.json
+
+# iCloud conflict copies. This checkout lives in iCloud Drive (see the
+# node_modules note above), and when the sync client sees a batch of files
+# appear — a merge, a branch switch — it can duplicate them as `name 2.ext`
+# alongside the originals. Sixty-nine of them appeared during one merge.
+#
+# Ignored for the same reason `.claude/worktrees/` is: a stray `git add -A`
+# is all it takes to commit an entire second copy of the source tree. The
+# companion entries in eslint.config.mjs and tsconfig.json matter as much,
+# because neither tool reads this file — without them the copies stay
+# invisible to git while still being linted and typechecked.
+#
+# Deliberately `[2-9]` rather than `[0-9]`: a file legitimately named
+# `figure 1.png` is plausible in a docs directory, and a tenth conflict copy
+# is not. Nothing tracked in this repository matches the pattern.
+* [2-9].*
+* [2-9]/
