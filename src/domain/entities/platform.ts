@@ -31,6 +31,27 @@ export const connectorCapabilitiesSchema = z.object({
   requiresApproval: z.boolean(),
   /** Needs a partner agreement before the capability set becomes available. */
   requiresPartnerAccess: z.boolean(),
+  /**
+   * The provider can identify which external listing is which Lia location.
+   *
+   * Separate from `canReadMentions`, and Yelp Assisted is why: its Places plan
+   * matches a restaurant to a listing and returns nothing but that listing's
+   * counters, so it can map locations while being unable to read a single
+   * review. Google happens to hold both, which is exactly what made one flag
+   * look sufficient until a provider arrived that splits them.
+   */
+  canMatchLocations: z.boolean(),
+  /**
+   * Lia can carry an approved response to the provider's own surface, but a
+   * person completes the posting.
+   *
+   * Deliberately not derivable from `canPublishResponses` being false. "Lia
+   * cannot publish" is true of a newspaper, where there is no reply path at
+   * all, and equally true of Yelp, where the customer posts the reply
+   * themselves and comes back to confirm. Those want different screens, so
+   * they get different flags rather than one flag and a comment.
+   */
+  supportsAssistedPosting: z.boolean(),
 });
 
 export type ConnectorCapabilities = z.infer<typeof connectorCapabilitiesSchema>;
@@ -45,6 +66,8 @@ export const NO_CAPABILITIES: ConnectorCapabilities = {
   canDeleteResponses: false,
   requiresApproval: true,
   requiresPartnerAccess: false,
+  canMatchLocations: false,
+  supportsAssistedPosting: false,
 };
 
 /**
@@ -206,13 +229,25 @@ export type UpsertPlatformProfileInput = z.infer<
  * How a response can leave Lia for a given connection.
  *
  * Derived from capabilities rather than stored, so it can never contradict them.
+ *
+ * `assisted` is the fourth state, and it is a distinction the previous three
+ * could not carry. Before Yelp, "Lia cannot publish" had one meaning — prepare
+ * the text and a person will deal with it — and `manual` covered it. Yelp
+ * Assisted is a different thing: Lia knows the exact page, hands over the
+ * approved words, and takes a recorded confirmation back afterwards. Collapsing
+ * that into `manual` would have made the screen offer a bare copy button for a
+ * flow that has three steps and a state to record at the end of it.
+ *
+ * The order is a precedence, not a preference: a provider that can publish
+ * directly is never routed through a handoff, whatever else it supports.
  */
-export type PublishingMode = "direct" | "manual" | "unavailable";
+export type PublishingMode = "direct" | "assisted" | "manual" | "unavailable";
 
 export function resolvePublishingMode(
   capabilities: ConnectorCapabilities,
 ): PublishingMode {
   if (capabilities.canPublishResponses) return "direct";
+  if (capabilities.supportsAssistedPosting) return "assisted";
   if (capabilities.canReadMentions) return "manual";
   return "unavailable";
 }

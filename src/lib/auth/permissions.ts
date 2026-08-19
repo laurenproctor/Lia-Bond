@@ -17,6 +17,8 @@ export const PERMISSIONS = [
   "response.decide",
   "response.edit",
   "response.generate",
+  "response.confirm_publication",
+  "mention.capture_manual",
   "response.publish",
   "response.retract",
   "escalation.assign",
@@ -81,6 +83,31 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // Location managers are absent for the same reason they are absent from
   // `response.edit`: a draft carries no location to scope them to.
   "response.generate": ["owner", "admin", "communications_lead"],
+  // Stating that an approved response was posted on a platform Lia cannot
+  // reach. Deliberately **not** a reuse of `response.decide`: the separation
+  // this table has kept between writing text and signing it off would be
+  // hollow if the approver could also be the sole witness that it went public.
+  // Nobody can confirm a draft that is not approved — `canConfirmPublication`
+  // refuses it regardless of who is asking — so this row narrows the door
+  // rather than being the lock.
+  //
+  // Location managers are absent for the same reason they are absent from
+  // `response.edit`: a draft carries no location to scope them to. Analysts
+  // and viewers are absent because this writes a record of a public act.
+  "response.confirm_publication": ["owner", "admin", "communications_lead"],
+  // Typing a review Lia could not fetch into the queue.
+  //
+  // Its own permission rather than a reuse of `integration.sync_reviews`, and
+  // the same roles hold both today — the D145 pattern, where two genuinely
+  // different acts get two names before the day one of them needs to move.
+  // Relaying what a provider returned and asserting content nothing can verify
+  // are not the same act: a captured review is unfalsifiable by construction,
+  // and it drives analysis, escalation, and a public reply exactly as an
+  // imported one does. The obvious future divergence is already visible — a
+  // location manager adding their own restaurant's review is plausible, and
+  // `integration.sync_reviews` is organization-wide by design and could never
+  // express it.
+  "mention.capture_manual": ["owner", "admin", "communications_lead"],
   // Pressing publish is the act that puts words under a customer's name in
   // front of the public. Deliberately **not** the same list as
   // `response.decide`: approvers sign text off, and the separation of duties

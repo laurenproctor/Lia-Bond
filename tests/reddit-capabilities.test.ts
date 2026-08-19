@@ -33,6 +33,8 @@ const CONNECTED: PlatformConnection = {
     canDeleteResponses: false,
     requiresApproval: true,
     requiresPartnerAccess: true,
+    canMatchLocations: false,
+    supportsAssistedPosting: false,
   },
   tokenExpiresAt: null,
   lastSyncedAt: null,

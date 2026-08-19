@@ -81,6 +81,11 @@ export const SEED_TABLE_COLUMNS = {
     "language", "publishedAt", "receivedAt", "status", "sentiment", "riskLevel",
     "relevanceScore", "engagementScore", "rawPayload",
     "publisherName", "publisherDomain", "isSyndicated", "monitoringQueryId",
+    // Capture provenance. Written rather than excluded because every seeded
+    // mention has a true value for it: they all depict provider-returned
+    // content, and `provider_api` says so. The three companion columns are
+    // excluded below, where saying anything would be a fabrication.
+    "captureMethod",
     // Discussion fields. Written rather than excluded, unlike the sync-history
     // fields below: a community, a score, and a comment count are part of what
     // the fixture thread *is*, in the same way its title and body are — not a
@@ -113,7 +118,14 @@ export const SEED_TABLE_COLUMNS = {
     "finalText", "status", "generatedBy", "generationProvider",
     "generationModel", "promptVersion", "brandVoiceVersion", "policyVersion",
     "assignedUserId", "approvedByUserId", "approvedAt", "publishedAt",
-    "externalResponseId", "publicationError", "createdAt", "updatedAt",
+    "externalResponseId", "publicationError",
+    // Publication provenance. Written rather than excluded because the
+    // database refuses a published row without a method — an excluded column
+    // here would make `supabase/seed.sql` fail to load, not merely lose a
+    // value, which is a stronger reason than the honesty argument that governs
+    // the exclusions elsewhere in this file.
+    "publicationMethod", "publishedByUserId",
+    "createdAt", "updatedAt",
   ],
   approvals: [
     "id", "organizationId", "responseDraftId", "requestedByUserId",
@@ -224,6 +236,12 @@ export const SEED_COLUMN_EXCLUSIONS: Record<string, readonly string[]> = {
     "externalResourceName", "authorAvatarUrl", "authorIsAnonymous",
     "sourceUpdatedAt", "sourceReplyText", "sourceReplyUpdatedAt",
     "sourceMetadata", "lastSyncedAt",
+    // Manual-capture provenance. Excluded for the same reason as the fields
+    // above, and the database agrees: `mentions_capture_actor_pairing` refuses
+    // a `provider_api` row that names a capturing person, so writing these at
+    // anything but null would not merely be dishonest — it would fail to load.
+    // `captureMethod` itself *is* written; see SEED_TABLE_COLUMNS.
+    "capturedByUserId", "capturedAt", "yelpActivityOccurrenceId",
     // Same reasoning, for the two discussion fields that are sync history
     // rather than thread content: a verification instant would claim the
     // deletion-reconciliation pass has run against these fixtures, and a

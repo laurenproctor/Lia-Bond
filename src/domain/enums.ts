@@ -197,6 +197,25 @@ export const MENTION_SOURCE_TYPES = [
 export const mentionSourceTypeSchema = vocabulary(MENTION_SOURCE_TYPES).schema;
 export type MentionSourceType = z.infer<typeof mentionSourceTypeSchema>;
 
+/**
+ * How a mention's content got into Lia.
+ *
+ * Platform-neutral, and named for the next source rather than for Yelp: manual
+ * capture is what any provider without a readable review feed will need, and
+ * `yelp_manual` would have to be renamed the first time Trustpilot arrived.
+ *
+ * The distinction is not cosmetic. `provider_api` content was returned by a
+ * provider and can be re-fetched, re-verified, and overwritten by a later sync.
+ * `manual_entry` content is what a customer typed: nothing can confirm it, no
+ * sync will ever refresh it, and the interface must never describe it as
+ * imported. That is a different epistemic status, so it is a column rather than
+ * a convention — and it is deliberately absent from `IngestMentionInput`, so no
+ * synchronisation can relabel a typed review as retrieved, or the reverse.
+ */
+export const MENTION_CAPTURE_METHODS = ["provider_api", "manual_entry"] as const;
+export const mentionCaptureMethodSchema = vocabulary(MENTION_CAPTURE_METHODS).schema;
+export type MentionCaptureMethod = z.infer<typeof mentionCaptureMethodSchema>;
+
 export const MENTION_STATUSES = [
   "new",
   "analyzed",
@@ -285,6 +304,35 @@ export type ResponseType = z.infer<typeof responseTypeSchema>;
 export const GENERATED_BY = ["ai", "user", "imported"] as const;
 export const generatedBySchema = vocabulary(GENERATED_BY).schema;
 export type GeneratedBy = z.infer<typeof generatedBySchema>;
+
+/**
+ * How a published response actually reached the public.
+ *
+ * `published` on its own cannot answer the question that matters when somebody
+ * disputes a reply months later: did Lia watch this happen, or did a person
+ * tell us it had? Those carry very different evidentiary weight, and collapsing
+ * them would let a user-confirmed publication be defended as if a provider had
+ * acknowledged it.
+ *
+ * - `provider_api` — a provider accepted the response and returned an
+ *   identifier for it. Nothing writes this yet; no connector can publish.
+ * - `manual_external` — a person posted the response themselves on the
+ *   provider's own surface and confirmed it here afterwards. Lia has the
+ *   confirming actor and the time they confirmed, and **no** independent
+ *   verification. `external_response_id` stays null on this path, permanently,
+ *   because there is no provider-assigned identifier to hold.
+ *
+ * A third value for "we asked the provider and it agreed" is deliberately
+ * absent: that is what `provider_api` means, and inventing a
+ * `provider_verified` alongside it would imply the plain one is unverified.
+ */
+export const RESPONSE_PUBLICATION_METHODS = ["provider_api", "manual_external"] as const;
+export const responsePublicationMethodSchema = vocabulary(
+  RESPONSE_PUBLICATION_METHODS,
+).schema;
+export type ResponsePublicationMethod = z.infer<
+  typeof responsePublicationMethodSchema
+>;
 
 /* -------------------------------------------------------------------------- */
 /* Approvals                                                                   */
@@ -423,6 +471,12 @@ export const AUDIT_ENTITY_TYPES = [
   "automation_rule",
   "brand_voice",
   "monitoring_query",
+  // A detected change in a connected Yelp listing's counters. Its own subject
+  // rather than `platform_profile`, because "what happened to this listing
+  // connection" and "what did Lia observe about it on Tuesday" are different
+  // questions, and an auditor asking the second one would otherwise have to
+  // read every event on the profile to find the observations among them.
+  "yelp_activity_occurrence",
   // Three new subjects, because "which thing did this happen to" has three
   // genuinely different answers, and collapsing any of them would make the
   // trail unqueryable in exactly the case somebody needs it. A Reddit monitor
@@ -552,6 +606,30 @@ export const AUDIT_EVENT_TYPES = [
   "onboarding.team_skipped",
   "onboarding.completed",
   "onboarding.ready_viewed",
+  // Yelp Assisted — listing checks. Attributed to the platform_profile that was
+  // checked, matching `integration.reviews_synced`'s reasoning: "which
+  // restaurant's listing moved" is the question an auditor has. Metadata
+  // carries the two counters, a normalised error code, and nothing else.
+  // Deliberately *not* named `reviews_synced`: nothing was synced, and a
+  // shared event name would make the two indistinguishable in a query.
+  "integration.listing_checked",
+  "integration.listing_check_failed",
+  // A change Lia observed between two listing checks. Metadata carries the
+  // before and after counters and the kind of change — never a claim about how
+  // many reviews were written, which the counters cannot support.
+  "yelp_activity.detected",
+  // A review a customer typed into Lia. Metadata carries the source, the
+  // rating, the derived deduplication key, and whether a duplicate warning was
+  // deliberately overridden — never the review text, which is the same rule
+  // every other event on a mention already keeps.
+  "mention.captured_manually",
+  // Assisted posting. `confirmed` is a person stating they posted an approved
+  // response on the provider's own surface; `unconfirmed` is the correction
+  // path for somebody who said so by mistake. Neither claims provider
+  // verification, and the metadata says which method was recorded so a reader
+  // cannot mistake one for an API publication.
+  "response.publication_confirmed",
+  "response.publication_unconfirmed",
   // Reddit monitoring. Metadata carries counts, identifiers, and normalised
   // codes. Two Reddit-specific exclusions are named because they are not
   // obviously "content" and would otherwise look safe to record: a monitor's

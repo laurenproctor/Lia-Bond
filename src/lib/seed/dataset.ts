@@ -1522,6 +1522,8 @@ interface DraftSeed {
   publishedAt?: string | null;
   externalResponseId?: string | null;
   publicationError?: string | null;
+  /** Who confirmed the publication. Only meaningful on a published draft. */
+  publishedByUserId?: string | null;
   createdAt?: string;
 }
 
@@ -1547,6 +1549,33 @@ function draft(seed: DraftSeed): ResponseDraft {
     publishedAt: seed.publishedAt ?? null,
     externalResponseId: seed.externalResponseId ?? null,
     publicationError: seed.publicationError ?? null,
+    // Derived rather than seeded independently, so a published draft cannot
+    // exist in the demo dataset without saying how it got there — and so the
+    // method can never contradict the identifier beside it.
+    //
+    // The rule reads the row's own evidence: a draft carrying a provider's
+    // reply id is depicting a provider publication, and one published without
+    // an id is depicting a person posting it themselves. That pairing is the
+    // same one the database constraint enforces, so the seed cannot load a
+    // combination the schema would refuse.
+    //
+    // Note for anyone auditing seed honesty: the three `gbp-reply-*`
+    // identifiers here predate this feature and assert a Google publishing
+    // capability Lia does not have. This derivation makes that assertion
+    // visible rather than creating it — see the note in the Yelp integration
+    // doc.
+    publicationMethod:
+      seed.status === "published"
+        ? seed.externalResponseId
+          ? "provider_api"
+          : "manual_external"
+        : null,
+    // Only a manual confirmation has a person behind it; a provider
+    // publication was acknowledged by the provider, not witnessed by anybody.
+    publishedByUserId:
+      seed.status === "published" && !seed.externalResponseId
+        ? (seed.publishedByUserId ?? null)
+        : null,
     createdAt,
     updatedAt: createdAt,
   };

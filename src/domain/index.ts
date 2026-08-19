@@ -27,5 +27,6 @@ export * from "@/domain/entities/phrase-match";
 export * from "@/domain/entities/brand-voice";
 export * from "@/domain/entities/audit";
 export * from "@/domain/entities/monitoring";
+export * from "@/domain/entities/yelp";
 export * from "@/domain/entities/reddit";
 export * from "@/domain/entities/publication";

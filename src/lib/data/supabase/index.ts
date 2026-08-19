@@ -84,6 +84,7 @@ import {
   toUser,
 } from "@/lib/data/supabase/mappers";
 import { createMonitoringRepositories } from "@/lib/data/supabase/monitoring";
+import { createYelpRepositories } from "@/lib/data/supabase/yelp";
 import { activationProblems } from "@/lib/rules/readiness";
 
 /**
@@ -577,6 +578,46 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (returned.length >= MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP) {
           console.warn(
             "[data:supabase] organizations_with_unanalyzed_mentions reached its row cap; the analyse-mentions sweep may be missing organizations",
+          );
+        }
+
+        return [
+          ...new Set(
+            returned.flatMap((row) =>
+              typeof row.organization_id === "string" ? [row.organization_id] : [],
+            ),
+          ),
+        ];
+      },
+
+      // Deliberately unscoped and run under the service-role client — see the
+      // doc comment on `listWithYelpListings` in types.ts.
+      //
+      // A plain select rather than a database function, unlike the analysis
+      // scan above, and the difference is that this read is already bounded by
+      // construction: it returns one row per *connected listing*, and a
+      // customer has one Yelp listing per restaurant. The analysis scan had to
+      // move into Postgres because it read `mentions`, which grows without
+      // limit. `.range()` is still explicit for the same reason it is there —
+      // leaving PostgREST's cap implicit is how a silent truncation starts.
+      async listWithYelpListings() {
+        const { data, error } = await serviceClient()
+          .from("platform_profiles")
+          .select("organization_id, platform_connections!inner(platform, status)")
+          .eq("platform_connections.platform", "yelp")
+          .neq("platform_connections.status", "disconnected")
+          .neq("status", "disconnected")
+          .range(0, MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP - 1);
+
+        if (error) fail(error, "find organizations with connected Yelp listings");
+        const returned = rows(data);
+
+        if (returned.length >= MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP) {
+          // Same capacity signal as the analysis scan, and no tenant
+          // identifier or count in the message: this is for an operator to act
+          // on, not a coverage report.
+          console.warn(
+            "[data:supabase] the Yelp listing scan reached its row cap; the listing-check sweep may be missing organizations",
           );
         }
 
@@ -1715,6 +1756,9 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
     // `supabase/monitoring.ts`.
     ...createMonitoringRepositories(client),
 
+    // Yelp Assisted's own file, for the same reason.
+    ...createYelpRepositories(client),
+
     mentions: {
       async list(scope, filter = {}) {
         let query = from("mentions", scope).order("published_at", { ascending: false });
@@ -2254,6 +2298,21 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return counts;
       },
 
+      async findByExternalId(scope, platformConnectionId, sourceType, externalId) {
+        // The same three columns `mentions_unique_external` names, plus the
+        // tenant filter every read in this adapter carries, so a hit means the
+        // insert would collide and a miss means it would not.
+        const { data, error } = await from("mentions", scope)
+          .eq("platform_connection_id", platformConnectionId)
+          .eq("source_type", sourceType)
+          .eq("external_id", externalId)
+          .limit(1);
+
+        if (error) fail(error, "check for an existing review");
+        const row = rows(data)[0];
+        return row ? toMention(row) : null;
+      },
+
       async updateStatus(scope, mentionId, status) {
         const { data, error } = await client
           .from("mentions")
@@ -2434,6 +2493,90 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           .order("created_at", { ascending: false });
         if (error) fail(error, "load approvals");
         return rows(data).map(toApproval);
+      },
+
+      async confirmPublication(scope, draftId, confirmedByUserId, confirmedAt) {
+        const { data, error } = await client
+          .from("response_drafts")
+          .update({
+            status: "published",
+            published_at: confirmedAt,
+            // Written literally rather than taken from an argument: a caller
+            // that could name the method could claim a provider had verified
+            // this. `external_response_id` is deliberately not set — the
+            // database refuses one on this path
+            // (`response_drafts_external_id_requires_provider`).
+            publication_method: "manual_external",
+            published_by_user_id: confirmedByUserId,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", draftId)
+          // The idempotency guard, in the WHERE clause rather than in a prior
+          // read. A second click matches no rows instead of writing a second
+          // confirmation with a later timestamp and a second audit event.
+          .eq("status", "approved")
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "record that this response was posted");
+
+        if (data) {
+          return { draft: toResponseDraft(data as Row), outcome: "confirmed" };
+        }
+
+        // Nothing matched. Either it is already confirmed — which is success,
+        // because the draft is recorded as published, which is what the caller
+        // wanted — or it is in a status that cannot be confirmed at all.
+        const { data: current, error: readError } = await from(
+          "response_drafts",
+          scope,
+        )
+          .eq("id", draftId)
+          .limit(1);
+
+        if (readError) fail(readError, "read this response");
+        const row = rows(current)[0];
+        if (!row) throw notFound("Response draft");
+
+        const draft = toResponseDraft(row);
+        if (
+          draft.status === "published" &&
+          draft.publicationMethod === "manual_external"
+        ) {
+          return { draft, outcome: "already_confirmed" };
+        }
+
+        throw conflict("Only an approved response can be marked as posted.");
+      },
+
+      async unconfirmPublication(scope, draftId) {
+        const { data, error } = await client
+          .from("response_drafts")
+          .update({
+            status: "approved",
+            published_at: null,
+            publication_method: null,
+            published_by_user_id: null,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", draftId)
+          .eq("status", "published")
+          // Guarded on the publication having been a manual confirmation. A
+          // provider publication is something Lia observed and holds an
+          // acknowledgement for; letting the correction path erase one would
+          // allow a real publication to be rewritten as a mistake.
+          .eq("publication_method", "manual_external")
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "withdraw this posted confirmation");
+        if (!data) {
+          throw conflict(
+            "Only a response marked as posted by hand can have that confirmation withdrawn.",
+          );
+        }
+
+        return toResponseDraft(data as Row);
       },
     },
 

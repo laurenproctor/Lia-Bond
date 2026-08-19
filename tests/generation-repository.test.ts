@@ -192,6 +192,8 @@ describe("generationAttempts.claim", () => {
       publishedAt: null,
       externalResponseId: null,
       publicationError: null,
+      publicationMethod: null,
+      publishedByUserId: null,
       createdAt: manualTimestamp,
       updatedAt: manualTimestamp,
     };

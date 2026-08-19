@@ -50,6 +50,15 @@ jobs:
         run: |
           export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
           npm run db:verify-generation
+      # Same arrangement again: the Yelp harness resets first, so it cannot
+      # inherit the generation fixtures. It proves the constraints that keep a
+      # typed review distinguishable from a fetched one, and a user-confirmed
+      # publication distinguishable from a provider-verified one — neither of
+      # which a TypeScript-only review could catch drifting.
+      - name: Run the yelp harness against freshly migrated Postgres
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+          npm run db:verify-yelp
       # Same arrangement again: the Reddit harness resets first, so it cannot
       # inherit the generation fixtures, and the race script cleans up its own
       # throwaway organization whatever happens.

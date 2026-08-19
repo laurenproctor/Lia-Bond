@@ -65,6 +65,21 @@ const newsModeSchema = z.enum(["live", "mock"]);
 export type NewsMode = z.infer<typeof newsModeSchema>;
 
 /**
+ * Which Yelp provider is in play.
+ *
+ * Same two words as everywhere else, refused in production for the same
+ * reason — but the fabrication this one guards against is worth naming, because
+ * it does not look like fabrication. The mock hands out a review count and a
+ * rating, and those two numbers are the *entire* evidence base for "review
+ * activity detected". A production deployment quietly serving mock counters
+ * would not show a customer a fake review; it would tell them a real review had
+ * appeared on their real listing and ask them to go and find it. There is
+ * nothing on the screen at that point that could give the lie away.
+ */
+const yelpModeSchema = z.enum(["live", "mock"]);
+export type YelpMode = z.infer<typeof yelpModeSchema>;
+
+/**
  * Which mode the rules engine runs in.
  *
  * Execution changes what the product does to customer data without a person
@@ -198,6 +213,22 @@ const envSchema = z
     /** Shared secret the scheduler presents so the poll route cannot be hit by anyone else. */
     CRON_SECRET: z.string().min(16).optional(),
 
+    /* Yelp Assisted. Server-only, and the key is Lia's rather than a tenant's. */
+    YELP_API_KEY: z.string().min(1).optional(),
+    LIA_YELP_MODE: yelpModeSchema.optional(),
+    /**
+     * Listing checks one scheduled sweep may make.
+     *
+     * Yelp meters per API key and the key is shared by every tenant, so this is
+     * a Lia-level resource enforced above the tenant loop — the same position
+     * D85 put the news budget in, for the same reason: one organization with
+     * forty connected listings can otherwise exhaust the day for everyone.
+     * Coerced because every environment variable is a string, and required
+     * positive so a misconfigured "0" fails at startup rather than silently
+     * disabling every check.
+     */
+    YELP_MAX_CHECKS_PER_SWEEP: z.coerce.number().int().positive().optional(),
+
     /* Rules execution. Server-only. No default here: see `resolveRulesExecutionMode`. */
     RULES_EXECUTION_MODE: rulesExecutionModeSchema.optional(),
     /** Comma-separated org ids permitted to run rules while this rolls out. */
@@ -279,6 +310,13 @@ const envSchema = z
     },
   )
   .refine(
+    (value) => !(value.LIA_YELP_MODE === "mock" && value.NODE_ENV === "production"),
+    {
+      message: "LIA_YELP_MODE=mock is refused in production",
+      path: ["LIA_YELP_MODE"],
+    },
+  )
+  .refine(
     (value) => !(value.LIA_REDDIT_MODE === "mock" && value.NODE_ENV === "production"),
     {
       message: "LIA_REDDIT_MODE=mock is refused in production",
@@ -311,6 +349,9 @@ function readEnv(): Env {
     LIA_AI_MODE: process.env.LIA_AI_MODE || undefined,
     LIA_ANALYSIS_BATCH_SIZE: process.env.LIA_ANALYSIS_BATCH_SIZE || undefined,
     GNEWS_API_KEY: process.env.GNEWS_API_KEY || undefined,
+    YELP_API_KEY: process.env.YELP_API_KEY || undefined,
+    LIA_YELP_MODE: process.env.LIA_YELP_MODE || undefined,
+    YELP_MAX_CHECKS_PER_SWEEP: process.env.YELP_MAX_CHECKS_PER_SWEEP || undefined,
     LIA_NEWS_MODE: process.env.LIA_NEWS_MODE || undefined,
     REDDIT_CLIENT_ID: process.env.REDDIT_CLIENT_ID || undefined,
     REDDIT_CLIENT_SECRET: process.env.REDDIT_CLIENT_SECRET || undefined,
@@ -644,6 +685,73 @@ export function resolveNewsMode(): NewsMode | "unconfigured" {
 
   if (env.LIA_NEWS_MODE === "live" && env.GNEWS_API_KEY) return "live";
   return "unconfigured";
+}
+
+/* -------------------------------------------------------------------------- */
+/* Yelp Assisted                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which Yelp provider this process should use.
+ *
+ * The news rule rather than the Google one: a key alone does not imply live.
+ * Google's mode can be inferred from a configured OAuth client because
+ * possessing that client *is* the grant. A Yelp API key is not: the Places
+ * plan a key belongs to decides which endpoints answer, and an operator can
+ * hold a valid key whose plan does not cover business matching at all. Making
+ * `live` an explicit statement means turning Yelp on is a decision somebody
+ * took rather than a side effect of pasting in a credential.
+ */
+export function resolveYelpMode(): YelpMode | "unconfigured" {
+  if (env.LIA_YELP_MODE === "mock") {
+    // Belt and braces: the schema already refuses this combination, but this
+    // is the branch that would serve fabricated review counts on a real
+    // restaurant's listing, so it re-checks rather than trusts.
+    if (env.NODE_ENV === "production") {
+      throw new ConfigurationError(
+        "LIA_YELP_MODE=mock cannot be used in production.",
+        ["LIA_YELP_MODE"],
+      );
+    }
+    return "mock";
+  }
+
+  if (env.LIA_YELP_MODE === "live" && env.YELP_API_KEY) return "live";
+  return "unconfigured";
+}
+
+/**
+ * The Yelp API key, or a configuration error naming what is missing.
+ *
+ * Read at call time rather than at module load, and returned rather than held,
+ * so the only place a key exists in memory is inside the request that uses it.
+ * `next build` prerenders with `NODE_ENV=production` and no secrets, so
+ * requiring this at import would break the build for everybody.
+ */
+export function requireYelpApiKey(): string {
+  if (!env.YELP_API_KEY) {
+    throw new ConfigurationError("Yelp is not configured on this server.", [
+      "YELP_API_KEY",
+    ]);
+  }
+
+  return env.YELP_API_KEY;
+}
+
+/**
+ * Listing checks one scheduled sweep may make.
+ *
+ * Conservative by default. Yelp's Places allowance is a daily figure against a
+ * key shared by every tenant, and a sweep that spent it all in one pass would
+ * leave the interactive path — somebody sitting in the connect flow waiting for
+ * candidates — with nothing. The remaining headroom is deliberately not
+ * modelled here: this bounds the *scheduled* half, and interactive searches are
+ * what the leftover exists for.
+ */
+export const DEFAULT_YELP_MAX_CHECKS_PER_SWEEP = 50;
+
+export function yelpMaxChecksPerSweep(): number {
+  return env.YELP_MAX_CHECKS_PER_SWEEP ?? DEFAULT_YELP_MAX_CHECKS_PER_SWEEP;
 }
 
 /* -------------------------------------------------------------------------- */

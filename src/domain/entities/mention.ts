@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   escalationCategorySchema,
   MENTION_SOURCE_TYPES,
+  mentionCaptureMethodSchema,
   mentionSourceTypeSchema,
   mentionStatusSchema,
   platformSchema,
@@ -166,6 +167,37 @@ export const mentionSchema = z
      * mention sets it.
      */
     monitoringQueryId: uuidSchema.nullable(),
+
+    /* ---------------------------------------------------------------------- */
+    /* Capture provenance                                                      */
+    /*                                                                        */
+    /* How this record's content got here. Platform-neutral, and deliberately  */
+    /* **not** source-owned: a synchronisation may not write any of these, so  */
+    /* no ingest can relabel a customer-typed review as retrieved from an API, */
+    /* or the reverse. See SOURCE_OWNED_MENTION_FIELDS, which omits them.      */
+    /* ---------------------------------------------------------------------- */
+
+    /**
+     * Whether a provider returned this content or a person typed it.
+     *
+     * Every mention that predates manual capture is `provider_api`, which is
+     * true of all of them. The value is what the interface reads to decide
+     * whether it may say "imported" — and what stops it saying so about a
+     * review nothing ever imported.
+     */
+    captureMethod: mentionCaptureMethodSchema,
+    /** Who typed it. Null on every `provider_api` row. */
+    capturedByUserId: uuidSchema.nullable(),
+    /** When they typed it. Distinct from `publishedAt`, which is Yelp's date. */
+    capturedAt: timestampSchema.nullable(),
+    /**
+     * The listing-activity occurrence that prompted the capture, if any.
+     *
+     * Nullable even on a manual row: somebody may add a review they found
+     * themselves, with no detected change behind it, and demanding an
+     * occurrence would make the ordinary case impossible.
+     */
+    yelpActivityOccurrenceId: uuidSchema.nullable(),
   })
   .extend(organizationOwnedSchema.shape)
   .extend(timestampsSchema.shape);
@@ -199,6 +231,12 @@ export const NEW_MENTION_DEFAULTS = {
   sourceIsNsfw: false,
   sourceRemovedAt: null,
   sourceLastVerifiedAt: null,
+  // Capture provenance. Every pre-existing fixture came from a provider, so
+  // `provider_api` is the honest default rather than a placeholder.
+  captureMethod: "provider_api",
+  capturedByUserId: null,
+  capturedAt: null,
+  yelpActivityOccurrenceId: null,
 } as const;
 
 /**
@@ -252,6 +290,40 @@ export const createMentionInputSchema = mentionSchema
     sourceIsNsfw: z.boolean().default(false),
     sourceRemovedAt: timestampSchema.nullable().default(null),
     sourceLastVerifiedAt: timestampSchema.nullable().default(null),
+    // Capture provenance, defaulted so every existing caller — Google's sync,
+    // the news poll, the seed — keeps compiling and keeps saying the true
+    // thing about itself. Only the manual-capture service names these, and it
+    // is the only caller with a person and a moment to name them with.
+    captureMethod: mentionCaptureMethodSchema.default("provider_api"),
+    capturedByUserId: uuidSchema.nullable().default(null),
+    capturedAt: timestampSchema.nullable().default(null),
+    yelpActivityOccurrenceId: uuidSchema.nullable().default(null),
+  })
+  /**
+   * A typed review has a typist; a fetched one does not.
+   *
+   * Enforced here as well as by a database constraint, because this pairing is
+   * what makes `captureMethod` worth having. A `manual_entry` row with no actor
+   * and no timestamp is provenance that records nothing, and a `provider_api`
+   * row carrying an actor is a fetched review wearing somebody's name — which
+   * is precisely the confusion the column exists to prevent.
+   */
+  .superRefine((value, ctx) => {
+    const manual = value.captureMethod === "manual_entry";
+    if (manual && (value.capturedByUserId === null || value.capturedAt === null)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["capturedByUserId"],
+        message: "A manually captured mention must name who captured it, and when",
+      });
+    }
+    if (!manual && (value.capturedByUserId !== null || value.capturedAt !== null)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["captureMethod"],
+        message: "Only a manually captured mention may carry a capturing actor",
+      });
+    }
   });
 
 export type CreateMentionInput = z.input<typeof createMentionInputSchema>;
