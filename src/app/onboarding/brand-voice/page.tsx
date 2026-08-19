@@ -36,6 +36,8 @@ export default async function OnboardingBrandVoicePage() {
 
   return (
     <OnboardingShell
+      organizations={context.available}
+      activeOrganizationId={context.organization.id}
       step="brand_voice"
       state={context.state}
       aside={

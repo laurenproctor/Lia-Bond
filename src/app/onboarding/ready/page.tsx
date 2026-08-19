@@ -49,6 +49,8 @@ export default async function OnboardingReadyPage() {
 
   return (
     <OnboardingShell
+      organizations={context.available}
+      activeOrganizationId={context.organization.id}
       step={null}
       state={context.state}
       aside={

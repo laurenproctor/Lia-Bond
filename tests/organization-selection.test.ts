@@ -197,3 +197,58 @@ describe("the switcher's own wiring", () => {
     expect(source).toContain('<ul\n            role="listbox"');
   });
 });
+
+describe("the onboarding wizard is escapable when there is somewhere to go", () => {
+  /**
+   * Found in a browser, not by a test: creating a second organization makes it
+   * active, `redirectIfOnboarding` diverts its owner into setup, and every
+   * product route bounces back — so somebody with three working organizations
+   * could be locked out of all of them by the fourth. Even
+   * `/organizations/new`'s "Back to Lia" link led to `/overview`, which
+   * redirected straight back.
+   *
+   * These are source guards. The behaviour itself is proven in the browser; what
+   * they catch is the regression that costs nothing to make and is invisible
+   * until somebody is stuck — a new step page that forgets to pass the
+   * memberships through, which would silently render the wizard without its
+   * only way out.
+   */
+  const STEP_PAGES = [
+    "organization",
+    "connect-sources",
+    "locations",
+    "brand-voice",
+    "team",
+    "ready",
+  ];
+
+  it("hands every onboarding screen the caller's memberships", () => {
+    for (const step of STEP_PAGES) {
+      const source = readFileSync(`src/app/onboarding/${step}/page.tsx`, "utf8");
+      expect(source, `${step} must pass organizations to OnboardingShell`).toContain(
+        "organizations={context.available}",
+      );
+      expect(source, `${step} must pass the active organization`).toContain(
+        "activeOrganizationId={context.organization.id}",
+      );
+    }
+  });
+
+  it("only offers the escape when another organization exists", () => {
+    // A single-organization signup — still the common path — must see the
+    // wizard exactly as it was: no navigation, nothing to click away to.
+    const source = readFileSync(
+      "src/components/onboarding/onboarding-org-escape.tsx",
+      "utf8",
+    );
+    expect(source).toContain("if (others.length === 0) return null;");
+  });
+
+  it("leaves setup for the overview rather than staying put", () => {
+    const source = readFileSync(
+      "src/components/onboarding/onboarding-org-escape.tsx",
+      "utf8",
+    );
+    expect(source).toContain('router.push("/overview")');
+  });
+});

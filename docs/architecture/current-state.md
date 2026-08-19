@@ -1606,6 +1606,7 @@ rollout; the contraction had not shipped when this was written.
 | D208 | `mentions.platform_profile_id` is closed here, and every cross-table foreign key is inventoried from the catalog | Deferring a known tenant-integrity hole inside the stage whose purpose is tenant integrity defeats the stage, and the prerequisite unique was being added anyway. The rest are inventoried by a `pg_constraint` query rather than a reading of the migrations, so nothing is missed, and the still-defective set becomes SEC-1 below rather than a line in a gap list. |
 | D209 | The rollout is expand-contract across three releases | "Push the migrations immediately before or at deploy" has no safe side: database-first breaks communications-lead mapping the moment `locations_insert` narrows under the old application, application-first calls functions that do not exist, and rolling the application back after the database change restores a version whose mapping path is now blocked. Shortening the window is not eliminating it. The property this buys: after R1 the application can be rolled back and still work, and after R2 it can be rolled back and still work, because R3 has not run. |
 | D210 | Privileges revoke `service_role` as well as `public` and `anon`, and the claims match the SQL | Supabase's bootstrap grants `EXECUTE` on every new function to `postgres, anon, authenticated, service_role` through default privileges, so revoking `public` leaves three of them holding it. An earlier draft revoked `public` and `anon` while the prose said "authenticated only" — the SQL and the documentation cannot disagree. Both RPCs take their actor from `auth.uid()`, which is null for a service-role client, so the grant bought nothing and cost a surface. This also closes a gap `provision_organization` had carried since workflow 05: it was callable with the anon key, safe by *body* rather than by grant. The trigger function is revoked from all four, and the harness proves the trigger still fires afterwards rather than trusting that `CREATE TRIGGER` checks the privilege only at creation time. |
+| D211 | The onboarding wizard gains an escape — but only when the caller belongs to more than one organization | The wizard has no navigation on purpose: the counts would read zero and a sidebar of empty screens is a worse first impression than none. That was right when an account could hold one organization, where being held in setup for your only workspace is the point. It stopped being right the moment organizations became creatable from inside the product: creating one makes it active, `redirectIfOnboarding` diverts its owner into setup, and every product route bounces back — so somebody with three working organizations could be locked out of all of them by the fourth they made, with `/organizations/new`'s own "Back to Lia" link redirecting straight back too. The only escapes were finishing five steps or clearing a cookie. Found in a browser; no test could have caught it, because every guard was behaving exactly as its own contract said. The control renders only when there is genuinely somewhere else to go, so the single-organization signup — still the common path — sees the wizard unchanged. |
 
 ## Known gaps after multi-organization and location management
 
@@ -1632,11 +1633,13 @@ rollout; the contraction had not shipped when this was written.
   Postgres by `db:verify-tenancy` and its race harness, which is further than
   most of this repository's write paths have got, but the hosted push is still
   ahead (see the rollout above).
-- **The location screens have been driven in a browser; the organization-creation
-  form has not been submitted in one.** Its states are covered by
-  `tests/organization-creation.test.ts` against a real demo adapter, and the
-  screen renders correctly for both the has-memberships and no-memberships
-  cases, but no browser has actually pressed the button end to end.
+- ~~The organization-creation form has not been submitted in a browser.~~
+  **Resolved.** Driven end to end: the switcher entry reaches the form, creating
+  lands on onboarding step one, the new organization becomes active and is
+  listed, and a genuine double-click produces exactly one organization. That
+  pass is also what proved criterion 7 — switching from `/reviews/google/[id]`
+  lands on `/overview` rather than the 404 the old behaviour produced — and
+  what found the wizard trap recorded as D211.
 
 ## Multi-organization rollout (expand-contract)
 
