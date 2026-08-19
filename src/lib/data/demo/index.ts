@@ -62,7 +62,13 @@ import {
   type UpdateBrandVoiceInput,
   type User,
 } from "@/domain";
-import { canDecideOnDraft, canEditDraft, zeroSweepCounters } from "@/domain";
+import {
+  canConfirmPublication,
+  canDecideOnDraft,
+  canEditDraft,
+  responseDraftSchema,
+  zeroSweepCounters,
+} from "@/domain";
 import { can, explainDenial } from "@/lib/auth/permissions";
 import { DataError, conflict, forbidden, invalidInput, notFound } from "@/lib/data/errors";
 import {
@@ -80,6 +86,7 @@ import {
   type DemoGenerationAttempt,
 } from "@/lib/data/demo/store";
 import { createMonitoringRepositories } from "@/lib/data/demo/monitoring";
+import { createYelpRepositories } from "@/lib/data/demo/yelp";
 import {
   AnalysisRunInProgressError,
   SyncRunInProgressError,
@@ -703,6 +710,7 @@ export function createDemoDataSource(): LiaDataSource {
   return {
     kind: "demo",
     ...createMonitoringRepositories(),
+    ...createYelpRepositories(),
 
     organizations: {
       async listForUser(userId) {
@@ -840,6 +848,28 @@ export function createDemoDataSource(): LiaDataSource {
           if (pending.has(mention.id) || !settled.has(mention.id)) {
             organizationIds.add(mention.organizationId);
           }
+        }
+        return [...organizationIds];
+      },
+
+      // See the doc comment on `listWithYelpListings` in types.ts. Keyed off a
+      // mapped, non-disconnected profile rather than off the connection row,
+      // because a connection exists as soon as somebody opens the connect flow
+      // and an organization that never finished mapping has nothing to check.
+      async listWithYelpListings() {
+        const yelpConnectionIds = new Set(
+          store()
+            .platformConnections.filter(
+              (row) => row.platform === "yelp" && row.status !== "disconnected",
+            )
+            .map((row) => row.id),
+        );
+
+        const organizationIds = new Set<string>();
+        for (const profile of store().platformProfiles) {
+          if (!yelpConnectionIds.has(profile.platformConnectionId)) continue;
+          if (profile.status === "disconnected") continue;
+          organizationIds.add(profile.organizationId);
         }
         return [...organizationIds];
       },
@@ -2140,6 +2170,15 @@ export function createDemoDataSource(): LiaDataSource {
           // Only a brand-new mention attributes to the query that found it;
           // `applySourceFields` (the update branch above) never touches this.
           monitoringQueryId: value.monitoringQueryId,
+          // An ingest is a provider handing Lia content, by definition — there
+          // is no path by which this branch runs for a typed review. Written
+          // literally rather than taken from `value`, because
+          // `IngestMentionInput` deliberately has no field for it: a sync must
+          // not be able to set or change capture provenance at all.
+          captureMethod: "provider_api",
+          capturedByUserId: null,
+          capturedAt: null,
+          yelpActivityOccurrenceId: null,
           createdAt: nowIso(),
           updatedAt: nowIso(),
         };
@@ -2350,6 +2389,19 @@ export function createDemoDataSource(): LiaDataSource {
         return counts;
       },
 
+      async findByExternalId(scope, platformConnectionId, sourceType, externalId) {
+        // The same three columns `mentions_unique_external` names, so a hit
+        // here means the insert would collide and a miss means it would not.
+        return (
+          mentionsIn(scope).find(
+            (row) =>
+              row.platformConnectionId === platformConnectionId &&
+              row.sourceType === sourceType &&
+              row.externalId === externalId,
+          ) ?? null
+        );
+      },
+
       async updateStatus(scope, mentionId, status) {
         const mention = mentionsIn(scope).find((row) => row.id === mentionId);
         if (!mention) throw notFound("Mention");
@@ -2507,6 +2559,83 @@ export function createDemoDataSource(): LiaDataSource {
           .filter((row) => row.responseDraftId === draftId)
           .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
       },
+
+      async confirmPublication(scope, draftId, confirmedByUserId, confirmedAt) {
+        const existing = orgRows(store().responseDrafts, scope).find(
+          (row) => row.id === draftId,
+        );
+        if (!existing) throw notFound("Response draft");
+
+        // Idempotency. The Supabase adapter gets this from a `status =
+        // 'approved'` guard in the WHERE clause; here it is a comparison,
+        // which is the same decision reached the only way an in-memory store
+        // can reach it. A repeat is success, not an error — the draft is
+        // recorded as published, which is what the caller wanted.
+        if (
+          existing.status === "published" &&
+          existing.publicationMethod === "manual_external"
+        ) {
+          return { draft: existing, outcome: "already_confirmed" };
+        }
+
+        if (!canConfirmPublication(existing.status)) {
+          throw conflict(
+            "Only an approved response can be marked as posted.",
+          );
+        }
+
+        const updated: ResponseDraft = responseDraftSchema.parse({
+          ...existing,
+          status: "published",
+          publishedAt: confirmedAt,
+          // Written literally rather than taken from an argument. A caller that
+          // could name the method could claim a provider had verified this.
+          publicationMethod: "manual_external",
+          publishedByUserId: confirmedByUserId,
+          // Never set on this path, and the database agrees
+          // (`response_drafts_external_id_requires_provider`): there is no
+          // provider-assigned identifier, because no provider was involved.
+          externalResponseId: null,
+          updatedAt: confirmedAt,
+        });
+
+        return {
+          draft: replaceRow(store().responseDrafts, updated),
+          outcome: "confirmed",
+        };
+      },
+
+      async unconfirmPublication(scope, draftId) {
+        const existing = orgRows(store().responseDrafts, scope).find(
+          (row) => row.id === draftId,
+        );
+        if (!existing) throw notFound("Response draft");
+
+        // Guarded on the publication having been a manual confirmation. A
+        // provider publication is something Lia observed, and there is no
+        // "actually that never happened" for an acknowledged one — erasing it
+        // through the correction path would let a real publication be
+        // rewritten as a mistake.
+        if (
+          existing.status !== "published" ||
+          existing.publicationMethod !== "manual_external"
+        ) {
+          throw conflict(
+            "Only a response marked as posted by hand can have that confirmation withdrawn.",
+          );
+        }
+
+        const updated: ResponseDraft = responseDraftSchema.parse({
+          ...existing,
+          status: "approved",
+          publishedAt: null,
+          publicationMethod: null,
+          publishedByUserId: null,
+          updatedAt: nowIso(),
+        });
+
+        return replaceRow(store().responseDrafts, updated);
+      },
     },
 
     generationAttempts: {
@@ -2649,6 +2778,9 @@ export function createDemoDataSource(): LiaDataSource {
           publishedAt: null,
           externalResponseId: null,
           publicationError: null,
+          // A freshly generated draft has not been approved, let alone posted.
+          publicationMethod: null,
+          publishedByUserId: null,
           createdAt: timestamp,
           updatedAt: timestamp,
         };

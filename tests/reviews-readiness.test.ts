@@ -30,6 +30,8 @@ function connection(
       canDeleteResponses: false,
       requiresApproval: false,
       requiresPartnerAccess: false,
+      canMatchLocations: true,
+      supportsAssistedPosting: false,
     },
     tokenExpiresAt: null,
     lastSyncedAt: null,

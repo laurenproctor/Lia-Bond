@@ -24,6 +24,8 @@ import {
   platformSyncRunSchema,
   responseDraftSchema,
   userSchema,
+  yelpActivityOccurrenceSchema,
+  yelpListingSnapshotSchema,
   type AnalysisRun,
   type Approval,
   type AuditEvent,
@@ -49,6 +51,8 @@ import {
   type PlatformSyncRun,
   type ResponseDraft,
   type User,
+  type YelpActivityOccurrence,
+  type YelpListingSnapshot,
 } from "@/domain";
 import { DataError } from "@/lib/data/errors";
 import type { SimulationCandidate } from "@/lib/data/types";
@@ -359,6 +363,15 @@ export function toMention(row: Row): Mention {
       publisherDomain: row.publisher_domain ?? null,
       isSyndicated: row.is_syndicated ?? false,
       monitoringQueryId: row.monitoring_query_id ?? null,
+      // Capture provenance. `capture_method` has a database default of
+      // `provider_api`, so the fallback here is the same answer the column
+      // would give — but it is written out rather than left to `??` on a
+      // nullable, because a row that somehow arrived without it must read as a
+      // provider fetch, never as an unattributed manual entry.
+      captureMethod: row.capture_method ?? "provider_api",
+      capturedByUserId: row.captured_by_user_id ?? null,
+      capturedAt: isoOrNull(row.captured_at),
+      yelpActivityOccurrenceId: row.yelp_activity_occurrence_id ?? null,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
     },
@@ -529,6 +542,8 @@ export function toResponseDraft(row: Row): ResponseDraft {
       publishedAt: isoOrNull(row.published_at),
       externalResponseId: row.external_response_id ?? null,
       publicationError: row.publication_error ?? null,
+      publicationMethod: row.publication_method ?? null,
+      publishedByUserId: row.published_by_user_id ?? null,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
     },
@@ -852,5 +867,59 @@ export function toNewsRejectedCandidate(row: Row): NewsRejectedCandidate {
       updatedAt: iso(row.updated_at),
     },
     "rejected candidate",
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Yelp Assisted                                                               */
+/* -------------------------------------------------------------------------- */
+
+export function toYelpListingSnapshot(row: Row): YelpListingSnapshot {
+  return parseOrThrow(
+    yelpListingSnapshotSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      platformProfileId: row.platform_profile_id,
+      syncRunId: row.sync_run_id ?? null,
+      observedAt: iso(row.observed_at),
+      // `num` rather than a cast: `review_count` is an integer and `rating` is
+      // a numeric, and PostgREST returns a numeric as a *string*. Coercing
+      // through `Number` here is what stops a rating arriving as "4.5" and
+      // comparing unequal to the 4.5 the previous snapshot holds — which would
+      // report a rating change on every single check.
+      reviewCount: num(row.review_count),
+      rating: num(row.rating),
+      isClosed: row.is_closed ?? false,
+      createdAt: iso(row.created_at),
+    },
+    "yelp listing snapshot",
+  );
+}
+
+export function toYelpActivityOccurrence(row: Row): YelpActivityOccurrence {
+  return parseOrThrow(
+    yelpActivityOccurrenceSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      platformProfileId: row.platform_profile_id,
+      locationId: row.location_id ?? null,
+      fromSnapshotId: row.from_snapshot_id,
+      toSnapshotId: row.to_snapshot_id,
+      detectedAt: iso(row.detected_at),
+      changeKind: row.change_kind,
+      previousReviewCount: num(row.previous_review_count),
+      currentReviewCount: num(row.current_review_count),
+      previousRating: num(row.previous_rating),
+      currentRating: num(row.current_rating),
+      status: row.status,
+      capturedMentionId: row.captured_mention_id ?? null,
+      resolvedByUserId: row.resolved_by_user_id ?? null,
+      resolvedAt: isoOrNull(row.resolved_at),
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "yelp activity occurrence",
   );
 }

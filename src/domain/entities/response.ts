@@ -3,6 +3,7 @@ import {
   approvalStatusSchema,
   generatedBySchema,
   responseDraftStatusSchema,
+  responsePublicationMethodSchema,
   responseTypeSchema,
 } from "@/domain/enums";
 import {
@@ -40,6 +41,34 @@ export const responseDraftSchema = z
     publishedAt: timestampSchema.nullable(),
     externalResponseId: z.string().max(300).nullable(),
     publicationError: z.string().max(1000).nullable(),
+
+    /* ---------------------------------------------------------------------- */
+    /* Publication provenance                                                  */
+    /*                                                                        */
+    /* `publishedAt` says a response went public; these say on whose word.     */
+    /* Without them, a reply a person told Lia they had posted is stored       */
+    /* identically to one a provider acknowledged — and the difference is      */
+    /* exactly what matters when somebody disputes a reply months later.       */
+    /* ---------------------------------------------------------------------- */
+
+    /**
+     * How it reached the public. Null until it did.
+     *
+     * `manual_external` is the only value anything writes today: no connector
+     * can publish, so `provider_api` exists to be the honest name for the path
+     * that does not exist yet rather than to leave the column meaning
+     * "manual" implicitly.
+     */
+    publicationMethod: responsePublicationMethodSchema.nullable(),
+    /**
+     * Who confirmed it. Null until published.
+     *
+     * Not the same person as `approvedByUserId`, necessarily or usefully: the
+     * approver signs the words off, and whoever carries them to Yelp confirms
+     * having done so. Recording only the approver would attribute an act to
+     * somebody who may not have performed it.
+     */
+    publishedByUserId: uuidSchema.nullable(),
   })
   .extend(organizationOwnedSchema.shape)
   .extend(timestampsSchema.shape);
@@ -116,6 +145,86 @@ export const saveResponseDraftInputSchema = z.object({
 });
 
 export type SaveResponseDraftInput = z.infer<typeof saveResponseDraftInputSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Assisted publication                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The one status a manual publication may be confirmed from.
+ *
+ * Narrow on purpose, and narrower than it might look: a draft still in `draft`
+ * or `awaiting_approval` has not been signed off by anybody, and confirming
+ * that unapproved words were posted publicly would record an approval that
+ * never happened. A draft already `published` is handled by idempotency rather
+ * than by widening this — see `canConfirmPublication`.
+ */
+export const CONFIRMABLE_DRAFT_STATUSES = ["approved"] as const;
+
+export function canConfirmPublication(status: ResponseDraft["status"]): boolean {
+  return (CONFIRMABLE_DRAFT_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * Confirming that an approved response was posted by hand.
+ *
+ * The input carries the draft and nothing else. The actor comes from the
+ * session, the timestamp from the server clock, and the method is written
+ * literally — none of the three is a field a caller can supply, for the same
+ * reason `generateResponseDraftInputSchema` names a mention and nothing more: a
+ * request that could name its own publication method could claim a provider had
+ * verified it.
+ */
+export const confirmResponsePublicationInputSchema = z.object({
+  responseDraftId: uuidSchema,
+});
+
+export type ConfirmResponsePublicationInput = z.infer<
+  typeof confirmResponsePublicationInputSchema
+>;
+
+/**
+ * Undoing a confirmation somebody made by mistake.
+ *
+ * Deliberately *not* called a retraction. A retraction means a published reply
+ * was taken down from the platform, which is a public act with its own
+ * evidence; this means the reply was never posted and Lia's record was wrong.
+ * Naming them the same thing would put "we removed a bad reply" and "we
+ * mis-clicked" in one bucket, and the first is the one somebody will need to
+ * prove one day.
+ *
+ * A note is required rather than optional. The whole value of the correction is
+ * the explanation attached to it — a bare reversal in an audit trail reads as
+ * indecision, and the reader six months later is trying to establish what
+ * actually happened.
+ */
+export const unconfirmResponsePublicationInputSchema = z.object({
+  responseDraftId: uuidSchema,
+  reason: z.string().min(1).max(1000),
+});
+
+export type UnconfirmResponsePublicationInput = z.infer<
+  typeof unconfirmResponsePublicationInputSchema
+>;
+
+/**
+ * What a confirmation attempt did.
+ *
+ * `already_confirmed` is idempotent success rather than an error: the draft is
+ * recorded as published, which is what the caller wanted. It is distinguished
+ * from `confirmed` only so the interface can say "already recorded" instead of
+ * flashing a fresh success at somebody who double-clicked.
+ */
+export const PUBLICATION_CONFIRMATION_OUTCOMES = [
+  "confirmed",
+  "already_confirmed",
+] as const;
+export const publicationConfirmationOutcomeSchema = z.enum(
+  PUBLICATION_CONFIRMATION_OUTCOMES,
+);
+export type PublicationConfirmationOutcome = z.infer<
+  typeof publicationConfirmationOutcomeSchema
+>;
 
 /**
  * A request to draft a reply for one mention.

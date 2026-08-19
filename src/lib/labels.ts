@@ -284,6 +284,16 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "onboarding.team_skipped": "Team invitations skipped",
   "onboarding.completed": "Setup completed",
   "onboarding.ready_viewed": "Workspace ready screen opened",
+  // Yelp Assisted. Every one of these is worded to say what Lia actually did:
+  // it checked a listing, it noticed a counter move, somebody typed a review
+  // in, somebody said they had posted a reply. None of them says "synced",
+  // "imported", or "published".
+  "integration.listing_checked": "Yelp listing checked",
+  "integration.listing_check_failed": "Yelp listing check failed",
+  "yelp_activity.detected": "Yelp review activity detected",
+  "mention.captured_manually": "Review added by hand",
+  "response.publication_confirmed": "Response marked as posted",
+  "response.publication_unconfirmed": "Posted confirmation withdrawn",
 };
 
 /** Sync-run outcomes, as a person would describe them. */
@@ -347,4 +357,9 @@ export const CAPABILITY_LABELS: Record<string, string> = {
   canDeleteResponses: "Delete responses",
   requiresApproval: "Human approval required",
   requiresPartnerAccess: "Partner access required",
+  canMatchLocations: "Match listings to locations",
+  // "Assisted posting" rather than "Publish responses (manual)": the second
+  // reading would put the word publish next to a capability that is precisely
+  // not publishing.
+  supportsAssistedPosting: "Assisted posting",
 };

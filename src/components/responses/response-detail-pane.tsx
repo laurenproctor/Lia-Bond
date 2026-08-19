@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
+import { AssistedPostingPanel } from "@/components/responses/assisted-posting-panel";
 import { ResponseComposer } from "@/components/responses/response-composer";
 import {
   DetailField,
@@ -19,6 +20,15 @@ export interface ResponseDetailPaneProps {
   mention: Mention | undefined;
   publishing: PublishingMode;
   canDecide: boolean;
+  /**
+   * Where "Open in Yelp" should send somebody, resolved and validated on the
+   * server (`resolveYelpDestination`). Null when no trusted URL exists, in
+   * which case the panel offers no link rather than a guessed one.
+   */
+  assistedDestinationUrl?: string | null;
+  assistedDestinationKind?: "review" | "listing";
+  /** Role-level permission to confirm a manual publication. */
+  canConfirmPublication?: boolean;
   /** Role-level edit permission, threaded to the composer. */
   canEdit: boolean;
   assigneeName: string | null;
@@ -38,6 +48,9 @@ export function ResponseDetailPane({
   mention,
   publishing,
   canDecide,
+  assistedDestinationUrl = null,
+  assistedDestinationKind = "listing",
+  canConfirmPublication = false,
   canEdit,
   assigneeName,
   approvalEntries,
@@ -76,6 +89,24 @@ export function ResponseDetailPane({
             canDecide={canDecide}
             canEdit={canEdit}
           />
+
+          {/*
+            The handoff, and only where a source actually supports it. Gated on
+            the draft being approved or already manually posted: anything
+            earlier has nothing to hand over, and a copy button beside an
+            unapproved draft is an invitation to post words nobody signed off.
+          */}
+          {publishing === "assisted" &&
+          (draft.status === "approved" ||
+            (draft.status === "published" &&
+              draft.publicationMethod === "manual_external")) ? (
+            <AssistedPostingPanel
+              draft={draft}
+              destinationUrl={assistedDestinationUrl}
+              destinationKind={assistedDestinationKind}
+              canConfirm={canConfirmPublication}
+            />
+          ) : null}
         </DetailSection>
 
         {hasHumanEdit(draft) ? (

@@ -8,6 +8,8 @@ import type {
   NewsRejectedCandidate,
   OAuthState,
   PlatformSyncRun,
+  YelpActivityOccurrence,
+  YelpListingSnapshot,
 } from "@/domain";
 import type { SealedCredentialRecord } from "@/lib/data/types";
 import type { SeedDataset } from "@/lib/seed/dataset";
@@ -129,6 +131,19 @@ interface RuntimeStore {
    * budget generating a response it never generated.
    */
   generationAttempts: DemoGenerationAttempt[];
+  /**
+   * Yelp listing observations, and the changes between them.
+   *
+   * Runtime-only for the same reason every other history table here is: a
+   * seeded snapshot would claim Lia had already checked a real Yelp listing,
+   * and a seeded occurrence would put fabricated review activity — the exact
+   * thing this feature must never invent — in front of anybody opening demo
+   * mode. Both fill in only when a check actually runs.
+   */
+  yelpListingSnapshots: YelpListingSnapshot[];
+  yelpListingSnapshotSequence: number;
+  yelpActivityOccurrences: YelpActivityOccurrence[];
+  yelpActivityOccurrenceSequence: number;
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -150,6 +165,10 @@ function freshRuntimeStore(): RuntimeStore {
     automationSweeps: [],
     automationRuleExecutions: [],
     generationAttempts: [],
+    yelpListingSnapshots: [],
+    yelpListingSnapshotSequence: 0,
+    yelpActivityOccurrences: [],
+    yelpActivityOccurrenceSequence: 0,
   };
 }
 
