@@ -94,7 +94,7 @@ nothing with it but the root layout's font.
 | `/integrations/yelp` | Yelp Assisted: capability table, connected listings, detected activity, manual capture, disconnect | repositories + Yelp Places API |
 | `/integrations/yelp/connect` | Listing search and confirmation for one location | repositories + Yelp Places API |
 | `/api/cron/yelp-listing-check` | Scheduled listing-check sweep across every tenant. **Built but not scheduled** — the Hobby plan's cron-job cap is already reached, so checks run from the interactive control until the account moves to Pro (`docs/integrations/yelp-assisted.md` §10) | repositories + Yelp Places API |
-| `/integrations/review-widget` | Website review widget: theme, review selection, approved domains, live preview, embed code, switch off, regenerate | repositories |
+| `/integrations/review-widget` | Website review widget: theme, review selection, approved domains, live preview, embed code, switch off, regenerate. Sidebar entry **Website widgets**, nested under `/integrations` — the only nav item beneath another, which is why `isNavItemActive` resolves the most specific match rather than any matching prefix | repositories |
 | `/embed/review-widget.js` | The loader script every embed snippet points at. **Public, no session** — ES5, ~2 KB, origin baked in per deployment | — |
 | `/embed/review-widget/[publicId]` | The widget document a customer's website frames. **Public, no session** — one `SECURITY DEFINER` function is the entire anonymous surface (see Tenancy) | `review_widget_render` |
 | `/embed/review-widget/preview` | The same document against unsaved configuration. Session-gated on `review_widget.manage`; `frame-ancestors 'self'`, `no-store` | repositories |

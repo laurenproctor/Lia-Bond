@@ -3,7 +3,7 @@ import { ArrowRight, Code2 } from "lucide-react";
 import { Card, CardHeader } from "@/components/ui/card";
 
 /**
- * The entry point to the website widget.
+ * The entry point to the website widgets area.
  *
  * The odd one out on the integrations screen, and the copy says so rather than
  * letting the card's position imply otherwise. Every other card there is a
@@ -32,7 +32,7 @@ export function ReviewWidgetEntryCard({
             <span className="inline-flex size-6 items-center justify-center rounded-md bg-gray-100">
               <Code2 className="size-3.5 text-gray-700" aria-hidden />
             </span>
-            Website widget
+            Website widgets
           </span>
         }
         description="Show one recent Google review on your own website, with a copy-and-paste embed code."
@@ -54,7 +54,7 @@ export function ReviewWidgetEntryCard({
           href="/integrations/review-widget"
           className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-2.5 text-[13px] font-medium whitespace-nowrap text-gray-700 transition-colors hover:bg-gray-50 hover:text-gray-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
         >
-          {configuredCount === 0 ? "Set up the website widget" : "Manage website widgets"}
+          {configuredCount === 0 ? "Set up a website widget" : "Manage website widgets"}
           <ArrowRight className="size-4 shrink-0" aria-hidden />
         </Link>
       </div>

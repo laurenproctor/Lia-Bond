@@ -8,7 +8,8 @@ snippet.
 <script async src="https://lia.bond/embed/review-widget.js"></script>
 ```
 
-Configured at `/integrations/review-widget`.
+Configured at `/integrations/review-widget`, reached from **Website widgets**
+in the sidebar.
 
 ---
 
