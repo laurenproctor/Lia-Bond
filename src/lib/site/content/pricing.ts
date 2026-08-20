@@ -1,3 +1,5 @@
+import { availablePlatformNames } from "@/lib/site/content/platforms";
+
 /**
  * The published per-location price schedule.
  *
@@ -196,5 +198,78 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
       "Custom workflows and approvals",
       "SSO and role-based access",
     ],
+  },
+] as const;
+
+/**
+ * The FAQ answers are load-bearing marketing claims, so each one is checked
+ * against what the product actually does:
+ *
+ * - "nothing goes public until a person approves it" — `requiresApproval` on
+ *   `ConnectorCapabilities`, and the approval-first rule in CLAUDE.md.
+ * - The platform sentence is **derived** from `PLATFORM_ROWS` rather than
+ *   written out. It used to be prose, and prose is how Reddit stayed listed
+ *   as available here for as long as it took somebody to notice — the
+ *   platforms table is the honest record, and this sentence now cannot
+ *   disagree with it. A platform switched off there leaves this answer on its
+ *   own.
+ *
+ * These live here rather than in the page so the claim is importable, and so
+ * a test can hold it to the platforms table.
+ */
+export interface PricingFaq {
+  question: string;
+  answer: string;
+}
+
+/** Named separately because the sentence calls it out ahead of the others. */
+const CORE_PLATFORM = "Google Business Profile";
+
+const LIST_FORMAT = new Intl.ListFormat("en", {
+  style: "long",
+  type: "conjunction",
+});
+
+const REPLY_PLATFORMS = availablePlatformNames("manual").filter(
+  (name) => name !== CORE_PLATFORM,
+);
+
+/*
+ * The monitor-only sources stay prose: "News and media and Article comments"
+ * is what deriving them word-for-word produces, and it does not read as
+ * English. The names are still held to the table by
+ * `tests/site-platform-claims.test.ts`, which is the guarantee that mattered.
+ */
+const MONITORED_SENTENCE =
+  "News coverage and supported article comments are monitored too.";
+
+const PLATFORM_ANSWER = `${CORE_PLATFORM} is core, with ${LIST_FORMAT.format(
+  REPLY_PLATFORMS,
+)} available. ${MONITORED_SENTENCE} We add platforms on request.`;
+
+export const PRICING_FAQS: readonly PricingFaq[] = [
+  {
+    question: "How does per-location pricing work?",
+    answer:
+      "Each location is priced at the band it falls into, the way tax brackets work. Adding an eleventh location does not reprice the first ten — it is charged at the lower band, and so is every location after it.",
+  },
+  {
+    question: "Does Lia post replies automatically?",
+    answer:
+      "No. Lia drafts responses, but nothing goes public until a person approves it. Sensitive reviews are always held for review first.",
+  },
+  {
+    question: "Which platforms do you support?",
+    answer: PLATFORM_ANSWER,
+  },
+  {
+    question: "How long does setup take?",
+    answer:
+      "Most teams are live in an afternoon. We connect your profiles, import your brand voice, and tune escalation rules with you.",
+  },
+  {
+    question: "Is there a contract?",
+    answer:
+      "No long commitment. Billing is monthly per location, and you can cancel any time without penalty.",
   },
 ] as const;

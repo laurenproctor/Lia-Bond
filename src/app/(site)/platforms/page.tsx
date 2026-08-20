@@ -11,6 +11,8 @@ import {
   PLATFORM_ROWS,
   PUBLISHING_LABELS,
   PUBLISHING_NOTES,
+  UNAVAILABLE_LABEL,
+  UNAVAILABLE_NOTE,
   type Publishing,
 } from "@/lib/site/content/platforms";
 
@@ -33,6 +35,11 @@ const BADGE: Record<Publishing, string> = {
   monitor: "bg-site-tint text-site-muted ring-site-border",
 };
 
+// An unavailable platform is an absence rather than a warning, so it takes the
+// same neutral tokens as "monitor" rather than the amber ones. Nothing on this
+// page should read as an alarm; the row simply does not offer an answer yet.
+const UNAVAILABLE_BADGE = "bg-site-tint text-site-muted ring-site-border";
+
 /**
  * The publishing modes the table actually uses, in a stable display order.
  *
@@ -41,8 +48,15 @@ const BADGE: Record<Publishing, string> = {
  */
 const MODE_ORDER: readonly Publishing[] = ["direct", "manual", "monitor"];
 const PUBLISHING_MODES_IN_USE = MODE_ORDER.filter((mode) =>
-  PLATFORM_ROWS.some((row) => row.publishing === mode),
+  PLATFORM_ROWS.some((row) => row.available && row.publishing === mode),
 );
+
+/*
+ * Whether any row is switched off, which decides if the legend explains what
+ * "Not available" means. Derived for the same reason the modes above are: an
+ * explanation for a state no row is in reads as a state some row might be.
+ */
+const HAS_UNAVAILABLE = PLATFORM_ROWS.some((row) => !row.available);
 
 export default function PlatformsPage() {
   return (
@@ -96,7 +110,9 @@ export default function PlatformsPage() {
                 >
                   <th
                     scope="row"
-                    className="px-6 py-5 align-top text-[15px] font-semibold text-site-ink"
+                    className={`px-6 py-5 align-top text-[15px] font-semibold ${
+                      row.available ? "text-site-ink" : "text-site-muted"
+                    }`}
                   >
                     {row.name}
                   </th>
@@ -104,10 +120,23 @@ export default function PlatformsPage() {
                     {row.note}
                   </td>
                   <td className="px-6 py-5 align-top">
+                    {/*
+                      An unavailable platform shows no publishing answer at
+                      all. Rendering its `publishing` mode here would promise
+                      the reply route it will have one day as though it had it
+                      now, which is the exact overclaim this table exists to
+                      prevent.
+                    */}
                     <span
-                      className={`inline-block rounded-full px-3 py-1 text-[12.5px] font-semibold whitespace-nowrap ring-1 ${BADGE[row.publishing]}`}
+                      className={`inline-block rounded-full px-3 py-1 text-[12.5px] font-semibold whitespace-nowrap ring-1 ${
+                        row.available
+                          ? BADGE[row.publishing]
+                          : UNAVAILABLE_BADGE
+                      }`}
                     >
-                      {PUBLISHING_LABELS[row.publishing]}
+                      {row.available
+                        ? PUBLISHING_LABELS[row.publishing]
+                        : UNAVAILABLE_LABEL}
                     </span>
                   </td>
                 </tr>
@@ -140,6 +169,16 @@ export default function PlatformsPage() {
               </dd>
             </div>
           ))}
+          {HAS_UNAVAILABLE && (
+            <div>
+              <dt className="mb-2 text-[16px] font-semibold text-site-ink">
+                {UNAVAILABLE_LABEL}
+              </dt>
+              <dd className="text-[14.5px] leading-[1.6] text-site-body">
+                {UNAVAILABLE_NOTE}
+              </dd>
+            </div>
+          )}
         </dl>
       </Section>
 

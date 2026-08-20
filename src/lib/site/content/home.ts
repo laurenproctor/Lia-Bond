@@ -15,7 +15,7 @@ export const HOME_STAGES: readonly Stage[] = [
   {
     name: "Detect",
     description:
-      "Reviews, Reddit threads, press, and supported article comments arrive in one place, matched to the right brand and location.",
+      "Reviews, press, and supported article comments arrive in one place, matched to the right brand and location.",
   },
   {
     name: "Understand",

@@ -10,7 +10,11 @@ import {
   Section,
   SectionHeading,
 } from "@/components/site/section";
-import { formatDollars, monthlyTotal } from "@/lib/site/content/pricing";
+import {
+  PRICING_FAQS,
+  formatDollars,
+  monthlyTotal,
+} from "@/lib/site/content/pricing";
 
 export const metadata: Metadata = {
   title: "Pricing",
@@ -26,44 +30,6 @@ export const metadata: Metadata = {
  */
 const EXAMPLE_LOCATIONS = 12;
 const EXAMPLE_TOTAL = monthlyTotal(EXAMPLE_LOCATIONS);
-
-/**
- * The FAQ answers are load-bearing marketing claims, so each one is checked
- * against what the product actually does:
- *
- * - "nothing goes public until a person approves it" — `requiresApproval` on
- *   `ConnectorCapabilities`, and the approval-first rule in CLAUDE.md.
- * - The platform list is `PLATFORMS` in `src/domain/enums.ts`. The design
- *   reference also named Booking.com, which is not a platform this product
- *   models; it is dropped rather than promised.
- */
-const FAQS = [
-  {
-    question: "How does per-location pricing work?",
-    answer:
-      "Each location is priced at the band it falls into, the way tax brackets work. Adding an eleventh location does not reprice the first ten — it is charged at the lower band, and so is every location after it.",
-  },
-  {
-    question: "Does Lia post replies automatically?",
-    answer:
-      "No. Lia drafts responses, but nothing goes public until a person approves it. Sensitive reviews are always held for review first.",
-  },
-  {
-    question: "Which platforms do you support?",
-    answer:
-      "Google Business Profile is core, with Tripadvisor, Yelp, Trustpilot, Facebook, and Reddit available. News coverage and supported article comments are monitored too. We add platforms on request.",
-  },
-  {
-    question: "How long does setup take?",
-    answer:
-      "Most teams are live in an afternoon. We connect your profiles, import your brand voice, and tune escalation rules with you.",
-  },
-  {
-    question: "Is there a contract?",
-    answer:
-      "No long commitment. Billing is monthly per location, and you can cancel any time without penalty.",
-  },
-] as const;
 
 export default function PricingPage() {
   return (
@@ -134,7 +100,7 @@ export default function PricingPage() {
             Questions, answered.
           </SectionHeading>
           <div className="grid grid-cols-1 gap-[clamp(28px,4vw,56px)] md:grid-cols-2">
-            {FAQS.map((faq) => (
+            {PRICING_FAQS.map((faq) => (
               <div key={faq.question}>
                 <h3 className="mb-2.5 text-[17px] font-semibold text-site-ink">
                   {faq.question}

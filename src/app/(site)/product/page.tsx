@@ -24,7 +24,7 @@ export const metadata: Metadata = {
 const DETAIL: Record<string, readonly string[]> = {
   Detect: [
     "Connect your Google Business Profile and Lia starts pulling reviews for every location on the account.",
-    "Add Reddit, news monitoring, and the review platforms you care about. Each mention is matched to the right brand and the right location before anyone sees it.",
+    "Add news monitoring and the review platforms you care about. Each mention is matched to the right brand and the right location before anyone sees it.",
   ],
   Understand: [
     "Every mention is read for sentiment, topic, relevance, risk, and urgency.",
@@ -36,7 +36,7 @@ const DETAIL: Record<string, readonly string[]> = {
   ],
   Respond: [
     "Drafts come back in your brand voice, tuned by the settings you control, and shaped for the platform they are going to.",
-    "A Google review reply and a Reddit comment are not the same register, and Lia does not pretend otherwise.",
+    "A Google review reply and a comment under a news article are not the same register, and Lia does not pretend otherwise.",
   ],
   Escalate: [
     "Sensitive mentions route to the people who should see them first, carrying the full thread and a plain statement of why they were flagged.",

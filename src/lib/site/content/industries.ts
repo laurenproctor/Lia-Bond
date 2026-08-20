@@ -46,7 +46,7 @@ export const INDUSTRY_CONTENT: Record<IndustrySlug, IndustryContent> = {
   },
   restaurants: {
     heading: "The dining room closes. The reviews do not.",
-    lede: "Service ends and the posting starts — Google, Yelp, Reddit threads, and the local food press, all at once, usually after the manager has gone home.",
+    lede: "Service ends and the posting starts — Google, Yelp, and the local food press, all at once, usually after the manager has gone home.",
     pressures: [
       {
         title: "Volume beats attention",
@@ -66,7 +66,7 @@ export const INDUSTRY_CONTENT: Record<IndustrySlug, IndustryContent> = {
       attribution: "Restaurant guest · Yelp",
     },
     metaDescription:
-      "Reputation monitoring and reply drafting for restaurants and restaurant groups, across Google, Yelp, Reddit, and local press.",
+      "Reputation monitoring and reply drafting for restaurants and restaurant groups, across Google, Yelp, and local press.",
   },
   "salons-and-barbershops": {
     heading: "Your chair is booked on your reviews.",

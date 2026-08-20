@@ -1,10 +1,14 @@
 # Reddit access approval — Gate 0 record
 
-**Status: not completed.** Nothing below is filled in, so
-`REDDIT_ACCESS_APPROVAL_REF` must stay unset and `REDDIT_ROLLOUT_STAGE` must
-stay `off` or unset. Every live Reddit code path in this repository is gated on
-that variable and resolves to `off` without it — see `resolveRedditDeployment`
-in `src/lib/env.ts`.
+**Status: applied for, and refused.** Reddit rejected the API application.
+Nothing below is filled in, so `REDDIT_ACCESS_APPROVAL_REF` must stay unset and
+`REDDIT_ROLLOUT_STAGE` must stay `off` or unset. Every live Reddit code path in
+this repository is gated on that variable and resolves to `off` without it —
+see `resolveRedditDeployment` in `src/lib/env.ts`.
+
+The gate did its job: no live client was ever built, no unauthorized request
+was ever made, and the rejection cost no code. See §0 for what it did cost, and
+what a second application would have to change.
 
 This is the owner's document, not Claude's. It records the outcome of a
 conversation with Reddit that has to happen before Lia may call their API
@@ -16,6 +20,41 @@ reasonable person would expect the terms to say.
 Reddit contact's personal details, no signed copy. This file is committed to a
 public repository. It records *that* an agreement exists and *what it permits*;
 the agreement itself lives wherever the owner keeps contracts.
+
+---
+
+## 0. Application history
+
+Filled in by the owner from the correspondence, not from memory of it. The
+rejection **reason** is the field that decides whether reapplying is worth the
+calendar time, and it is the one field here that cannot be inferred from this
+repository.
+
+| Field | Value |
+| --- | --- |
+| Applied on | _(YYYY-MM-DD)_ |
+| Category filed under | _(developer / researcher / moderator)_ |
+| Outcome | **Rejected** |
+| Rejected on | _(YYYY-MM-DD)_ |
+| Reason given | _(quote it, do not paraphrase)_ |
+| Reapplication permitted? | _(what, if anything, Reddit said about applying again)_ |
+
+### What each reason would mean
+
+Recorded ahead of the answer so the decision is not made in the moment. The
+first is the only one that is a code change, and it is a small one.
+
+| If the reason was | Then |
+| --- | --- |
+| The write/posting ask — an AI agent replying under a brand's account | Reapply **read-only**. Drop `submit`, `edit`, and `history` from the requested scopes and file for monitoring alone. The capability model already expresses this exactly: `REDDIT_ROLLOUT_STAGE=read_only` with `commentSubmissionPermitted: false` resolves reply publishing to `read_only`, which is honest copy rather than a disabled button. |
+| Commercial terms — price, volume, or customer count | Not an architecture problem, and reapplying with the same shape will get the same answer. Establish the real number (see `docs/integrations/reddit.md` §8, where the ~$12,000/month figure is explicitly unverified) before spending more time. |
+| The application itself — wrong queue, thin answers on architecture or data handling | Refile with §2 of `docs/integrations/reddit.md` answered in full. Cheap, and worth doing before concluding anything. |
+| A categorical no for this class of product | Stop applying. Either drop Reddit, or build **Reddit Assisted** on the pattern in `docs/integrations/yelp-assisted.md` — a person captures the thread, and everything downstream (analysis, escalation, drafting, approval) is unchanged. That is a real feature, but it is not monitoring and must never be described as it. |
+
+**Until one of those is chosen, Reddit is off in public.** The site's platform
+table names Reddit and says it is not available
+(`src/lib/site/content/platforms.ts`); no other marketing copy names it at all,
+and `tests/site-platform-claims.test.ts` fails if that changes.
 
 ---
 
