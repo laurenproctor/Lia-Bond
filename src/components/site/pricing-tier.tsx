@@ -15,6 +15,7 @@ export function PricingTier({
   priceNote,
   ctaLabel,
   ctaHref,
+  savingNote = null,
   features,
   featured = false,
 }: {
@@ -30,6 +31,12 @@ export function PricingTier({
    * tier and belongs with the copy that describes it.
    */
   ctaHref: string;
+  /**
+   * What annual billing saves on this tier, already phrased for the period on
+   * screen. `null` on the quoted tier, which has no listed rate to discount —
+   * an empty pill there would imply a saving nobody can name.
+   */
+  savingNote?: string | null;
   features: readonly string[];
   featured?: boolean;
 }) {
@@ -71,10 +78,25 @@ export function PricingTier({
         </span>
       </p>
       <p
-        className={`mb-6 text-[12.5px] ${featured ? "text-site-muted-dark" : "text-site-muted"}`}
+        className={`text-[12.5px] ${savingNote ? "mb-2.5" : "mb-6"} ${featured ? "text-site-muted-dark" : "text-site-muted"}`}
       >
         {priceNote}
       </p>
+
+      {savingNote ? (
+        // `w-fit` on a block rather than an inline pill: the text is short
+        // enough to sit on one line at every card width, and a block keeps the
+        // pill hugging its copy instead of stretching the card's full measure.
+        <p
+          className={`mb-6 w-fit rounded-[20px] px-2.5 py-1 text-[12px] font-semibold ${
+            featured
+              ? "bg-white/10 text-site-orange"
+              : "bg-site-blue-tint text-site-blue"
+          }`}
+        >
+          {savingNote}
+        </p>
+      ) : null}
 
       <Link
         href={ctaHref}

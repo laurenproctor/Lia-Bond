@@ -1,14 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { PricingBand } from "@/lib/site/content/pricing";
 import {
+  ANNUAL_DISCOUNT_LABEL,
+  ANNUAL_DISCOUNT_PERCENT,
+  ANNUAL_MONTHS_BILLED,
+  ANNUAL_MONTHS_FREE,
+  DEFAULT_ESTIMATE_LOCATIONS,
   FIRST_LOCATION_MONTHLY,
   LISTED_LOCATION_LIMIT,
+  LOCATION_CHOICES,
   LOWEST_LISTED_MONTHLY,
   PRICING_BANDS,
   PRICING_PLANS,
   SECOND_LOCATION_MONTHLY,
+  annualSavingTotal,
+  annualTotal,
+  annualTotalPaidMonthly,
   formatAnnualRate,
+  formatBandSaving,
   formatDollars,
+  formatLocationChoice,
   formatMonthlyRate,
   monthlyTotal,
 } from "@/lib/site/content/pricing";
@@ -69,14 +80,24 @@ describe("pricing bands", () => {
     expect(TOP_BAND.from).toBe(LISTED_LOCATION_LIMIT + 1);
     expect(formatMonthlyRate(TOP_BAND)).toBe("Custom");
     expect(formatAnnualRate(TOP_BAND)).toBe("Custom");
+    // Nothing listed to discount, so no saving is invented for the quoted row.
+    expect(formatBandSaving(TOP_BAND)).toBeNull();
   });
 
-  it("prices the annual column at exactly twelve months", () => {
-    expect(formatAnnualRate(bandAt(0))).toBe("$708");
-    expect(formatAnnualRate(bandAt(1))).toBe("$588");
-    expect(formatAnnualRate(bandAt(2))).toBe("$528");
-    expect(formatAnnualRate(bandAt(3))).toBe("$468");
-    expect(formatAnnualRate(bandAt(4))).toBe("$408");
+  it("prices the annual column at ten months, not twelve", () => {
+    expect(formatAnnualRate(bandAt(0))).toBe("$590");
+    expect(formatAnnualRate(bandAt(1))).toBe("$490");
+    expect(formatAnnualRate(bandAt(2))).toBe("$440");
+    expect(formatAnnualRate(bandAt(3))).toBe("$390");
+    expect(formatAnnualRate(bandAt(4))).toBe("$340");
+  });
+
+  it("saves two months of the band's rate on every listed row", () => {
+    expect(formatBandSaving(bandAt(0))).toBe("$118");
+    expect(formatBandSaving(bandAt(1))).toBe("$98");
+    expect(formatBandSaving(bandAt(2))).toBe("$88");
+    expect(formatBandSaving(bandAt(3))).toBe("$78");
+    expect(formatBandSaving(bandAt(4))).toBe("$68");
   });
 
   it("labels each band with the range it actually covers", () => {
@@ -142,10 +163,10 @@ describe("formatDollars", () => {
 });
 
 /**
- * The toggle repriced the cards, so both faces of every card are asserted
- * here. The failure this guards against is an annual figure that is not
- * twelve times the monthly one — a discount the business never agreed to,
- * or a surcharge, depending on which way it slipped.
+ * The toggle reprices the cards, so both faces of every card are asserted
+ * here. The failure this guards against is an annual figure that is not the
+ * agreed discount off twelve months — a deeper discount than the business
+ * signed off, or a surcharge, depending on which way it slipped.
  */
 describe("pricing plans", () => {
   const plan = (name: string) => {
@@ -156,12 +177,12 @@ describe("pricing plans", () => {
 
   it("shows the first-location rate on the single-location card", () => {
     expect(plan("Single location").price("monthly")).toBe("$59");
-    expect(plan("Single location").price("annual")).toBe("$708");
+    expect(plan("Single location").price("annual")).toBe("$590");
   });
 
   it("shows the second-band rate on the growth card", () => {
     expect(plan("Growth").price("monthly")).toBe("$49");
-    expect(plan("Growth").price("annual")).toBe("$588");
+    expect(plan("Growth").price("annual")).toBe("$490");
   });
 
   it("quotes the brand card in both periods", () => {
@@ -171,13 +192,28 @@ describe("pricing plans", () => {
 
   it("names the unit each figure is quoted in", () => {
     expect(plan("Single location").priceNote("monthly")).toBe(
-      "per month · $708 a year",
+      "per month · $590 a year",
     );
     expect(plan("Single location").priceNote("annual")).toBe(
       "per year · $59 a month",
     );
     expect(plan("Growth").priceNote("monthly")).toContain("falling to $34");
-    expect(plan("Growth").priceNote("annual")).toContain("falling to $408");
+    expect(plan("Growth").priceNote("annual")).toContain("falling to $340");
+  });
+
+  it("names the annual saving on both faces of a listed card", () => {
+    expect(plan("Single location").savingNote("monthly")).toBe(
+      "Save $118 a year on annual billing",
+    );
+    expect(plan("Single location").savingNote("annual")).toBe(
+      "You save $118 a year",
+    );
+    expect(plan("Growth").savingNote("annual")).toBe("You save $98 a year");
+  });
+
+  it("promises no saving on the card that has no listed rate", () => {
+    expect(plan("Brand").savingNote("monthly")).toBeNull();
+    expect(plan("Brand").savingNote("annual")).toBeNull();
   });
 
   it("prices every card against a band on the published table", () => {
@@ -196,5 +232,94 @@ describe("pricing plans", () => {
     expect(
       PRICING_PLANS.filter((candidate) => candidate.featured),
     ).toHaveLength(1);
+  });
+});
+
+/**
+ * The annual discount is one constant, and these assert that every figure the
+ * page quotes is that constant applied — not a second number typed into the
+ * copy that could drift away from the prices under it.
+ */
+describe("the annual discount", () => {
+  it("charges ten months for a year, leaving two free", () => {
+    expect(ANNUAL_MONTHS_BILLED).toBe(10);
+    expect(ANNUAL_MONTHS_FREE).toBe(2);
+    expect(ANNUAL_MONTHS_BILLED + ANNUAL_MONTHS_FREE).toBe(12);
+  });
+
+  it("quotes a percentage that matches the months it is derived from", () => {
+    expect(ANNUAL_DISCOUNT_PERCENT).toBe(Math.round((2 / 12) * 100));
+    expect(ANNUAL_DISCOUNT_LABEL).toBe("2 months free");
+  });
+
+  it("bills a year at ten months of the blended monthly total", () => {
+    expect(annualTotal(1)).toBe(590);
+    // 12 locations: $588 a month, ten months of it.
+    expect(annualTotal(DEFAULT_ESTIMATE_LOCATIONS)).toBe(5880);
+    expect(annualTotalPaidMonthly(DEFAULT_ESTIMATE_LOCATIONS)).toBe(7056);
+    expect(annualSavingTotal(DEFAULT_ESTIMATE_LOCATIONS)).toBe(1176);
+  });
+
+  it("saves exactly the gap between paying monthly and paying annually", () => {
+    [1, 2, 10, 11, 25, 50, 100].forEach((locations) => {
+      const paidMonthly = annualTotalPaidMonthly(locations);
+      const paidAnnually = annualTotal(locations);
+      const saved = annualSavingTotal(locations);
+
+      expect(paidMonthly).not.toBeNull();
+      expect(paidAnnually).not.toBeNull();
+      expect(saved).not.toBeNull();
+      expect((paidMonthly ?? 0) - (paidAnnually ?? 0)).toBe(saved);
+      // A discount, in every direction it could have slipped.
+      expect(paidAnnually ?? 0).toBeLessThan(paidMonthly ?? 0);
+      expect(saved ?? 0).toBeGreaterThan(0);
+    });
+  });
+
+  it("scales the saving with the size of the group", () => {
+    expect(annualSavingTotal(20) ?? 0).toBeGreaterThan(
+      annualSavingTotal(2) ?? 0,
+    );
+  });
+
+  it("quotes rather than discounts above the listed range", () => {
+    const beyond = LISTED_LOCATION_LIMIT + 1;
+    expect(annualTotal(beyond)).toBeNull();
+    expect(annualTotalPaidMonthly(beyond)).toBeNull();
+    expect(annualSavingTotal(beyond)).toBeNull();
+  });
+});
+
+/**
+ * The estimator's dropdown. Its options are the only way a reader reaches the
+ * quoted case from that control, so the list has to run past the listed range
+ * rather than stopping at it.
+ */
+describe("estimator location choices", () => {
+  it("starts at one location and only ever climbs", () => {
+    expect(LOCATION_CHOICES.at(0)).toBe(1);
+    LOCATION_CHOICES.reduce((previous, choice) => {
+      expect(choice).toBeGreaterThan(previous);
+      return choice;
+    }, 0);
+  });
+
+  it("offers a count past the listed range so the quote is reachable", () => {
+    expect(LOCATION_CHOICES.at(-1)).toBe(LISTED_LOCATION_LIMIT + 1);
+    expect(LOCATION_CHOICES).toContain(LISTED_LOCATION_LIMIT);
+  });
+
+  it("opens on a choice it actually offers, and a priced one", () => {
+    expect(LOCATION_CHOICES).toContain(DEFAULT_ESTIMATE_LOCATIONS);
+    expect(monthlyTotal(DEFAULT_ESTIMATE_LOCATIONS)).not.toBeNull();
+  });
+
+  it("labels one location in the singular and the quote by its bound", () => {
+    expect(formatLocationChoice(1)).toBe("1 location");
+    expect(formatLocationChoice(12)).toBe("12 locations");
+    expect(formatLocationChoice(LISTED_LOCATION_LIMIT)).toBe("100 locations");
+    expect(formatLocationChoice(LISTED_LOCATION_LIMIT + 1)).toBe(
+      "More than 100 locations",
+    );
   });
 });
