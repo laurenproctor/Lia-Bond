@@ -30,3 +30,4 @@ export * from "@/domain/entities/monitoring";
 export * from "@/domain/entities/yelp";
 export * from "@/domain/entities/reddit";
 export * from "@/domain/entities/publication";
+export * from "@/domain/entities/review-widget";

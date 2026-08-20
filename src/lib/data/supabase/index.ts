@@ -86,6 +86,7 @@ import {
   toUser,
 } from "@/lib/data/supabase/mappers";
 import { createMonitoringRepositories } from "@/lib/data/supabase/monitoring";
+import { createReviewWidgetRepository } from "@/lib/data/supabase/review-widgets";
 import { createYelpRepositories } from "@/lib/data/supabase/yelp";
 import { activationProblems } from "@/lib/rules/readiness";
 
@@ -1897,6 +1898,7 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
 
     // Yelp Assisted's own file, for the same reason.
     ...createYelpRepositories(client),
+    reviewWidgets: createReviewWidgetRepository(client),
 
     mentions: {
       async list(scope, filter = {}) {

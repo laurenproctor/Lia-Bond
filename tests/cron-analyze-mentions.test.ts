@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetDemoStore } from "@/lib/data/demo/store";
 
 const SECRET = "test-cron-secret-value";
 
@@ -14,6 +15,15 @@ const SECRET = "test-cron-secret-value";
  */
 
 beforeEach(() => {
+  // Every case here POSTs to the route, and the sweep analyses the seeded
+  // mentions it finds — so the fifth case would otherwise run against a
+  // backlog the first four had already drained. This used to happen by
+  // accident: `vi.resetModules()` gave each import a fresh module graph and
+  // therefore a fresh copy of the demo store. The store is now a genuine
+  // process singleton (see the comment on `STORE_KEY`), which is what makes a
+  // server action's write visible to a route handler, so the reset this suite
+  // always depended on is now stated rather than inherited.
+  resetDemoStore();
   vi.stubEnv("CRON_SECRET", SECRET);
   vi.stubEnv("LIA_AI_MODE", "mock");
   vi.stubEnv("LIA_NEWS_MODE", "mock");

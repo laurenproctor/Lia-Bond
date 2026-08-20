@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ClosingCta } from "@/components/site/closing-cta";
 import { PricingBands } from "@/components/site/pricing-bands";
+import { PricingEstimator } from "@/components/site/pricing-estimator";
 import { PricingPlans } from "@/components/site/pricing-plans";
 import { SpeechBubble } from "@/components/site/speech-bubble";
 import {
@@ -10,22 +11,17 @@ import {
   Section,
   SectionHeading,
 } from "@/components/site/section";
-import { formatDollars, monthlyTotal } from "@/lib/site/content/pricing";
+import {
+  ANNUAL_DISCOUNT_LABEL,
+  ANNUAL_DISCOUNT_PERCENT,
+  ANNUAL_MONTHS_BILLED,
+} from "@/lib/site/content/pricing";
 
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Per location, billed monthly, and the rate falls with every band you cross. From $59 for one location down to $34 each at scale.",
+    "Per location, and the rate falls with every band you cross. From $59 for one location down to $34 each at scale — pay annually and two months are free.",
 };
-
-/**
- * A worked example, computed rather than written down, so it cannot contradict
- * the table it sits under. `monthlyTotal` returns `null` above the listed
- * range — twelve is not, but the render below still guards rather than print
- * "$null" if the bands are ever rewritten around it.
- */
-const EXAMPLE_LOCATIONS = 12;
-const EXAMPLE_TOTAL = monthlyTotal(EXAMPLE_LOCATIONS);
 
 /**
  * The FAQ answers are load-bearing marketing claims, so each one is checked
@@ -51,7 +47,7 @@ const FAQS = [
   {
     question: "Which platforms do you support?",
     answer:
-      "Google Business Profile is core, with Tripadvisor, Yelp, Trustpilot, Facebook, and Reddit available. News coverage and supported article comments are monitored too. We add platforms on request.",
+      "Google Business Profile is core, with Yelp, Trustpilot, Facebook, and Reddit available. News coverage and supported article comments are monitored too. We add platforms on request.",
   },
   {
     question: "How long does setup take?",
@@ -59,9 +55,13 @@ const FAQS = [
       "Most teams are live in an afternoon. We connect your profiles, import your brand voice, and tune escalation rules with you.",
   },
   {
+    question: "What does annual billing save?",
+    answer: `Paying for the year up front is charged at ${ANNUAL_MONTHS_BILLED} months rather than 12 — ${ANNUAL_DISCOUNT_LABEL}, about ${ANNUAL_DISCOUNT_PERCENT}% off, at every band. The saving applies to every location you run, so it grows with the group.`,
+  },
+  {
     question: "Is there a contract?",
     answer:
-      "No long commitment. Billing is monthly per location, and you can cancel any time without penalty.",
+      "No long commitment. Choose monthly billing and cancel any time without penalty; choose annual and you are committing to the year you have paid for, which is where the discount comes from.",
   },
 ] as const;
 
@@ -91,9 +91,10 @@ export default function PricingPage() {
           Pricing that fits how you run.
         </PageHeading>
         <Lede className="max-w-[560px]">
-          Per location, billed monthly, no long contracts. The rate falls with
-          every band you cross, and you only pay the lower rate on the locations
-          that reach it.
+          Per location, monthly or annual, no long contracts. The rate falls
+          with every band you cross, you only pay the lower rate on the
+          locations that reach it, and paying for the year up front is{" "}
+          {ANNUAL_DISCOUNT_LABEL}.
         </Lede>
       </header>
 
@@ -111,20 +112,17 @@ export default function PricingPage() {
         <p className="mx-auto mb-[clamp(28px,4vw,44px)] max-w-[620px] text-center text-[15px] leading-[1.6] text-site-body">
           Locations are priced in bands. Every location is charged at the rate
           of the band it lands in, so the price per location drops as the group
-          grows.
+          grows — and the annual rate is {ANNUAL_MONTHS_BILLED} months of it,
+          not 12.
         </p>
         <div className="mx-auto max-w-[760px]">
           <PricingBands />
-          {EXAMPLE_TOTAL === null ? null : (
-            <p className="mt-5 text-center text-[13.5px] leading-[1.6] text-site-muted">
-              A {EXAMPLE_LOCATIONS}-location group pays{" "}
-              <strong className="font-semibold text-site-ink">
-                {formatDollars(EXAMPLE_TOTAL)} a month
-              </strong>{" "}
-              — the first location at its own rate, and every location after it
-              at the rate of the band it lands in.
-            </p>
-          )}
+          {/* The worked example is interactive rather than fixed: the discount
+              is a dollar figure that depends on the size of the group, so the
+              reader picks their own size instead of reading someone else's. */}
+          <div className="mt-6">
+            <PricingEstimator />
+          </div>
         </div>
       </Section>
 

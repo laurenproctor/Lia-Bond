@@ -40,6 +40,7 @@ export const PERMISSIONS = [
   "integration.disconnect",
   "monitoring.manage_queries",
   "monitoring.poll_now",
+  "review_widget.manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -256,6 +257,30 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // D19 — reading a query is governed by membership, not this table.
   "monitoring.manage_queries": ["owner", "admin", "communications_lead"],
   "monitoring.poll_now": ["owner", "admin", "communications_lead"],
+  // Configuring what Lia publishes on the customer's own website: the theme,
+  // which review is shown, the approved domains, and whether the embed
+  // resolves at all.
+  //
+  // The same three roles as `brand_voice.update` and `automation_rule.manage`,
+  // and it belongs with them rather than with the integration permissions:
+  // all three decide what the product says without a person in the loop. An
+  // integration permission would have been the wrong shelf — there is no
+  // external account here, nothing to authorise, and nothing to disconnect.
+  //
+  // Location managers are absent, and this is the one row in this table where
+  // that needs an argument, because a widget carries a location and
+  // `canForLocation` could scope them to it. Two reasons it does not. The
+  // policies in 20260820000300 restate this list with
+  // `has_organization_role`, which cannot express "and only for their own
+  // locations" — the scoping would live in application code alone, and for a
+  // surface the public can see this table's posture is that application code
+  // is not the last line. And a group's marketing site is one artefact even
+  // when the review on it is one restaurant's. If that becomes wrong, the fix
+  // is a policy joining `locations` on `manager_user_id`, not a wider list
+  // here.
+  //
+  // Analysts and viewers are absent for the ordinary reason: they read.
+  "review_widget.manage": ["owner", "admin", "communications_lead"],
 };
 
 export function can(role: MembershipRole, permission: Permission): boolean {
