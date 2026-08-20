@@ -1,29 +1,36 @@
 "use client";
 
 import { useState } from "react";
-import { submitEarlyAccessAction } from "@/app/actions/early-access";
+import { submitContactMessageAction } from "@/app/actions/contact";
 import { SpeechBubble } from "@/components/site/speech-bubble";
 import { Lede, SectionHeading } from "@/components/site/section";
+import { MAX_CONTACT_MESSAGE_LENGTH } from "@/lib/site/contact-message";
 
 /**
  * The one interactive element on the marketing site.
  *
- * It used to be the early-access capture that closed every page. Signup is
- * self-serve now — `ClosingCta` sends people to `/sign-up` instead — so this is
- * left on `/contact` alone, where it is the site's only way to reach a person:
- * nothing else on the public site publishes an address, and a contact page with
- * no channel on it is worse than the wait the form used to imply.
+ * It used to capture an address alone and promise a reply. That made the
+ * contact page a waiting room: a stranger could say *that* they wanted
+ * something but not *what*, so every conversation started a round trip behind
+ * where it could have. It now takes the question itself and mails it to the
+ * support inbox, where hitting reply reaches the person who asked.
  *
- * It still writes through `submitEarlyAccessAction`. The storage, the honeypot,
- * and the notification email are all unchanged and correct for this; only what
- * the page asks for has moved on, so the action keeps its name rather than
- * renaming a table and a server action to relabel a button.
+ * The address is still recorded, so leads keep landing where they did. What
+ * changed is which step is load-bearing — see the note in
+ * `@/app/actions/contact`.
  *
- * The success message never distinguishes a new address from one already on the
- * list. It could — the action knows — but a form that says "you already wrote
- * to us" is an oracle a stranger can query for whether a given address uses
- * Lia. One sentence for both cases costs nothing and closes that.
+ * The success message never distinguishes a first message from a repeat one.
+ * It could — the action knows whether the row was new — but a form that says
+ * "you have written before" is an oracle a stranger can query for whether a
+ * given address uses Lia. One sentence for both cases costs nothing and
+ * closes that.
  */
+
+const FIELD =
+  "w-full rounded-[10px] border border-site-field px-4 py-3 text-[15px] text-site-ink outline-none placeholder:text-site-muted focus:border-site-blue disabled:opacity-60";
+
+const LABEL = "mb-1.5 block text-[13.5px] font-semibold text-site-ink";
+
 export function ContactForm({
   sourcePath,
   className,
@@ -35,20 +42,20 @@ export function ContactForm({
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
   // Separate from `error`: a failure can be generic (a honeypot rejection, a
-  // server problem) with nothing wrong with what was typed into this input.
-  // Only a message keyed to "email" in `fieldErrors` means the email field
-  // itself is what failed, and only that should mark the input invalid.
-  const [emailError, setEmailError] = useState<string | null>(null);
+  // mail provider that refused) with nothing wrong with what was typed. Only a
+  // message keyed to a field in `fieldErrors` should mark that input invalid.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   async function onSubmit(formData: FormData) {
     setState("sending");
     setError(null);
-    setEmailError(null);
+    setFieldErrors({});
 
-    const result = await submitEarlyAccessAction({
+    const result = await submitContactMessageAction({
+      name: formData.get("name"),
       email: formData.get("email"),
       businessName: formData.get("businessName"),
-      industry: null,
+      message: formData.get("message"),
       sourcePath,
       website: formData.get("website"),
     });
@@ -60,7 +67,7 @@ export function ContactForm({
 
     setState("idle");
     setError(result.error);
-    setEmailError(result.fieldErrors?.email ?? null);
+    setFieldErrors(result.fieldErrors ?? {});
   }
 
   if (state === "sent") {
@@ -75,14 +82,17 @@ export function ContactForm({
         role="status"
       >
         <p className="text-[15px] font-semibold text-site-ink">
-          Thanks — we have your address.
+          Thanks — your message is with us.
         </p>
         <p className="mt-1.5 text-[14px] text-site-body">
-          Someone who works on Lia will reply, usually within a working day.
+          Someone who works on Lia will reply to you directly, usually within a
+          working day.
         </p>
       </div>
     );
   }
+
+  const sending = state === "sending";
 
   return (
     <form action={onSubmit} className={className}>
@@ -91,22 +101,95 @@ export function ContactForm({
           an ancestor elsewhere in the tree happening to supply one — that
           would make its off-screen placement, and so its effectiveness,
           coincidental to wherever it is mounted. */}
-      <div className="relative mx-auto flex max-w-[520px] flex-wrap gap-3">
-        <label htmlFor="contact-email" className="sr-only">
-          Your work email
-        </label>
-        <input
-          id="contact-email"
-          name="email"
-          type="email"
-          required
-          autoComplete="email"
-          placeholder="Your work email"
-          disabled={state === "sending"}
-          aria-describedby={emailError ? "contact-error" : undefined}
-          aria-invalid={emailError ? true : undefined}
-          className="min-w-[220px] flex-1 rounded-[10px] border border-site-field px-4 py-3.5 text-[15px] text-site-ink outline-none placeholder:text-site-muted focus:border-site-blue disabled:opacity-60"
-        />
+      <div className="relative mx-auto flex max-w-[560px] flex-col gap-4 text-left">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="contact-name" className={LABEL}>
+              Your name
+            </label>
+            <input
+              id="contact-name"
+              name="name"
+              type="text"
+              required
+              autoComplete="name"
+              disabled={sending}
+              aria-describedby={
+                fieldErrors.name ? "contact-name-error" : undefined
+              }
+              aria-invalid={fieldErrors.name ? true : undefined}
+              className={FIELD}
+            />
+            <FieldError id="contact-name-error" message={fieldErrors.name} />
+          </div>
+
+          <div>
+            <label htmlFor="contact-email" className={LABEL}>
+              Work email
+            </label>
+            <input
+              id="contact-email"
+              name="email"
+              type="email"
+              required
+              autoComplete="email"
+              disabled={sending}
+              aria-describedby={
+                fieldErrors.email ? "contact-email-error" : undefined
+              }
+              aria-invalid={fieldErrors.email ? true : undefined}
+              className={FIELD}
+            />
+            <FieldError id="contact-email-error" message={fieldErrors.email} />
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="contact-business" className={LABEL}>
+            Business{" "}
+            <span className="font-normal text-site-muted">(optional)</span>
+          </label>
+          <input
+            id="contact-business"
+            name="businessName"
+            type="text"
+            autoComplete="organization"
+            disabled={sending}
+            aria-describedby={
+              fieldErrors.businessName ? "contact-business-error" : undefined
+            }
+            aria-invalid={fieldErrors.businessName ? true : undefined}
+            className={FIELD}
+          />
+          <FieldError
+            id="contact-business-error"
+            message={fieldErrors.businessName}
+          />
+        </div>
+
+        <div>
+          <label htmlFor="contact-message" className={LABEL}>
+            What can we help with?
+          </label>
+          <textarea
+            id="contact-message"
+            name="message"
+            required
+            rows={5}
+            maxLength={MAX_CONTACT_MESSAGE_LENGTH}
+            disabled={sending}
+            placeholder="How many locations you run, which platforms you are on, and what you are trying to fix."
+            aria-describedby={
+              fieldErrors.message ? "contact-message-error" : undefined
+            }
+            aria-invalid={fieldErrors.message ? true : undefined}
+            className={`${FIELD} resize-y leading-[1.6]`}
+          />
+          <FieldError
+            id="contact-message-error"
+            message={fieldErrors.message}
+          />
+        </div>
 
         {/* Honeypot. Hidden from people, tempting to form-fillers. Not
             `display:none`, which some bots skip; off-screen and untabbable. */}
@@ -124,31 +207,36 @@ export function ContactForm({
 
         <button
           type="submit"
-          disabled={state === "sending"}
-          className="rounded-[10px] bg-site-orange px-6 py-3.5 text-[15px] font-semibold whitespace-nowrap text-site-ink transition-colors hover:bg-site-orange-hover disabled:opacity-70"
+          disabled={sending}
+          className="rounded-[10px] bg-site-orange px-6 py-3.5 text-[15px] font-semibold text-site-ink transition-colors hover:bg-site-orange-hover disabled:opacity-70"
         >
-          {state === "sending" ? "Sending…" : "Send"}
+          {sending ? "Sending…" : "Send message"}
         </button>
-      </div>
 
-      {error ? (
-        // `red-600` rather than a hand-written hex: the site palette defines
-        // no error/risk hue of its own, and this is the same red every other
-        // form error in the app already uses — reusing it beats inventing a
-        // one-off value that would drift from that convention.
-        <p
-          id="contact-error"
-          role="alert"
-          className="mt-3 text-[13px] text-red-600"
-        >
-          {error}
+        {error ? (
+          // `red-600` rather than a hand-written hex: the site palette defines
+          // no error/risk hue of its own, and this is the same red every other
+          // form error in the app already uses — reusing it beats inventing a
+          // one-off value that would drift from that convention.
+          <p role="alert" className="text-[13px] text-red-600">
+            {error}
+          </p>
+        ) : null}
+
+        <p className="text-[12.5px] text-site-muted">
+          No spam. We will only use this to reply to you.
         </p>
-      ) : null}
-
-      <p className="mt-3.5 text-[12.5px] text-site-muted">
-        No spam. We will only use this to reply to you.
-      </p>
+      </div>
     </form>
+  );
+}
+
+function FieldError({ id, message }: { id: string; message?: string }) {
+  if (!message) return null;
+  return (
+    <p id={id} className="mt-1.5 text-[12.5px] text-red-600">
+      {message}
+    </p>
   );
 }
 
@@ -181,10 +269,10 @@ export function ContactSection() {
         </div>
 
         <div className="mx-auto max-w-[620px] text-center">
-          <SectionHeading>Leave us your email.</SectionHeading>
+          <SectionHeading>Tell us what you need.</SectionHeading>
           <Lede className="mt-4.5 mb-7">
-            Tell us where to reach you and we will come back with an answer, not
-            a sequence.
+            Write what you are trying to fix and we will come back with an
+            answer, not a sequence.
           </Lede>
           <ContactForm sourcePath="/contact" />
         </div>

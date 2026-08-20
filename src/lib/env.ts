@@ -581,13 +581,19 @@ export function requireAnthropicApiKey(): string {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Where a help request goes when nothing else is configured.
+ * Where a help request or a contact message goes when nothing else is
+ * configured.
  *
  * A default rather than a required variable on purpose: the help form is the
  * one path in the app where failing closed would mean a person with a problem
  * has no way to report it.
+ *
+ * Delivery to this address needs a sender on a domain verified with Resend —
+ * see `DEFAULT_SUPPORT_FROM`. Resend's shared identity only ever delivers to
+ * the address that owns the Resend account, so an inbox on lia.bond and a
+ * sender on `resend.dev` is a combination that silently reaches nobody.
  */
-export const DEFAULT_SUPPORT_INBOX = "laurenproctor32@gmail.com";
+export const DEFAULT_SUPPORT_INBOX = "lauren@lia.bond";
 
 /**
  * Resend's shared sending identity.
