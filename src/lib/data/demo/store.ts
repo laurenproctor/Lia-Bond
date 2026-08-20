@@ -8,6 +8,7 @@ import type {
   NewsRejectedCandidate,
   OAuthState,
   PlatformSyncRun,
+  ReviewWidget,
   YelpActivityOccurrence,
   YelpListingSnapshot,
 } from "@/domain";
@@ -44,7 +45,6 @@ export interface DemoGenerationAttempt extends GenerationAttempt {
   claimToken: string;
 }
 
-let state: SeedDataset = clone(SEED_DATASET);
 
 /**
  * Runtime-only tables.
@@ -156,6 +156,18 @@ interface RuntimeStore {
   yelpListingSnapshotSequence: number;
   yelpActivityOccurrences: YelpActivityOccurrence[];
   yelpActivityOccurrenceSequence: number;
+  /**
+   * Website review widgets.
+   *
+   * Runtime-only, and for a different reason from every other table in here.
+   * The others are event history that would claim work Lia never did; a seeded
+   * widget would be worse than a claim — it would be a live public embed id,
+   * shipped in the repository, resolving to a real review for anybody who
+   * pasted it into a page. That is the same reasoning that keeps fixture
+   * credentials out of the seed, applied to something that is not a credential
+   * but is just as much a published artefact.
+   */
+  reviewWidgets: ReviewWidget[];
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -182,23 +194,65 @@ function freshRuntimeStore(): RuntimeStore {
     yelpListingSnapshotSequence: 0,
     yelpActivityOccurrences: [],
     yelpActivityOccurrenceSequence: 0,
+    reviewWidgets: [],
   };
 }
 
-let runtime: RuntimeStore = freshRuntimeStore();
+/**
+ * The store lives on `globalThis`, not in a module-scoped `let`.
+ *
+ * This module's doc comment has always claimed the store is "process-wide so
+ * mutations survive between requests in dev". With a module-scoped variable
+ * that was only true *within one Next.js module graph* — and Next compiles
+ * pages, server actions, and route handlers into separate graphs, each with
+ * its own copy of every module. Two consequences, both of which look exactly
+ * like a feature bug:
+ *
+ * - a record written by a server action is invisible to a route handler in the
+ *   same process; and
+ * - the same is true after a hot reload, which re-evaluates the module and
+ *   silently resets everybody's data to the seed.
+ *
+ * Found while building the website review widget, which is the first feature
+ * with a *public route handler* reading rows the app writes: a widget saved on
+ * `/integrations/review-widget` rendered as "no longer available" at
+ * `/embed/review-widget/…`, in the same process, seconds later. The cron
+ * routes have the same shape and have simply never had a reader on the other
+ * side to notice.
+ *
+ * The `Symbol.for` key is the standard Next.js singleton pattern (the one the
+ * Prisma client uses for the same reason). It changes nothing for tests:
+ * `resetDemoStore()` still replaces both halves, and vitest runs each file in
+ * its own worker.
+ */
+const STORE_KEY = Symbol.for("lia.demo.store");
+
+interface DemoStoreHolder {
+  state: SeedDataset;
+  runtime: RuntimeStore;
+}
+
+function holder(): DemoStoreHolder {
+  const globals = globalThis as typeof globalThis & {
+    [STORE_KEY]?: DemoStoreHolder;
+  };
+  globals[STORE_KEY] ??= { state: clone(SEED_DATASET), runtime: freshRuntimeStore() };
+  return globals[STORE_KEY];
+}
 
 export function demoStore(): SeedDataset {
-  return state;
+  return holder().state;
 }
 
 export function demoRuntimeStore(): RuntimeStore {
-  return runtime;
+  return holder().runtime;
 }
 
 /** Back to the pristine seed. Tests call this between cases. */
 export function resetDemoStore(): void {
-  state = clone(SEED_DATASET);
-  runtime = freshRuntimeStore();
+  const current = holder();
+  current.state = clone(SEED_DATASET);
+  current.runtime = freshRuntimeStore();
 }
 
 /** Rows in one organization. The only way this module exposes a table. */
