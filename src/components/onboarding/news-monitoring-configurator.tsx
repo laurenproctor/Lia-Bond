@@ -32,10 +32,15 @@ import { MONITORING_COUNTRIES } from "@/lib/geo/countries";
  * A presentation around the real monitoring model, not a second model: what
  * this saves goes through `saveOnboardingNewsMonitoringAction` into the same
  * `monitoring_queries` row the News & Media screen edits, and the fields
- * shown are exactly `onboardingNewsMonitoringInputSchema` — name, keywords,
- * exclusions, country, language, enabled. The tuning controls (thresholds,
- * poll intervals, publisher lists) stay on the full integration screen; the
- * server fills their documented defaults.
+ * shown are the answerable half of `onboardingNewsMonitoringInputSchema` —
+ * name, keywords, exclusions, country, language. The tuning controls
+ * (thresholds, poll intervals, publisher lists) stay on the full integration
+ * screen; the server fills their documented defaults.
+ *
+ * Monitoring is on: a query configured here is created enabled, and there is
+ * no pause control in the wizard. `enabled` is still carried on the form so
+ * a query somebody paused on the News & Media screen is not silently
+ * switched back on the next time step 2 saves.
  *
  * There is no Save button. Edits save themselves after a short settling
  * window (`useAutosave`), the status line says whether what is on screen is
@@ -60,6 +65,7 @@ export interface NewsConfiguratorValues {
   localityCity: string | null;
   localityRegion: string | null;
   language: string | null;
+  /** Carried, not edited — the wizard shows no pause control. */
   enabled: boolean;
 }
 
@@ -374,11 +380,6 @@ export function NewsMonitoringConfigurator({
         lookup={locality}
       />
 
-      <EnabledField
-        value={value.enabled}
-        onChange={(enabled) => edit({ enabled })}
-      />
-
       <div className="flex flex-wrap items-center justify-end gap-3">
         <button
           type="button"
@@ -426,7 +427,7 @@ function NameField({
         type="text"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="e.g. Brand watch"
+        placeholder="e.g. Brand name watch"
         className={cn(FIELD_CLASSES, "mt-1.5")}
       />
     </div>
@@ -710,32 +711,4 @@ function LocalityStatusText({
     return <>Lia cannot look up postal codes in this country yet — enter the city and region yourself.</>;
   }
   return null;
-}
-
-function EnabledField({
-  value,
-  onChange,
-}: {
-  value: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  const id = useId();
-  return (
-    <div className="flex items-start gap-2.5">
-      <input
-        id={id}
-        type="checkbox"
-        checked={value}
-        onChange={(event) => onChange(event.target.checked)}
-        className="mt-0.5 size-5 shrink-0 accent-[var(--color-site-blue)]"
-      />
-      <label htmlFor={id} className="text-[13.5px] leading-snug text-site-ink">
-        <span className="font-semibold">Monitoring enabled</span>
-        <span className="block text-[12.5px] text-site-muted">
-          Unchecked saves the configuration paused — nothing is polled until
-          it is enabled.
-        </span>
-      </label>
-    </div>
-  );
 }
