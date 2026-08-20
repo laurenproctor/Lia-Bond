@@ -4,9 +4,12 @@ Companion to `docs/integrations/google-business-profile.md`. That one documents
 a connector that exists; this one documents the paperwork that has to clear
 before a Reddit connector may be *used*.
 
-**Status: gated.** The deployment gates exist (`src/lib/env.ts`,
-`tests/env-reddit.test.ts`) and resolve to `off` until Reddit's approval is
-recorded. No connector, monitor, persistence, or poller exists yet, and
+**Status: gated, and the application was rejected.** Reddit refused this
+deployment's API application; the record, and what each possible reason would
+mean for the next move, is §0 of
+`docs/integrations/reddit-access-approval.md`. The deployment gates exist
+(`src/lib/env.ts`, `tests/env-reddit.test.ts`) and resolve to `off` until
+Reddit's approval is recorded. No connector, monitor, persistence, or poller exists yet, and
 `getConnector("reddit")` still throws. `reddit` is platform-enum vocabulary,
 seed fixtures, and the presentation route `/reddit/[id]`. See
 `docs/architecture/current-state.md`.
@@ -82,6 +85,13 @@ regardless of how the OAuth client was created.
    target, and multi-week silences are the common report.
 5. **Expect a contract.** Commercial access is granted by agreement, not by a
    checkbox. Budget legal review time as well as calendar time.
+
+**This was done, and the answer was no.** The steps above stand for a second
+attempt, but a second attempt in the same shape is only worth filing if the
+rejection reason was the application rather than the ask. The read-and-write
+request in §1 is the widest version of it; a monitoring-only application drops
+`submit`, `edit`, and `history` from §4 and asks a far smaller question. Decide
+which one you are filing from the recorded reason, not from this section.
 
 ### What to put in the request
 

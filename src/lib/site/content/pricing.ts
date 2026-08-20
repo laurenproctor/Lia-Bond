@@ -1,3 +1,5 @@
+import { availablePlatformNames } from "@/lib/site/content/platforms";
+
 /**
  * The rate card, as the marketing site renders it.
  *
@@ -16,6 +18,9 @@
  */
 
 import {
+  ANNUAL_DISCOUNT_LABEL,
+  ANNUAL_DISCOUNT_PERCENT,
+  ANNUAL_MONTHS_BILLED,
   FIRST_LOCATION_MONTHLY,
   LISTED_LOCATION_LIMIT,
   LOWEST_LISTED_MONTHLY,
@@ -338,5 +343,82 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
       "Custom workflows and approvals",
       "SSO and role-based access",
     ],
+  },
+] as const;
+
+/**
+ * The FAQ answers are load-bearing marketing claims, so each one is checked
+ * against what the product actually does:
+ *
+ * - "nothing goes public until a person approves it" — `requiresApproval` on
+ *   `ConnectorCapabilities`, and the approval-first rule in CLAUDE.md.
+ * - The platform sentence is **derived** from `PLATFORM_ROWS` rather than
+ *   written out. It used to be prose, and prose is how Reddit stayed listed
+ *   as available here for as long as it took somebody to notice — the
+ *   platforms table is the honest record, and this sentence now cannot
+ *   disagree with it. A platform switched off there leaves this answer on its
+ *   own.
+ *
+ * These live here rather than in the page so the claim is importable, and so
+ * a test can hold it to the platforms table.
+ */
+export interface PricingFaq {
+  question: string;
+  answer: string;
+}
+
+/** Named separately because the sentence calls it out ahead of the others. */
+const CORE_PLATFORM = "Google Business Profile";
+
+const LIST_FORMAT = new Intl.ListFormat("en", {
+  style: "long",
+  type: "conjunction",
+});
+
+const REPLY_PLATFORMS = availablePlatformNames("manual").filter(
+  (name) => name !== CORE_PLATFORM,
+);
+
+/*
+ * The monitor-only sources stay prose: "News and media and Article comments"
+ * is what deriving them word-for-word produces, and it does not read as
+ * English. The names are still held to the table by
+ * `tests/site-platform-claims.test.ts`, which is the guarantee that mattered.
+ */
+const MONITORED_SENTENCE =
+  "News coverage and supported article comments are monitored too.";
+
+const PLATFORM_ANSWER = `${CORE_PLATFORM} is core, with ${LIST_FORMAT.format(
+  REPLY_PLATFORMS,
+)} available. ${MONITORED_SENTENCE} We add platforms on request.`;
+
+export const PRICING_FAQS: readonly PricingFaq[] = [
+  {
+    question: "How does per-location pricing work?",
+    answer:
+      "Each location is priced at the band it falls into, the way tax brackets work. Your eleventh location does not reprice the first ten — it is charged at the lower band, and so is every location after it. Growing never costs you the rate you already have.",
+  },
+  {
+    question: "Does Lia post replies automatically?",
+    answer:
+      "No, and that is deliberate. Lia writes the draft and does the waiting; a person on your team decides what goes public. Anything sensitive is held back and routed to a named person rather than queued with the rest.",
+  },
+  {
+    question: "Which platforms do you support?",
+    answer: PLATFORM_ANSWER,
+  },
+  {
+    question: "How long does setup take?",
+    answer:
+      "Most teams are live in minutes. We connect your profiles, teach Lia how your brand sounds, and tune the escalation rules with you — not a project plan, a working session.",
+  },
+  {
+    question: "What does annual billing save?",
+    answer: `A year costs ${ANNUAL_MONTHS_BILLED} months rather than 12 — ${ANNUAL_DISCOUNT_LABEL}, about ${ANNUAL_DISCOUNT_PERCENT}% off, at every band. It applies to every location you run, so the bigger the group the more it comes to: a single site keeps two figures a year, a twelve-location group keeps four.`,
+  },
+  {
+    question: "Is there a contract?",
+    answer:
+      "Monthly billing has no commitment at all — cancel any time, no penalty and no exit conversation. Annual asks for the year you have paid for, which is exactly where the two free months come from.",
   },
 ] as const;

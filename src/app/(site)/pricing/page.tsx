@@ -13,8 +13,8 @@ import {
 } from "@/components/site/section";
 import {
   ANNUAL_DISCOUNT_LABEL,
-  ANNUAL_DISCOUNT_PERCENT,
   ANNUAL_MONTHS_BILLED,
+  PRICING_FAQS,
 } from "@/lib/site/content/pricing";
 
 export const metadata: Metadata = {
@@ -22,48 +22,6 @@ export const metadata: Metadata = {
   description:
     "One price per location, and it falls as the group grows — $59 for your first, $34 each at scale. Pay for the year up front and two months are free.",
 };
-
-/**
- * The FAQ answers are load-bearing marketing claims, so each one is checked
- * against what the product actually does:
- *
- * - "nothing goes public until a person approves it" — `requiresApproval` on
- *   `ConnectorCapabilities`, and the approval-first rule in CLAUDE.md.
- * - The platform list is `PLATFORMS` in `src/domain/enums.ts`. The design
- *   reference also named Booking.com, which is not a platform this product
- *   models; it is dropped rather than promised.
- */
-const FAQS = [
-  {
-    question: "How does per-location pricing work?",
-    answer:
-      "Each location is priced at the band it falls into, the way tax brackets work. Your eleventh location does not reprice the first ten — it is charged at the lower band, and so is every location after it. Growing never costs you the rate you already have.",
-  },
-  {
-    question: "Does Lia post replies automatically?",
-    answer:
-      "No, and that is deliberate. Lia writes the draft and does the waiting; a person on your team decides what goes public. Anything sensitive is held back and routed to a named person rather than queued with the rest.",
-  },
-  {
-    question: "Which platforms do you support?",
-    answer:
-      "Google Business Profile is core, with Yelp, Trustpilot, Facebook, and Reddit available. News coverage and supported article comments are monitored too. We add platforms on request.",
-  },
-  {
-    question: "How long does setup take?",
-    answer:
-      "Most teams are live in minutes. We connect your profiles, teach Lia how your brand sounds, and tune the escalation rules with you — not a project plan, a working session.",
-  },
-  {
-    question: "What does annual billing save?",
-    answer: `A year costs ${ANNUAL_MONTHS_BILLED} months rather than 12 — ${ANNUAL_DISCOUNT_LABEL}, about ${ANNUAL_DISCOUNT_PERCENT}% off, at every band. It applies to every location you run, so the bigger the group the more it comes to: a single site keeps two figures a year, a twelve-location group keeps four.`,
-  },
-  {
-    question: "Is there a contract?",
-    answer:
-      "Monthly billing has no commitment at all — cancel any time, no penalty and no exit conversation. Annual asks for the year you have paid for, which is exactly where the two free months come from.",
-  },
-] as const;
 
 export default function PricingPage() {
   return (
@@ -134,7 +92,7 @@ export default function PricingPage() {
             Questions, answered.
           </SectionHeading>
           <div className="grid grid-cols-1 gap-[clamp(28px,4vw,56px)] md:grid-cols-2">
-            {FAQS.map((faq) => (
+            {PRICING_FAQS.map((faq) => (
               <div key={faq.question}>
                 <h3 className="mb-2.5 text-[17px] font-semibold text-site-ink">
                   {faq.question}
