@@ -8,8 +8,14 @@ import {
   createMonitoringQueryAction,
   updateMonitoringQueryAction,
 } from "@/app/actions/monitoring";
+import {
+  usePostalLookup,
+  type Locality,
+  type PostalLookup,
+} from "@/components/monitoring/use-postal-lookup";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { MONITORING_COUNTRIES } from "@/lib/geo/countries";
 import { MIN_POLL_INTERVAL_MINUTES } from "@/domain";
 import type { MonitoringQuery, MonitoringQueryType } from "@/domain";
 
@@ -189,6 +195,22 @@ export function QueryEditor(props: QueryEditorProps) {
   const [exclusions, setExclusions] = useState<string[]>(query?.exclusions ?? []);
   const [allowedDomains, setAllowedDomains] = useState<string[]>(query?.allowedDomains ?? []);
   const [deniedDomains, setDeniedDomains] = useState<string[]>(query?.deniedDomains ?? []);
+  /**
+   * The market and the local anchor, edited as one value.
+   *
+   * `sourceCountry` used to be sent as the literal `"us"` on create and left
+   * out of update entirely, so a query could only ever watch the United States
+   * and there was no way to change it afterwards. Both are fixed here: the
+   * country is a real choice, and it is part of the update payload.
+   */
+  const [locality, setLocality] = useState<Locality>({
+    sourceCountry: query?.sourceCountry ?? null,
+    postalCode: query?.postalCode ?? null,
+    localityCity: query?.localityCity ?? null,
+    localityRegion: query?.localityRegion ?? null,
+  });
+  const postal = usePostalLookup({ value: locality, onChange: setLocality });
+
   const [relevanceThreshold, setRelevanceThreshold] = useState(
     String(query?.relevanceThreshold ?? DEFAULT_RELEVANCE_THRESHOLD),
   );
@@ -224,7 +246,7 @@ export function QueryEditor(props: QueryEditorProps) {
               exclusions,
               allowedDomains,
               deniedDomains,
-              sourceCountry: "us",
+              ...locality,
               language: null,
               relevanceThreshold: threshold,
               enabled: true,
@@ -239,6 +261,7 @@ export function QueryEditor(props: QueryEditorProps) {
               exclusions,
               allowedDomains,
               deniedDomains,
+              ...locality,
               relevanceThreshold: threshold,
               pollIntervalMinutes: interval,
             });
@@ -280,6 +303,8 @@ export function QueryEditor(props: QueryEditorProps) {
         onChange={setPollIntervalMinutes}
         disabled={pending}
       />
+
+      <LocalityFields value={locality} lookup={postal} disabled={pending} />
 
       <ChipField
         label="Keywords"
@@ -508,6 +533,161 @@ function PollIntervalField({
       />
     </div>
   );
+}
+
+/**
+ * Market, then local anchor.
+ *
+ * The country is the one field here that changes behaviour today — it is the
+ * `country` parameter GNews filters on. The postal code, city, and region
+ * change nothing yet and say so: they are stored for the provider upgrade that
+ * can search regionally (D71), and claiming otherwise on this screen would be
+ * the same overclaim the allowed-publishers hint above was corrected for.
+ *
+ * The postal field is disabled until a country is chosen, which is where the
+ * "a postal code needs a country" invariant is enforced — the schema cannot
+ * enforce it without rejecting legitimate partial updates. Choosing a
+ * different country clears everything under it rather than leaving a New York
+ * ZIP code sitting under Germany.
+ */
+function LocalityFields({
+  value,
+  lookup,
+  disabled,
+}: {
+  value: Locality;
+  lookup: PostalLookup;
+  disabled: boolean;
+}) {
+  const countryId = useId();
+  const postalId = useId();
+  const cityId = useId();
+  const regionId = useId();
+  const statusId = `${postalId}-status`;
+
+  const hasCountry = value.sourceCountry !== null;
+  const localDisabled = disabled || !hasCountry;
+
+  return (
+    <div>
+      <label htmlFor={countryId} className="text-[12.5px] font-medium text-gray-700">
+        Country or market
+      </label>
+      <p className="mt-0.5 text-[12px] text-gray-500">
+        The only part of this block a poll uses today — it is the country
+        filter sent with every search. The postal code and locality below are
+        stored for regional search and change nothing about what is monitored
+        now.
+      </p>
+      <select
+        id={countryId}
+        value={value.sourceCountry ?? ""}
+        disabled={disabled}
+        onChange={(event) =>
+          lookup.setCountry(event.target.value === "" ? null : event.target.value)
+        }
+        className={cn(FIELD_CLASSES, "mt-1.5")}
+      >
+        <option value="">Anywhere</option>
+        {MONITORING_COUNTRIES.map((country) => (
+          <option key={country.code} value={country.code}>
+            {country.label}
+          </option>
+        ))}
+      </select>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <div>
+          <label htmlFor={postalId} className="text-[12.5px] font-medium text-gray-700">
+            {lookup.postalLabel}
+          </label>
+          <input
+            id={postalId}
+            type="text"
+            autoComplete="postal-code"
+            maxLength={12}
+            disabled={localDisabled}
+            aria-describedby={statusId}
+            value={value.postalCode ?? ""}
+            onChange={(event) => lookup.setPostalCode(event.target.value)}
+            placeholder={hasCountry ? "" : "Choose a country first"}
+            className={cn(FIELD_CLASSES, "mt-1.5", localDisabled && "bg-gray-100")}
+          />
+        </div>
+        <div>
+          <label htmlFor={cityId} className="text-[12.5px] font-medium text-gray-700">
+            City
+          </label>
+          <input
+            id={cityId}
+            type="text"
+            autoComplete="address-level2"
+            maxLength={120}
+            disabled={localDisabled}
+            value={value.localityCity ?? ""}
+            onChange={(event) => lookup.setCity(event.target.value)}
+            className={cn(FIELD_CLASSES, "mt-1.5", localDisabled && "bg-gray-100")}
+          />
+        </div>
+        <div>
+          <label htmlFor={regionId} className="text-[12.5px] font-medium text-gray-700">
+            State or region
+          </label>
+          <input
+            id={regionId}
+            type="text"
+            autoComplete="address-level1"
+            maxLength={120}
+            disabled={localDisabled}
+            value={value.localityRegion ?? ""}
+            onChange={(event) => lookup.setRegion(event.target.value)}
+            className={cn(FIELD_CLASSES, "mt-1.5", localDisabled && "bg-gray-100")}
+          />
+        </div>
+      </div>
+
+      {/* Polite: the lookup fires on a debounce nobody asked for. */}
+      <p
+        id={statusId}
+        aria-live="polite"
+        className={cn(
+          "mt-1.5 text-[12px]",
+          lookup.status === "failed" ? "text-red-600" : "text-gray-500",
+        )}
+      >
+        <LocalityStatusText value={value} lookup={lookup} />
+      </p>
+    </div>
+  );
+}
+
+/** One sentence about what the lookup is doing, or nothing at all. */
+function LocalityStatusText({
+  value,
+  lookup,
+}: {
+  value: Locality;
+  lookup: PostalLookup;
+}) {
+  if (value.sourceCountry === null) return null;
+  if (lookup.status === "looking-up") {
+    return <>Looking up that {lookup.postalLabel.toLowerCase()}…</>;
+  }
+  if (lookup.status === "failed") return <>{lookup.message}</>;
+  if (lookup.status === "filled") {
+    return (
+      <>
+        City and region filled in from the {lookup.postalLabel.toLowerCase()}.
+        Edit either if it is not right.
+      </>
+    );
+  }
+  if (!lookup.lookupSupported) {
+    return (
+      <>Lia cannot look up postal codes in this country yet — enter the city and region yourself.</>
+    );
+  }
+  return null;
 }
 
 function RelevanceThresholdField({

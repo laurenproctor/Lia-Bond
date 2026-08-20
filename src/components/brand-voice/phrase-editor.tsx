@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { MAX_PHRASE_LENGTH, MAX_PHRASES } from "@/domain";
+import {
+  isCoveredByPhrases,
+  MAX_PHRASE_LENGTH,
+  MAX_PHRASES,
+  PHRASE_LIMIT_HINT,
+} from "@/domain";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
@@ -12,6 +17,13 @@ export interface PhraseEditorProps {
   legend: string;
   tone: "approved" | "prohibited";
   phrases: string[];
+  /**
+   * The opposite list. A suggestion already covered there is withheld, since
+   * pressing it could only produce the use/avoid contradiction error.
+   */
+  counterpartPhrases?: readonly string[];
+  /** Offered as buttons, never applied on their own. */
+  suggestions?: readonly string[];
   disabled?: boolean;
   error?: string;
   onChange: (phrases: string[]) => void;
@@ -37,6 +49,8 @@ export function PhraseEditor({
   legend,
   tone,
   phrases,
+  counterpartPhrases = [],
+  suggestions = [],
   disabled = false,
   error,
   onChange,
@@ -44,16 +58,28 @@ export function PhraseEditor({
   const [draft, setDraft] = useState("");
   const full = phrases.length >= MAX_PHRASES;
 
-  function add() {
-    const phrase = draft.trim();
+  function addPhrase(raw: string) {
+    const phrase = raw.trim();
     if (!phrase || full) return;
     if (phrases.some((existing) => existing.toLowerCase() === phrase.toLowerCase())) {
-      setDraft("");
       return;
     }
     onChange([...phrases, phrase]);
+  }
+
+  function add() {
+    addPhrase(draft);
     setDraft("");
   }
+
+  const available =
+    full || disabled
+      ? []
+      : suggestions.filter(
+          (suggestion) =>
+            !isCoveredByPhrases(suggestion, phrases) &&
+            !isCoveredByPhrases(suggestion, counterpartPhrases),
+        );
 
   return (
     <div className="mt-4">
@@ -83,6 +109,30 @@ export function PhraseEditor({
         ) : null}
       </ul>
 
+      {available.length > 0 ? (
+        <div className="mt-3">
+          <p id={`${id}-suggestions`} className="text-[12px] font-medium text-gray-500">
+            {tone === "approved" ? "Suggestions to use" : "Suggestions to avoid"}
+          </p>
+          <ul aria-labelledby={`${id}-suggestions`} className="mt-1.5 flex flex-wrap gap-2">
+            {available.map((suggestion) => (
+              <li key={suggestion}>
+                <button
+                  type="button"
+                  onClick={() => addPhrase(suggestion)}
+                  // Visible text kept inside the accessible name (WCAG 2.5.3).
+                  aria-label={`Add suggested phrase: ${suggestion}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-2.5 py-1.5 text-[13px] text-gray-600 transition-colors hover:border-purple-600 hover:bg-purple-50 hover:text-purple-700"
+                >
+                  <Plus className="size-3.5 shrink-0" aria-hidden />
+                  {suggestion}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <div className="mt-3 flex items-center gap-2">
         <label htmlFor={id} className="sr-only">
           {legend}
@@ -103,6 +153,7 @@ export function PhraseEditor({
               add();
             }
           }}
+          aria-describedby={error ? `${id}-error` : `${id}-hint`}
           className="h-9 min-w-0 flex-1 rounded-lg border border-gray-300 px-2.5 text-[13px] text-gray-950 placeholder:text-gray-400 focus:border-purple-600 focus:outline-none disabled:bg-gray-50 disabled:text-gray-400"
         />
         <Button
@@ -116,11 +167,21 @@ export function PhraseEditor({
         </Button>
       </div>
 
+      {/*
+        The same sentence the wizard's phrase field shows, from the same
+        constant. This screen used to state neither the matching rule here nor
+        the limits anywhere — the cap surfaced only as a placeholder once a 21st
+        chip was refused, which is the worst moment to learn it.
+      */}
       {error ? (
-        <p role="alert" className="mt-2 text-[12px] text-red-600">
+        <p id={`${id}-error`} role="alert" className="mt-2 text-[12px] text-red-600">
           {error}
         </p>
-      ) : null}
+      ) : (
+        <p id={`${id}-hint`} className="mt-2 text-[12px] text-gray-500">
+          {PHRASE_LIMIT_HINT}
+        </p>
+      )}
     </div>
   );
 }

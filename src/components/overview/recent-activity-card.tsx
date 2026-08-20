@@ -1,6 +1,8 @@
 import Link from "next/link";
 import {
   ChevronRight,
+  Code2,
+  MessagesSquare,
   Newspaper,
   PencilLine,
   Plug,
@@ -32,6 +34,11 @@ const ENTITY_ICONS: Record<AuditEntityType, LucideIcon> = {
   automation_rule: Workflow,
   brand_voice: Sparkles,
   monitoring_query: Newspaper,
+  yelp_activity_occurrence: Plug,
+  reddit_monitoring_query: MessagesSquare,
+  reddit_community_posture: ShieldAlert,
+  response_publication_attempt: Send,
+  review_widget: Code2,
 };
 
 const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
@@ -48,6 +55,18 @@ const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
   automation_rule: "amber",
   brand_voice: "purple",
   monitoring_query: "neutral",
+  // Amber rather than neutral: a detected change is something to go and look
+  // at, which is what this tone means everywhere else it is used.
+  yelp_activity_occurrence: "amber",
+  reddit_monitoring_query: "neutral",
+  // A community decision gates whether Lia may speak in public at all, so it
+  // reads with the same weight as an escalation rather than as configuration.
+  reddit_community_posture: "amber",
+  response_publication_attempt: "purple",
+  // Neutral: a widget change is configuration, not something that needs
+  // attention. The one act that does — regenerating the embed code — is
+  // guarded by a confirmation where it happens, not by a colour here.
+  review_widget: "neutral",
 };
 
 export interface RecentActivityCardProps {

@@ -4,6 +4,7 @@ import {
   createMonitoringQueryInputSchema,
   DEFAULT_POLL_INTERVAL_MINUTES,
   DEFAULT_RELEVANCE_THRESHOLD,
+  MAX_MONITORING_QUERY_NAME_LENGTH,
   type MonitoringQuery,
   type OnboardingNewsMonitoringInput,
 } from "@/domain";
@@ -58,6 +59,57 @@ export function findOnboardingNewsQuery(
   return candidates[0] ?? null;
 }
 
+const WATCH_SUFFIX = " watch";
+const BRAND_WATCH_SUFFIX = " brand name watch";
+/** Used only when a subject has no usable name, which the schemas forbid. */
+const FALLBACK_WATCH_NAME = "Brand watch";
+const FALLBACK_BRAND_WATCH_NAME = "Brand name watch";
+
+/**
+ * What a generated monitoring query is called: the subject's own name, plus
+ * what the row watches.
+ *
+ * The organization-wide brand query takes the organization's name and says so
+ * ("Ember & Oak brand name watch"); step 3's location queries take the
+ * location's ("Ember & Oak Soho watch"). Both start from a real subject
+ * rather than the generic "Brand watch" nobody would recognise in a list, so
+ * an organization's queries still read as one set.
+ *
+ * Names are longer than a query name may be (160 against
+ * `MAX_MONITORING_QUERY_NAME_LENGTH`), so a long one is shortened on the
+ * subject and never on the suffix: cutting the composed string would leave
+ * "Some Very Long Restaurant Group Incorpo" with no indication of what the
+ * row is.
+ */
+function composeWatchName(
+  subject: string,
+  suffix: string,
+  fallback: string,
+): string {
+  const name = subject.trim();
+  if (name.length === 0) return fallback;
+
+  const composed = `${name}${suffix}`;
+  if (composed.length <= MAX_MONITORING_QUERY_NAME_LENGTH) return composed;
+
+  const room = MAX_MONITORING_QUERY_NAME_LENGTH - suffix.length;
+  return `${name.slice(0, room).trimEnd()}${suffix}`;
+}
+
+/** What the organization-wide brand query is called. */
+export function brandWatchQueryName(organizationName: string): string {
+  return composeWatchName(
+    organizationName,
+    BRAND_WATCH_SUFFIX,
+    FALLBACK_BRAND_WATCH_NAME,
+  );
+}
+
+/** What a per-location query is called. */
+export function watchQueryName(subject: string): string {
+  return composeWatchName(subject, WATCH_SUFFIX, FALLBACK_WATCH_NAME);
+}
+
 export interface OnboardingNewsServiceContext {
   dataSource: LiaDataSource;
   scope: OrganizationScope;
@@ -98,17 +150,29 @@ export async function saveOnboardingNewsQuery(
       "keywords",
       "exclusions",
       "sourceCountry",
+      "postalCode",
+      "localityCity",
+      "localityRegion",
       "language",
       "enabled",
     ]);
-    await recordAuditEvent(context, {
-      eventType: "monitoring_query.updated",
-      entityType: "monitoring_query",
-      entityId: existing.id,
-      previousState: changes.previousState,
-      newState: changes.newState,
-      metadata: { source: "onboarding" },
-    });
+
+    // An event only when something moved. Under the configurator's autosave
+    // nobody presses anything, so a write that changes no field is not a
+    // decision somebody made — it is a timer firing, and recording it would
+    // put an entry saying nothing into an append-only trail that can never be
+    // cleaned up. Every event that survives this still carries its real
+    // before-and-after, so the chain stays continuous.
+    if (Object.keys(changes.newState).length > 0) {
+      await recordAuditEvent(context, {
+        eventType: "monitoring_query.updated",
+        entityType: "monitoring_query",
+        entityId: existing.id,
+        previousState: changes.previousState,
+        newState: changes.newState,
+        metadata: { source: "onboarding" },
+      });
+    }
 
     return updated;
   }
@@ -209,6 +273,9 @@ export interface LocationQueryOutcome {
  * - Language and country are inherited from the brand query, so the
  *   organization's queries agree; everything else takes the documented
  *   defaults, `origin: "onboarding"`.
+ * - The locality (postal code, city, region) comes from the **location's own
+ *   address**, not from the brand query. Inheriting it would stamp head
+ *   office's neighbourhood onto every restaurant in the group.
  *
  * Failures are per location and never propagate: the locations step has
  * already succeeded, and a monitoring-query hiccup must not un-succeed it.
@@ -253,7 +320,7 @@ export async function ensureOnboardingLocationQueries(
       if (city.length >= 2 && !keywords.includes(city)) keywords.push(city);
 
       const createInput = createMonitoringQueryInputSchema.parse({
-        name: `${location.name} watch`.slice(0, 120),
+        name: watchQueryName(location.name),
         queryType: "location",
         locationId: location.id,
         keywords,
@@ -261,6 +328,15 @@ export async function ensureOnboardingLocationQueries(
         allowedDomains: [],
         deniedDomains: [],
         sourceCountry: brand.sourceCountry,
+        // The locality comes from the location itself, not from the brand
+        // query: this restaurant's own persisted address is a better answer
+        // than the organization's head-office postal code, and it is a fact
+        // already on the row rather than an inheritance. Falls back to null
+        // rather than to the brand's — a Chicago location must not be labelled
+        // with a New York locality just because head office is there.
+        postalCode: location.postalCode,
+        localityCity: location.city,
+        localityRegion: location.region,
         language: brand.language,
         relevanceThreshold: DEFAULT_RELEVANCE_THRESHOLD,
         pollIntervalMinutes: DEFAULT_POLL_INTERVAL_MINUTES,

@@ -113,3 +113,53 @@ describe("proxy: everything else is still gated", () => {
     expect(response.headers.get("location")).toContain("/sign-in");
   });
 });
+
+describe("proxy: /organizations is gated", () => {
+  it("redirects an anonymous request to create an organization", async () => {
+    // The route sits outside `(app)` on purpose — it cannot depend on an
+    // organization existing — so nothing above it would bounce an anonymous
+    // request. Left off `PRODUCT_PATHS` it falls through the denylist to a page
+    // that calls `requireSession()` and throws, which is exactly the 500 this
+    // gate exists to turn into a redirect.
+    getUser.mockResolvedValue({ data: { user: null } });
+
+    const { proxy } = await import("@/proxy");
+    const request = new NextRequest("https://lia.test/organizations/new");
+
+    const response = await proxy(request);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/sign-in");
+    expect(response.headers.get("location")).toContain(
+      `next=${encodeURIComponent("/organizations/new")}`,
+    );
+  });
+
+  it("lets a signed-in request through", async () => {
+    // Unlike `/sign-in` and `/sign-up`, this is not a page that exists to
+    // create a session, so a signed-in visitor must not be bounced away from
+    // it — that is the ordinary case.
+    getUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
+
+    const { proxy } = await import("@/proxy");
+    const request = new NextRequest("https://lia.test/organizations/new");
+
+    const response = await proxy(request);
+
+    expect(response.status).toBe(200);
+  });
+
+  it("does not gate a marketing path that merely shares the prefix", async () => {
+    // Segment matching, not `startsWith`. A hypothetical marketing page at
+    // `/organizations-we-work-with` shares eleven characters with the product
+    // route and is not it.
+    getUser.mockResolvedValue({ data: { user: null } });
+
+    const { proxy } = await import("@/proxy");
+    const request = new NextRequest("https://lia.test/organizations-we-work-with");
+
+    const response = await proxy(request);
+
+    expect(response.status).toBe(200);
+  });
+});

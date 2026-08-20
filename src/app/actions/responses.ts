@@ -3,9 +3,11 @@
 import { revalidatePath } from "next/cache";
 import {
   assignResponseDraftInputSchema,
+  confirmResponsePublicationInputSchema,
   decideResponseDraftInputSchema,
   generateResponseDraftInputSchema,
   saveResponseDraftInputSchema,
+  unconfirmResponsePublicationInputSchema,
   type GenerationFailureCategory,
   type ResponseDraft,
 } from "@/domain";
@@ -231,4 +233,136 @@ export async function generateResponseDraftAction(
   }
 
   return { ok: true, data: result.data };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Assisted publication                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Record that a person posted an approved response themselves.
+ *
+ * The confirmation half of assisted posting, and the only thing in this file
+ * that moves a draft to `published`. Everything it does *not* do is the point:
+ * Lia sends nothing, contacts no provider, and receives no acknowledgement. It
+ * records somebody's statement that they carried the approved words to a
+ * platform Lia cannot reach.
+ *
+ * Consequences enforced below this action rather than here, so they hold for
+ * every future caller:
+ *
+ * - the method is written literally as `manual_external` by the repository,
+ *   never taken from the request;
+ * - `externalResponseId` stays null, which the database enforces
+ *   (`response_drafts_external_id_requires_provider`) — so a user-confirmed
+ *   publication can never be read as provider-verified;
+ * - the update is guarded on `status = 'approved'` in its own WHERE clause, so
+ *   a second click is idempotent rather than writing a second confirmation.
+ *
+ * Organization-wide rather than location-scoped, following `response.edit` and
+ * `response.generate`: a draft carries no location to scope a location manager
+ * to.
+ */
+export async function confirmResponsePublicationAction(
+  input: unknown,
+): Promise<ActionResult<{ draft: ResponseDraft; alreadyConfirmed: boolean }>> {
+  return runAction("response.confirm_publication", async () => {
+    const { responseDraftId } = confirmResponsePublicationInputSchema.parse(input);
+
+    const context = await authorize("response.confirm_publication");
+
+    const existing = await context.dataSource.responseDrafts.get(
+      context.scope,
+      responseDraftId,
+    );
+    if (!existing) throw notFound("Response draft");
+
+    const confirmedAt = new Date().toISOString();
+    const { draft, outcome } =
+      await context.dataSource.responseDrafts.confirmPublication(
+        context.scope,
+        responseDraftId,
+        context.userId,
+        confirmedAt,
+      );
+
+    // Only a genuine first confirmation is recorded. A repeat writing a second
+    // event would make one act look like two in the trail.
+    if (outcome === "confirmed") {
+      await recordAuditEvent(context, {
+        eventType: "response.publication_confirmed",
+        entityType: "response_draft",
+        entityId: responseDraftId,
+        previousState: { status: existing.status },
+        newState: { status: draft.status },
+        // Names the method explicitly so a reader of the trail cannot mistake
+        // this for an API publication. No draft text, matching every other
+        // event on a response.
+        metadata: {
+          publicationMethod: "manual_external",
+          mentionId: existing.mentionId,
+        },
+      });
+    }
+
+    revalidatePath("/responses");
+    revalidatePath("/mentions");
+
+    return { draft, alreadyConfirmed: outcome === "already_confirmed" };
+  });
+}
+
+/**
+ * Withdraw a confirmation somebody made by mistake.
+ *
+ * The correction path, and deliberately not called a retraction: a retraction
+ * means a published reply was taken down from the platform, which is a public
+ * act with its own evidence. This means the reply was never posted and Lia's
+ * record was wrong.
+ *
+ * Held to the same permission as confirming, rather than a narrower one. The
+ * person best placed to notice the mistake is whoever made it, and requiring
+ * them to find somebody more senior before a false "posted" record can be
+ * corrected would leave the wrong thing on the screen for longer.
+ */
+export async function unconfirmResponsePublicationAction(
+  input: unknown,
+): Promise<ActionResult<ResponseDraft>> {
+  return runAction("response.unconfirm_publication", async () => {
+    const { responseDraftId, reason } =
+      unconfirmResponsePublicationInputSchema.parse(input);
+
+    const context = await authorize("response.confirm_publication");
+
+    const existing = await context.dataSource.responseDrafts.get(
+      context.scope,
+      responseDraftId,
+    );
+    if (!existing) throw notFound("Response draft");
+
+    const draft = await context.dataSource.responseDrafts.unconfirmPublication(
+      context.scope,
+      responseDraftId,
+    );
+
+    await recordAuditEvent(context, {
+      eventType: "response.publication_unconfirmed",
+      entityType: "response_draft",
+      entityId: responseDraftId,
+      previousState: {
+        status: existing.status,
+        publicationMethod: existing.publicationMethod,
+      },
+      newState: { status: draft.status, publicationMethod: null },
+      // The reason is the whole value of the correction — a bare reversal in an
+      // audit trail reads as indecision, and the person reading it later is
+      // trying to establish what actually happened. Capped by the schema.
+      metadata: { reason, mentionId: existing.mentionId },
+    });
+
+    revalidatePath("/responses");
+    revalidatePath("/mentions");
+
+    return draft;
+  });
 }

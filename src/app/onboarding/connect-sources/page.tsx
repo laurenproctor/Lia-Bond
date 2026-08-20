@@ -8,8 +8,10 @@ import {
 } from "@/components/onboarding/connect-sources-step";
 import { onboardingStepDefinition, type MonitoringQuery, type Organization } from "@/domain";
 import { isGoogleConnectorAvailable } from "@/integrations/registry";
+import { findMonitoringCountry } from "@/lib/geo/countries";
 import { requireOnboardingStep } from "@/lib/onboarding/context";
 import {
+  brandWatchQueryName,
   findOnboardingNewsQuery,
   lastSuccessfulNewsPollAt,
   summarizeNewsMonitoring,
@@ -84,6 +86,7 @@ export default async function OnboardingConnectSourcesPage({
       country: newsSummary.country,
       lastSuccessfulPollAt: lastPollAt,
       initialValues: configuratorInitialValues(onboardingQuery, context.organization),
+      initialValuesPersisted: onboardingQuery !== null,
       keywordSuggestions: keywordSuggestions(context.organization),
     },
     reddit: {
@@ -100,6 +103,8 @@ export default async function OnboardingConnectSourcesPage({
 
   return (
     <OnboardingShell
+      organizations={context.available}
+      activeOrganizationId={context.organization.id}
       step="connect_sources"
       state={context.state}
       aside={
@@ -156,9 +161,9 @@ export default async function OnboardingConnectSourcesPage({
  *
  * The persisted onboarding-managed query when one exists — editing, never
  * shadowing — otherwise defaults built from real organization data: the
- * organization's own name as the first keyword and nothing invented. No
- * fabricated aliases, no fabricated people, and no location names, because
- * step 3 has not chosen locations yet.
+ * organization's own name in the title and as the first keyword, and nothing
+ * invented. No fabricated aliases, no fabricated people, and no location
+ * names, because step 3 has not chosen locations yet.
  */
 function configuratorInitialValues(
   query: MonitoringQuery | null,
@@ -170,18 +175,31 @@ function configuratorInitialValues(
       keywords: query.keywords,
       exclusions: query.exclusions,
       sourceCountry: query.sourceCountry,
+      postalCode: query.postalCode,
+      localityCity: query.localityCity,
+      localityRegion: query.localityRegion,
       language: query.language,
       enabled: query.enabled,
     };
   }
 
   return {
-    name: "Brand watch",
+    // "Ember & Oak brand name watch", not "Brand watch": named after the
+    // organization the same way step 3 names its location queries, so an
+    // organization's queries read as one set.
+    name: brandWatchQueryName(organization.name),
     keywords: [organization.name],
     exclusions: [],
     // Derived from the organization's own configured language ("en-US" →
     // country us, language en) rather than assumed.
     sourceCountry: regionOf(organization.defaultLanguage),
+    // No locality to default to, and none invented. Step 3 is where locations
+    // are chosen, so at this point the only address Lia could reach for would
+    // be a guess — and this is a field the product will later present as a
+    // stated fact about where somebody operates.
+    postalCode: null,
+    localityCity: null,
+    localityRegion: null,
     language: languageOf(organization.defaultLanguage),
     enabled: true,
   };
@@ -204,13 +222,20 @@ function websiteHost(url: string | null): string | null {
   }
 }
 
-/** The countries the configurator offers. Must match its select options. */
-const CONFIGURATOR_COUNTRIES = new Set(["us", "gb", "ca", "au", "ie", "de", "fr", "es"]);
 const CONFIGURATOR_LANGUAGES = new Set(["en", "es", "fr", "de"]);
 
+/**
+ * The country the organization's language tag implies, when the configurator
+ * can actually offer it.
+ *
+ * Checked against `MONITORING_COUNTRIES` — the same list the select is built
+ * from — rather than a copy of it kept here. The copy was the bug waiting to
+ * happen: a country added to the picker and not to the copy would default to
+ * "Anywhere" for the one organization it was added for.
+ */
 function regionOf(languageTag: string): string | null {
   const region = languageTag.split("-")[1]?.toLowerCase() ?? null;
-  return region && CONFIGURATOR_COUNTRIES.has(region) ? region : null;
+  return findMonitoringCountry(region)?.code ?? null;
 }
 
 function languageOf(languageTag: string): string | null {

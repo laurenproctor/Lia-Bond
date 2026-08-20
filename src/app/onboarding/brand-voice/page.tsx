@@ -3,7 +3,8 @@ import { BarChart3, Clock, MessageSquare, ShieldCheck } from "lucide-react";
 import { OnboardingAside, stepEyebrow } from "@/components/onboarding/onboarding-aside";
 import { OnboardingShell } from "@/components/onboarding/onboarding-shell";
 import { BrandVoiceStepForm } from "@/components/onboarding/brand-voice-step-form";
-import { DEFAULT_BRAND_VOICE, onboardingStepDefinition } from "@/domain";
+import { onboardingStepDefinition } from "@/domain";
+import { brandVoiceFormSeed } from "@/lib/brand-voice/seed";
 import { requireOnboardingStep } from "@/lib/onboarding/context";
 
 export const metadata: Metadata = { title: "Set how Lia should sound" };
@@ -21,8 +22,11 @@ export const metadata: Metadata = { title: "Set how Lia should sound" };
  * settings already in the form — because the form is seeded from the stored
  * profile, not from wizard state.
  *
- * `DEFAULT_BRAND_VOICE` is the starting point when nothing is stored. Absence is
- * normal: provisioning does not create a profile, and no migration backfills one.
+ * The seed comes from `brandVoiceFormSeed`, which `/brand-voice` also uses, so
+ * the two screens cannot disagree about which fields carry over or about what to
+ * show when nothing is stored. `DEFAULT_BRAND_VOICE` is that starting point, and
+ * absence is normal: provisioning does not create a profile, and no migration
+ * backfills one.
  */
 export default async function OnboardingBrandVoicePage() {
   const context = await requireOnboardingStep("brand_voice");
@@ -32,6 +36,8 @@ export default async function OnboardingBrandVoicePage() {
 
   return (
     <OnboardingShell
+      organizations={context.available}
+      activeOrganizationId={context.organization.id}
       step="brand_voice"
       state={context.state}
       aside={
@@ -66,18 +72,7 @@ export default async function OnboardingBrandVoicePage() {
         />
       }
     >
-      <BrandVoiceStepForm
-        initial={
-          stored
-            ? {
-                name: stored.name,
-                axes: stored.axes,
-                approvedPhrases: stored.approvedPhrases,
-                prohibitedPhrases: stored.prohibitedPhrases,
-              }
-            : DEFAULT_BRAND_VOICE
-        }
-      />
+      <BrandVoiceStepForm initial={brandVoiceFormSeed(stored)} />
     </OnboardingShell>
   );
 }

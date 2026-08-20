@@ -3,16 +3,12 @@ import { PageBody } from "@/components/shell/app-shell";
 import { ChannelScope } from "@/components/brand-voice/channel-scope";
 import { VoiceForm } from "@/components/brand-voice/voice-form";
 import { PageHeader } from "@/components/ui/page-header";
-import { SectionPlaceholder } from "@/components/ui/section-placeholder";
 import { can } from "@/lib/auth/permissions";
+import { brandVoiceFormSeed } from "@/lib/brand-voice/seed";
 import { getDataSource } from "@/lib/data";
 import { PLATFORM_LABELS } from "@/lib/labels";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
-import {
-  DEFAULT_BRAND_VOICE,
-  type PlatformConnection,
-  type UpdateBrandVoiceInput,
-} from "@/domain";
+import type { PlatformConnection } from "@/domain";
 
 export const metadata: Metadata = { title: "Brand voice" };
 
@@ -33,6 +29,19 @@ function connectedPlatformNames(connections: PlatformConnection[]): string[] {
 /**
  * Brand voice configuration.
  *
+ * Seeded through `brandVoiceFormSeed`, the same function step 4 of onboarding
+ * seeds its form with, reading the same row through the same repository — so a
+ * voice set during setup is what this screen opens on, and editing it here is
+ * editing that record rather than a copy of it.
+ *
+ * The same is now true of what the two screens *show*, not just what they
+ * store. The preview is rendered inside `VoiceForm` from the shared
+ * `buildVoicePreview`; it used to be a `SectionPlaceholder` passed in from
+ * here, promising a real draft "once response drafting arrives". Drafting has
+ * since arrived, which made the sentence false — but a real draft would still
+ * be the wrong thing here, because it cannot follow a slider and it needs a
+ * provider configured. See `src/lib/brand-voice/preview.ts`.
+ *
  * An organization with no saved profile is the normal case, not an error:
  * provisioning does not create one, so the defaults are rendered and the first
  * save inserts the row.
@@ -46,15 +55,7 @@ export default async function BrandVoicePage() {
     dataSource.platformConnections.list(context.scope),
   ]);
 
-  const initial: UpdateBrandVoiceInput = profile
-    ? {
-        name: profile.name,
-        axes: profile.axes,
-        approvedPhrases: profile.approvedPhrases,
-        prohibitedPhrases: profile.prohibitedPhrases,
-      }
-    : DEFAULT_BRAND_VOICE;
-
+  const initial = brandVoiceFormSeed(profile);
   const readOnly = !can(context.role, "brand_voice.update");
 
   return (
@@ -75,13 +76,6 @@ export default async function BrandVoicePage() {
         initial={initial}
         readOnly={readOnly}
         channels={<ChannelScope connected={connectedPlatformNames(connections)} />}
-        preview={
-          <SectionPlaceholder
-            title="5. Live preview"
-            description="A real mention answered in this voice. Available once response drafting arrives."
-            shape="lines"
-          />
-        }
       />
     </PageBody>
   );

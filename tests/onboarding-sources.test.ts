@@ -5,6 +5,8 @@ import {
   createMonitoringQueryInputSchema,
   DEFAULT_POLL_INTERVAL_MINUTES,
   DEFAULT_RELEVANCE_THRESHOLD,
+  MAX_MONITORING_QUERY_NAME_LENGTH,
+  monitoringQuerySchema,
   NO_CAPABILITIES,
   onboardingNewsMonitoringInputSchema,
   updateMonitoringQueryInputSchema,
@@ -13,11 +15,13 @@ import {
 import { getConnector } from "@/integrations/registry";
 import { ConfigurationError } from "@/lib/env";
 import {
+  brandWatchQueryName,
   ensureOnboardingLocationQueries,
   findOnboardingNewsQuery,
   lastSuccessfulNewsPollAt,
   saveOnboardingNewsQuery,
   summarizeNewsMonitoring,
+  watchQueryName,
 } from "@/lib/onboarding/news";
 import { LOC_HARBOR_HOUSE, LOC_SOHO, MQ_HARBOR_BRAND } from "@/lib/seed/dataset";
 import type { NewsMonitor } from "@/news/monitor";
@@ -72,6 +76,66 @@ function code(relativePath: string): string {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Naming a generated query                                                    */
+/* -------------------------------------------------------------------------- */
+
+describe("watchQueryName", () => {
+  it("names the query after its subject", () => {
+    expect(watchQueryName("Ember & Oak")).toBe("Ember & Oak watch");
+    expect(watchQueryName("Harbor House")).toBe("Harbor House watch");
+  });
+
+  it("trims the subject rather than trusting the caller", () => {
+    expect(watchQueryName("  Ember & Oak  ")).toBe("Ember & Oak watch");
+  });
+
+  it("shortens a long subject to a name the schema accepts", () => {
+    // Organization names may be 160 characters; a query name may be 120.
+    const long = "A".repeat(160);
+    const name = watchQueryName(long);
+
+    expect(name.length).toBeLessThanOrEqual(MAX_MONITORING_QUERY_NAME_LENGTH);
+    // The suffix survives, so the row still reads as a watch rather than as a
+    // sentence cut mid-word.
+    expect(name.endsWith(" watch")).toBe(true);
+    expect(() => monitoringQuerySchema.shape.name.parse(name)).not.toThrow();
+  });
+
+  it("falls back rather than producing a nameless query", () => {
+    // The schemas forbid this upstream; the guard exists so a blank name can
+    // never reach the database as " watch".
+    expect(watchQueryName("   ")).toBe("Brand watch");
+  });
+});
+
+describe("brandWatchQueryName", () => {
+  it("says what the organization-wide query watches", () => {
+    expect(brandWatchQueryName("Ember & Oak")).toBe(
+      "Ember & Oak brand name watch",
+    );
+  });
+
+  it("trims the subject rather than trusting the caller", () => {
+    expect(brandWatchQueryName("  Ember & Oak  ")).toBe(
+      "Ember & Oak brand name watch",
+    );
+  });
+
+  it("shortens a long organization name to a name the schema accepts", () => {
+    const long = "A".repeat(160);
+    const name = brandWatchQueryName(long);
+
+    expect(name.length).toBeLessThanOrEqual(MAX_MONITORING_QUERY_NAME_LENGTH);
+    expect(name.endsWith(" brand name watch")).toBe(true);
+    expect(() => monitoringQuerySchema.shape.name.parse(name)).not.toThrow();
+  });
+
+  it("falls back rather than producing a nameless query", () => {
+    expect(brandWatchQueryName("   ")).toBe("Brand name watch");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* Choosing the onboarding-managed query                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -88,6 +152,9 @@ describe("findOnboardingNewsQuery", () => {
       allowedDomains: [],
       deniedDomains: [],
       sourceCountry: "us",
+      postalCode: null,
+      localityCity: null,
+      localityRegion: null,
       language: "en",
       relevanceThreshold: 0.35,
       enabled: true,
@@ -323,6 +390,40 @@ describe("saveOnboardingNewsQuery", () => {
     expect(createdEvent).toBeDefined();
   });
 
+  it("records nothing when a save changes no field", async () => {
+    const dataSource = freshDataSource();
+    const scope = harbor.owner();
+
+    await saveOnboardingNewsQuery({ dataSource, scope }, SAVE_INPUT, fakeMonitor(), NOW);
+    const afterFirst = (await dataSource.auditEvents.list(scope, { limit: 100 })).length;
+
+    // The same payload again. Under autosave this is a timer firing, not a
+    // decision, and `audit_events` is append-only — an entry saying nothing
+    // could never be cleaned up.
+    await saveOnboardingNewsQuery({ dataSource, scope }, SAVE_INPUT, fakeMonitor(), NOW);
+    const afterSecond = (await dataSource.auditEvents.list(scope, { limit: 100 })).length;
+
+    expect(afterSecond).toBe(afterFirst);
+
+    // A real change still lands, with its own before-and-after.
+    const changed = await saveOnboardingNewsQuery(
+      { dataSource, scope },
+      { ...SAVE_INPUT, name: "Harbor House watch" },
+      fakeMonitor(),
+      NOW,
+    );
+    const events = await dataSource.auditEvents.list(scope, { limit: 100 });
+    expect(events.length).toBe(afterSecond + 1);
+    expect(
+      events.filter(
+        (event) =>
+          event.eventType === "monitoring_query.updated" &&
+          event.newState?.name === "Harbor House watch",
+      ),
+    ).toHaveLength(1);
+    expect(changed.name).toBe("Harbor House watch");
+  });
+
   it("cannot reach another organization's queries", async () => {
     const dataSource = freshDataSource();
 
@@ -387,6 +488,29 @@ describe("ensureOnboardingLocationQueries", () => {
     const brand = queries.find((query) => query.id === MQ_HARBOR_BRAND);
     expect(locationQuery?.sourceCountry).toBe(brand?.sourceCountry);
     expect(locationQuery?.language).toBe(brand?.language);
+  });
+
+  it("takes the locality from the location's own address, not from the brand query", async () => {
+    const dataSource = freshDataSource();
+    const scope = harbor.owner();
+
+    await ensureOnboardingLocationQueries(
+      { dataSource, scope },
+      [LOC_HARBOR_HOUSE],
+      fakeMonitor(),
+      NOW,
+    );
+
+    const queries = await dataSource.monitoringQueries.list(scope);
+    const locationQuery = queries.find((query) => query.locationId === LOC_HARBOR_HOUSE);
+    const location = await dataSource.locations.get(scope, LOC_HARBOR_HOUSE);
+
+    // This restaurant's persisted address, verbatim. Inheriting the brand
+    // query's locality instead would stamp head office's neighbourhood onto
+    // every restaurant in the group.
+    expect(locationQuery?.postalCode).toBe(location?.postalCode);
+    expect(locationQuery?.localityCity).toBe(location?.city);
+    expect(locationQuery?.localityRegion).toBe(location?.region);
   });
 
   it("is idempotent: a retried step 3 creates nothing new", async () => {

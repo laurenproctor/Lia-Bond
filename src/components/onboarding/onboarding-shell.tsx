@@ -6,6 +6,8 @@ import {
 } from "@/domain";
 import { LogoMark } from "@/components/site/logo-mark";
 import { OnboardingProgress } from "@/components/onboarding/onboarding-progress";
+import { OnboardingOrgEscape } from "@/components/onboarding/onboarding-org-escape";
+import type { OrganizationMembership } from "@/domain";
 
 /**
  * The frame every onboarding screen renders inside.
@@ -27,12 +29,21 @@ export function OnboardingShell({
   state,
   aside,
   children,
+  organizations = [],
+  activeOrganizationId,
 }: {
   /** Null on the Workspace Ready screen, which shows no progress strip. */
   step: OnboardingWizardStep | null;
   state: OrganizationOnboarding;
   aside: ReactNode;
   children: ReactNode;
+  /**
+   * Every organization the caller belongs to. Optional and empty by default, so
+   * a screen that does not pass it simply gets the wizard as it always was —
+   * the escape control renders only when there is more than one.
+   */
+  organizations?: OrganizationMembership[];
+  activeOrganizationId?: string;
 }) {
   return (
     <div
@@ -53,11 +64,22 @@ export function OnboardingShell({
             <LogoMark />
             <span className="sr-only">Lia</span>
           </p>
-          {step ? (
-            <p className="text-[12px] font-semibold tracking-[0.08em] text-site-muted uppercase lg:hidden">
-              Step {stepNumber(step)} of {ONBOARDING_STEP_DEFINITIONS.length}
-            </p>
-          ) : null}
+          <div className="flex items-center gap-3">
+            {step ? (
+              <p className="text-[12px] font-semibold tracking-[0.08em] text-site-muted uppercase lg:hidden">
+                Step {stepNumber(step)} of {ONBOARDING_STEP_DEFINITIONS.length}
+              </p>
+            ) : null}
+            {/* Renders nothing unless the caller belongs to more than one
+                organization. See the component for why the wizard otherwise
+                stays navigation-free. */}
+            {activeOrganizationId ? (
+              <OnboardingOrgEscape
+                organizations={organizations}
+                activeOrganizationId={activeOrganizationId}
+              />
+            ) : null}
+          </div>
         </header>
 
         <div className="grid gap-6 lg:grid-cols-12 lg:items-start lg:gap-10">

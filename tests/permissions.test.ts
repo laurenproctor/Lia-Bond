@@ -58,6 +58,36 @@ describe("role permissions", () => {
       expect(can(role, "organization.update")).toBe(expected);
     }
   });
+
+  it("keeps location administration with owners and admins", () => {
+    for (const role of MEMBERSHIP_ROLES) {
+      const expected = role === "owner" || role === "admin";
+      expect(can(role, "location.create")).toBe(expected);
+      expect(can(role, "location.update")).toBe(expected);
+    }
+  });
+
+  it("does not let a communications lead create a location directly", () => {
+    // Mapping a Google listing still brings a location into existence for
+    // them, but only through `create_and_map_location`, which cannot produce
+    // one without binding a profile to it. Creation is a side effect of
+    // mapping, never a capability of its own — so the permission that gates
+    // the manual form must not be held here.
+    expect(can("communications_lead", "integration.manage_profiles")).toBe(true);
+    expect(can("communications_lead", "location.create")).toBe(false);
+    expect(can("communications_lead", "location.update")).toBe(false);
+  });
+
+  it("does not let a location manager edit locations", () => {
+    // Under the pre-contraction RLS policy (`can_write_in_organization`) they
+    // could, at the database level, including reassigning manager_user_id to
+    // themselves — the exact widening `location.update_manager` exists to
+    // stop. 20260814000500 closes it in the database; this closes it here.
+    expect(can("location_manager", "location.create")).toBe(false);
+    expect(can("location_manager", "location.update")).toBe(false);
+    expect(can("approver", "location.create")).toBe(false);
+    expect(can("approver", "location.update")).toBe(false);
+  });
 });
 
 describe("location scoping", () => {
@@ -160,4 +190,38 @@ describe("automation_rule.manage", () => {
   });
   it("communications_lead can toggle rules", () =>
     expect(can("communications_lead", "automation_rule.toggle")).toBe(true));
+});
+
+describe("response.publish and response.retract", () => {
+  it("are held by owners, admins, and the communications lead", () => {
+    for (const permission of ["response.publish", "response.retract"] as const) {
+      expect(can("owner", permission)).toBe(true);
+      expect(can("admin", permission)).toBe(true);
+      expect(can("communications_lead", permission)).toBe(true);
+    }
+  });
+
+  it("are withheld from the approver, keeping signing off and sending apart", () => {
+    // The separation of duties this table has kept between writing and
+    // approving would be hollow if the person who approved the text were also
+    // the one who could put it in front of the public.
+    expect(can("approver", "response.publish")).toBe(false);
+    expect(can("approver", "response.retract")).toBe(false);
+    // They keep the decision itself, which is the job they hold.
+    expect(can("approver", "response.decide")).toBe(true);
+  });
+
+  it("are withheld from analysts, viewers, and location managers", () => {
+    for (const permission of ["response.publish", "response.retract"] as const) {
+      for (const role of ["analyst", "viewer", "location_manager"] as const) {
+        expect(can(role, permission)).toBe(false);
+      }
+    }
+  });
+
+  it("do not widen who may decide a draft", () => {
+    // Adding a publish permission must not accidentally hand the
+    // communications lead the approval it is meant to stay separate from.
+    expect(can("communications_lead", "response.decide")).toBe(false);
+  });
 });

@@ -17,12 +17,18 @@ export const PERMISSIONS = [
   "response.decide",
   "response.edit",
   "response.generate",
+  "response.confirm_publication",
+  "mention.capture_manual",
+  "response.publish",
+  "response.retract",
   "escalation.assign",
   "escalation.update_status",
   "automation_rule.toggle",
   "automation_rule.manage",
   "brand_voice.update",
   "location.update_manager",
+  "location.create",
+  "location.update",
   "organization.manage_members",
   "organization.update",
   "onboarding.manage",
@@ -34,6 +40,7 @@ export const PERMISSIONS = [
   "integration.disconnect",
   "monitoring.manage_queries",
   "monitoring.poll_now",
+  "review_widget.manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -79,6 +86,52 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // Location managers are absent for the same reason they are absent from
   // `response.edit`: a draft carries no location to scope them to.
   "response.generate": ["owner", "admin", "communications_lead"],
+  // Stating that an approved response was posted on a platform Lia cannot
+  // reach. Deliberately **not** a reuse of `response.decide`: the separation
+  // this table has kept between writing text and signing it off would be
+  // hollow if the approver could also be the sole witness that it went public.
+  // Nobody can confirm a draft that is not approved — `canConfirmPublication`
+  // refuses it regardless of who is asking — so this row narrows the door
+  // rather than being the lock.
+  //
+  // Location managers are absent for the same reason they are absent from
+  // `response.edit`: a draft carries no location to scope them to. Analysts
+  // and viewers are absent because this writes a record of a public act.
+  "response.confirm_publication": ["owner", "admin", "communications_lead"],
+  // Typing a review Lia could not fetch into the queue.
+  //
+  // Its own permission rather than a reuse of `integration.sync_reviews`, and
+  // the same roles hold both today — the D145 pattern, where two genuinely
+  // different acts get two names before the day one of them needs to move.
+  // Relaying what a provider returned and asserting content nothing can verify
+  // are not the same act: a captured review is unfalsifiable by construction,
+  // and it drives analysis, escalation, and a public reply exactly as an
+  // imported one does. The obvious future divergence is already visible — a
+  // location manager adding their own restaurant's review is plausible, and
+  // `integration.sync_reviews` is organization-wide by design and could never
+  // express it.
+  "mention.capture_manual": ["owner", "admin", "communications_lead"],
+  // Pressing publish is the act that puts words under a customer's name in
+  // front of the public. Deliberately **not** the same list as
+  // `response.decide`: approvers sign text off, and the separation of duties
+  // this table has kept since D-day between writing and approving would be
+  // hollow if the approver could also be the one to send it. The
+  // communications lead who owns the text carries it out, once somebody else
+  // has approved it — and `claim_response_publication` refuses an unapproved
+  // draft regardless of who is asking, so this row narrows the door rather
+  // than being the lock.
+  //
+  // Analysts, viewers, and location managers are absent. A location manager
+  // has no location to be scoped to here for the same reason they are absent
+  // from `response.edit`: a draft carries none.
+  "response.publish": ["owner", "admin", "communications_lead"],
+  // Retraction is an emergency stop, so it sits with the same people rather
+  // than one notch higher. Making it an owner-only act would mean the person
+  // who noticed the problem has to find somebody else before a bad reply comes
+  // down, and minutes matter more here than authority does. Guarded instead by
+  // an explicit confirmation and by the database proving Lia published the
+  // comment it is about to delete.
+  "response.retract": ["owner", "admin", "communications_lead"],
   "escalation.assign": ["owner", "admin", "communications_lead"],
   "escalation.update_status": [
     "owner",
@@ -106,6 +159,41 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // reason this permission is new rather than a reuse of `response.decide`.
   "brand_voice.update": ["owner", "admin", "communications_lead"],
   "location.update_manager": ["owner", "admin"],
+  // Adding a restaurant to the portfolio, and editing what one is.
+  //
+  // Neither is a reuse of `location.update_manager`, deliberately. That one is
+  // about *who holds authority over a site*, which is why it is narrower than
+  // the general write gate — folding "edit the address" into it makes the name
+  // a lie in one direction or the other. Nor a reuse of `onboarding.manage`:
+  // first-run setup and ongoing administration are different authorities with
+  // different lifetimes, and an organization that finished onboarding a year
+  // ago still needs to add its eleventh restaurant.
+  //
+  // Same two roles as `location.update_manager` today, so the split costs
+  // nothing now and gives a future "regional director may edit their own
+  // sites" role somewhere to attach.
+  //
+  // These match the database exactly once the contraction migration
+  // (20260814000500) lands: `locations_insert` and `locations_update` name
+  // owner and admin and nobody else. Before that migration the policies are
+  // still the old `can_write_in_organization`, which is wider — the expansion
+  // phase deliberately keeps them that way so the currently deployed
+  // application keeps working, and this permission is the narrower gate in the
+  // meantime.
+  //
+  // Location managers are absent for the same reason they are absent from
+  // `integration.manage_profiles`: creating a restaurant record is an
+  // organization-wide decision with no location to scope them to, and under
+  // the old policy a location manager could reassign `manager_user_id` to
+  // themselves — the exact widening `location.update_manager` exists to stop.
+  //
+  // Communications leads are absent too, and that is not a demotion: mapping a
+  // Google listing still brings a location into existence for them, through
+  // `create_and_map_location`, which cannot produce one without binding a
+  // profile to it. Creation as a side effect of mapping, never as a capability
+  // of its own.
+  "location.create": ["owner", "admin"],
+  "location.update": ["owner", "admin"],
   "organization.manage_members": ["owner", "admin"],
   // Who runs the roster and who defines the organization's identity are
   // different questions — this is deliberately not a reuse of
@@ -169,6 +257,30 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   // D19 — reading a query is governed by membership, not this table.
   "monitoring.manage_queries": ["owner", "admin", "communications_lead"],
   "monitoring.poll_now": ["owner", "admin", "communications_lead"],
+  // Configuring what Lia publishes on the customer's own website: the theme,
+  // which review is shown, the approved domains, and whether the embed
+  // resolves at all.
+  //
+  // The same three roles as `brand_voice.update` and `automation_rule.manage`,
+  // and it belongs with them rather than with the integration permissions:
+  // all three decide what the product says without a person in the loop. An
+  // integration permission would have been the wrong shelf — there is no
+  // external account here, nothing to authorise, and nothing to disconnect.
+  //
+  // Location managers are absent, and this is the one row in this table where
+  // that needs an argument, because a widget carries a location and
+  // `canForLocation` could scope them to it. Two reasons it does not. The
+  // policies in 20260820000300 restate this list with
+  // `has_organization_role`, which cannot express "and only for their own
+  // locations" — the scoping would live in application code alone, and for a
+  // surface the public can see this table's posture is that application code
+  // is not the last line. And a group's marketing site is one artefact even
+  // when the review on it is one restaurant's. If that becomes wrong, the fix
+  // is a policy joining `locations` on `manager_user_id`, not a wider list
+  // here.
+  //
+  // Analysts and viewers are absent for the ordinary reason: they read.
+  "review_widget.manage": ["owner", "admin", "communications_lead"],
 };
 
 export function can(role: MembershipRole, permission: Permission): boolean {

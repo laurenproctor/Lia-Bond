@@ -252,7 +252,33 @@ describe("audit vocabulary vs. the Postgres migrations", () => {
     expect(occurrences).toBeGreaterThan(0);
     expect(current).not.toBeNull();
 
-    expect(new Set(current)).toEqual(new Set(AUDIT_EVENT_TYPES));
+    const permitted = new Set(current);
+    // Widened to `string`: the point of the comparison is to find names on one
+    // side that the other does not have, which the narrow union type forbids
+    // asking about.
+    const declared = new Set<string>(AUDIT_EVENT_TYPES);
+
+    const repair =
+      'Run `npm run audit:vocabulary:generate -- --slug <name> --reason "..."` to emit a ' +
+      "migration restating the whole list from AUDIT_EVENT_TYPES. Do not hand-merge the two " +
+      "prior vocabulary migrations: that is how the repair comes out correct for the branches " +
+      "its author knew about and wrong for the next one.";
+
+    // Reported by direction rather than as one set comparison, because the two
+    // failures are not equally urgent. A name the migrations reject while the
+    // application still emits it is a 23514 on a real write; the reverse is
+    // only a constraint looser than the type, which nothing will notice today.
+    const droppedByMigrations = [...declared].filter((name) => !permitted.has(name));
+    const absentFromTypeScript = [...permitted].filter((name) => !declared.has(name));
+
+    expect(
+      droppedByMigrations,
+      `The migrations' final constraint rejects events the application still emits. ${repair}`,
+    ).toEqual([]);
+    expect(
+      absentFromTypeScript,
+      `The migrations permit events AUDIT_EVENT_TYPES does not declare. ${repair}`,
+    ).toEqual([]);
   });
 
   it("keeps audit_entity_type in sync with AUDIT_ENTITY_TYPES", async () => {

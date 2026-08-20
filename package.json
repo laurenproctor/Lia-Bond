@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "db:seed:generate": "node --experimental-strip-types --no-warnings --import ./scripts/tsconfig-paths-hook.mjs scripts/generate-seed-sql.ts",
     "matrix:parity:generate": "node --experimental-strip-types --no-warnings --import ./scripts/tsconfig-paths-hook.mjs scripts/generate-matrix-parity-sql.ts",
+    "audit:vocabulary:generate": "node --experimental-strip-types --no-warnings --import ./scripts/tsconfig-paths-hook.mjs scripts/generate-audit-vocabulary-sql.ts",
     "db:seed:remote": "node --experimental-strip-types --no-warnings --env-file=.env --import ./scripts/tsconfig-paths-hook.mjs scripts/seed-remote.ts",
     "auth:seed": "node --experimental-strip-types --no-warnings --env-file=.env --import ./scripts/tsconfig-paths-hook.mjs scripts/create-auth-users.ts",
     "db:validate": "node scripts/validate-migrations.mjs",
@@ -20,6 +21,12 @@
     "db:verify-rls": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql",
     "db:verify-execution": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/execution-verification.sql -f supabase/tests/matrix-parity.generated.sql && bash scripts/execution-race-test.sh",
     "db:verify-generation": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/generation-verification.sql && bash scripts/generation-race-test.sh",
+    "db:verify-yelp": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/yelp-verification.sql",
+    "db:verify-reddit": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/reddit-verification.sql && bash scripts/reddit-race-test.sh",
+    "db:verify-tenancy": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/tenancy-verification.sql && bash scripts/tenancy-race-test.sh",
+    "db:verify-tenancy-expanded": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/expanded-phase-rehearsal.sql -f supabase/tests/tenancy-verification.sql",
+    "db:preflight-tenancy": "node --experimental-strip-types --no-warnings --env-file=.env --import ./scripts/tsconfig-paths-hook.mjs scripts/tenancy-preflight.ts",
+    "db:verify-review-widget": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/review-widget-verification.sql",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {

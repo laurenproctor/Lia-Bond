@@ -18,6 +18,7 @@ import { GENERATED_BY_LABELS, RESPONSE_TYPE_LABELS } from "@/lib/labels";
 import { getDataSource } from "@/lib/data";
 import { resolveSelection } from "@/lib/selection";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
+import { resolveYelpDestination } from "@/lib/yelp/destination";
 import { approvalTimelineEntries, hasHumanEdit } from "@/lib/view-models/response";
 import { excerptFrom, workspacePathFor } from "@/lib/view-models/mention";
 import { resolvePublishingMode } from "@/domain";
@@ -117,6 +118,26 @@ export default async function ResponsesPage({ searchParams }: ResponsesPageProps
   const publishing = selectedDetail?.connection
     ? resolvePublishingMode(selectedDetail.connection.capabilities)
     : "unavailable";
+
+  // Resolved and validated server-side, so the only URL that can reach the
+  // browser is one that passed the Yelp host allowlist. Computed for every
+  // assisted source rather than for Yelp by name — a second assisted provider
+  // would need the same handoff, and the destination resolver is where that
+  // decision belongs.
+  // The connected listing supplies the fallback destination when the captured
+  // review carried no link of its own. Fetched only on the assisted path, so an
+  // ordinary Google or news selection pays nothing for it.
+  const assistedProfile =
+    publishing === "assisted" && selectedDetail?.mention.platformProfileId
+      ? (await dataSource.platformProfiles.list(scope)).find(
+          (row) => row.id === selectedDetail.mention.platformProfileId,
+        ) ?? null
+      : null;
+
+  const assistedDestination =
+    publishing === "assisted" && selectedDetail?.mention
+      ? resolveYelpDestination(selectedDetail.mention, assistedProfile)
+      : null;
 
   const countOf = (status: ResponseDraft["status"]) =>
     drafts.filter((draft) => draft.status === status).length;
@@ -228,6 +249,9 @@ export default async function ResponsesPage({ searchParams }: ResponsesPageProps
           publishing={publishing}
           canDecide={can(role, "response.decide")}
           canEdit={can(role, "response.edit")}
+          assistedDestinationUrl={assistedDestination?.url ?? null}
+          assistedDestinationKind={assistedDestination?.kind ?? "listing"}
+          canConfirmPublication={can(role, "response.confirm_publication")}
           assigneeName={selectedRow.assigneeName}
           approvalEntries={approvalTimelineEntries(approvals, namesById)}
         />

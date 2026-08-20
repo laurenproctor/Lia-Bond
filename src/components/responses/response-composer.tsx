@@ -34,6 +34,11 @@ export interface ResponseComposerProps {
 
 const PUBLISHING_COPY: Record<PublishingMode, string> = {
   direct: "Lia can publish this reply directly to the source.",
+  // Distinct from `manual`, and the difference is what the person does next.
+  // `manual` says "you are on your own from here"; this says Lia knows the
+  // page, hands over the exact approved words, and takes a confirmation back.
+  assisted:
+    "Lia cannot post to this source. Copy the approved response, open the listing, and mark it as posted once you have.",
   manual:
     "This source has no publishing API. Lia prepares the text and a person posts it.",
   unavailable:

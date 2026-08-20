@@ -36,15 +36,18 @@ recorded under "Decisions made integrating the branches".
 | `src/app/actions/` | Server actions. The only write path in the application. |
 | `src/lib/site/` | The marketing route table, and the content each public page renders. One source for the nav, the footer, the sitemap, and `robots.txt`. |
 | `src/lib/support/` | Help requests: validation, message composition, and delivery mode. |
-| `src/lib/brand-voice/` | Brand voice save service, summary derivation, and autosave status. |
-| `src/lib/onboarding/` | First-run setup: route guards, step transitions and their audit trail, the deterministic brand-voice preview, quick-win resolution, import status, and the post-authentication destination. |
+| `src/lib/brand-voice/` | Brand voice save service, form seed, summary derivation, and the deterministic preview both the settings screen and onboarding step 4 render. |
+| `src/lib/onboarding/` | First-run setup: route guards, step transitions and their audit trail, quick-win resolution, import status, and the post-authentication destination. The brand-voice preview used to live here; it moved to `src/lib/brand-voice/` once `/brand-voice` rendered it too. |
 | `src/components/` | Presentational components. **Never** query the database. |
 | `src/domain/` | Zod schemas, inferred types, and lifecycle enums. No I/O. |
 | `src/integrations/` | Platform connector boundary. All Google API behaviour lives behind it. |
 | `src/ai/` | Model boundary. All Anthropic API behaviour lives behind it. |
 | `src/news/` | News provider boundary (`NewsMonitor`). All GNews API behaviour lives behind it, plus the mock used in tests and demo mode. Deliberately not a `PlatformConnector` — see D78. |
 | `src/lib/analysis/` | Analysis orchestration: prompt, schema, heuristic, run service. |
+| `src/yelp/` | Yelp Places provider boundary (`YelpPlacesProvider`). All Yelp Fusion behaviour lives behind it, plus the deterministic mock. Deliberately not a `PlatformConnector` — the same judgement D78 made for news. |
 | `src/lib/monitoring/` | News orchestration: the relevance gate, the poll service, budget enforcement, implicit connection creation, query CRUD. |
+| `src/lib/yelp/` | Yelp Assisted orchestration: listing matching, connect/disconnect, the activity check, the scheduled sweep, manual capture and its deduplication contract, the assisted-posting destination resolver. |
+| `src/lib/widgets/` | The website review widget: eligibility, approved domains, the public id, the plan seam for attribution, the embedded document, and the loader script. The one part of the product that renders for an audience with no session. |
 | `src/lib/integrations/` | OAuth state, credential handling, discovery, mapping, health. |
 | `src/lib/crypto/` | AES-256-GCM credential vault. Server-only. |
 | `src/lib/auth/` | Session resolution and the central permission matrix. |
@@ -75,7 +78,9 @@ nothing with it but the root layout's font.
 | `/responses` | Response library, plus a server-rendered detail pane selected via `?selected=` that embeds the existing response composer — approve, reject, and save draft all work; approving a dirty composer carries its text into the same write as the decision; publish remains disabled | repositories |
 | `/escalations` | Escalation centre, plus a server-rendered, read-only detail pane selected via `?selected=` showing the case's audit trail from `audit_events` | repositories |
 | `/insights` | Cross-channel analytics | repositories + typed fixture |
-| `/locations` | Portfolio and per-location settings | repositories |
+| `/locations` | Portfolio, with working `?q=` search and `?status=` filter and rows that open the location | repositories |
+| `/locations/new` | Add a location by hand. Owner/admin; every other role gets an explanation and no form | repositories |
+| `/locations/[locationId]` | One location: details, mapped profiles and their connection health, per-location metrics | repositories |
 | `/rules` | Automation rules | repositories |
 | `/integrations` | Platform connections and capabilities | repositories |
 | `/integrations/google-business-profile` | Google connection detail, health, disconnect | repositories |
@@ -86,9 +91,17 @@ nothing with it but the root layout's font.
 | `/api/integrations/google-business-profile/reviews/sync` | Manual review sync (POST only) | repositories + Google API |
 | `/api/cron/news-poll` | Scheduled poll sweep across every tenant (GET and POST, `CRON_SECRET`-guarded, bypasses the session gate — see Authentication) | repositories + GNews API |
 | `/api/cron/analyze-mentions` | Scheduled analysis sweep across every tenant (GET and POST, `CRON_SECRET`-guarded, bypasses the session gate — see Authentication) | repositories + Anthropic API |
+| `/integrations/yelp` | Yelp Assisted: capability table, connected listings, detected activity, manual capture, disconnect | repositories + Yelp Places API |
+| `/integrations/yelp/connect` | Listing search and confirmation for one location | repositories + Yelp Places API |
+| `/api/cron/yelp-listing-check` | Scheduled listing-check sweep across every tenant. **Built but not scheduled** — the Hobby plan's cron-job cap is already reached, so checks run from the interactive control until the account moves to Pro (`docs/integrations/yelp-assisted.md` §10) | repositories + Yelp Places API |
+| `/integrations/review-widget` | Website review widget: theme, review selection, approved domains, live preview, embed code, switch off, regenerate. Sidebar entry **Website widgets**, nested under `/integrations` — the only nav item beneath another, which is why `isNavItemActive` resolves the most specific match rather than any matching prefix | repositories |
+| `/embed/review-widget.js` | The loader script every embed snippet points at. **Public, no session** — ES5, ~2 KB, origin baked in per deployment | — |
+| `/embed/review-widget/[publicId]` | The widget document a customer's website frames. **Public, no session** — one `SECURITY DEFINER` function is the entire anonymous surface (see Tenancy) | `review_widget_render` |
+| `/embed/review-widget/preview` | The same document against unsaved configuration. Session-gated on `review_widget.manage`; `frame-ancestors 'self'`, `no-store` | repositories |
 | `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
 | `/sign-up` | Creates an account **and** the organization it owns. Outside the app shell. | Supabase Auth + `provision_organization` |
 | `/invite/[token]` | Accept an invitation. Public — the invitee has no account yet. | `invitation_preview` / `accept_invitation` |
+| `/organizations/new` | Create an organization from inside the product. Signed-in, **outside the app shell** — the shell resolves an organization before rendering, which is the condition this screen exists to fix. | `provision_organization` |
 | `/forgot-password` | Requests a reset link. Outside the app shell. | Supabase Auth |
 | `/reset-password` | Sets a new password using the recovery session. Outside the app shell. | Supabase Auth |
 | `/auth/callback` | Where an emailed auth link lands; establishes the session | Supabase Auth |
@@ -166,6 +179,41 @@ read (due query rows; organization ids), and neither is reachable from a
 request path. The per-row `OrganizationScope` the cron routes then build from
 each id is what carries tenancy from there — see D88 and Authentication.
 
+**Belonging to several organizations is ordinary now, not an affordance of the
+data model.** `memberships` always allowed it and `listForUser` always returned
+every one, but nothing in the product could create a second organization, so in
+practice almost every account had exactly one. `/organizations/new` changes
+that, and it changes what a bug in this area costs: `getOrganizationContext`
+falls back to the caller's first membership when the cookie names one they do
+not hold, which for a single-membership account produces the right answer
+whatever the code does. Every test that touches organization selection therefore
+uses the seed's one genuinely multi-organization account, because a
+single-membership assertion proves nothing.
+
+Four call sites now write the selection — switching, creating, accepting an
+invitation while signed in, and accepting one during signup — and all four go
+through `setActiveOrganizationCookie` in `src/lib/tenancy/organization-context.ts`.
+Five attributes spelled out four times is four chances for one of them to drift,
+and a missing `httpOnly` is a regression no test notices because the feature
+keeps working.
+
+The website review widget added a **third** deliberate exception, and it is a
+different shape from the two above: `ReviewWidgetRepository.render(publicId)` takes no
+scope at all. Its caller is a stranger's browser on a restaurant's website —
+there is no membership from which a scope could be constructed, and no session
+for `getOrganizationContext()` to read. `InvitationRepository.preview` is the
+existing precedent and carries the same exemption for the same reason.
+
+What replaces the scope is the **return type**. `ReviewWidgetRenderRow` holds
+widget configuration and six review fields, and nothing else: no status, no
+sentiment, no risk level, no raw payload, no organization id. A caller cannot
+widen it, so the anonymous surface is bounded by the type rather than by care
+at the call site. Under Supabase the method is one `SECURITY DEFINER` function
+(`public.review_widget_render`) which `anon` may execute and which is the only
+thing `anon` may reach — the table itself grants `anon` nothing, and section 13
+of `supabase/tests/rls-verification.sql` proves a direct select returns zero
+rows while the function returns one. Full detail in `docs/review-widget.md`.
+
 The active organization is stored in the `lia_active_organization` cookie
 (`httpOnly`, `sameSite=lax`). The organization slug is deliberately **not** in the
 URL: `CLAUDE.md` fixes the route list (`/overview`, `/mentions`, …), and prefixing
@@ -183,18 +231,25 @@ Supabase Auth, email and password. `src/lib/auth/session.ts` exposes
   `lia_demo_user` cookie so role behaviour can be exercised with no database.
 
 That split was designed before a provider existed, and it held: wiring one was a
-change to `middleware.ts`, a sign-in route, and a sign-out action — `getSession()`
+change to `src/proxy.ts`, a sign-in route, and a sign-out action — `getSession()`
 itself did not change, and neither did any call site.
 
 ```text
 request
-  └─ middleware.ts               ← refreshes the token, redirects if signed out
+  └─ src/proxy.ts                ← refreshes the token, redirects if signed out
        └─ getSession()           ← the verified user, or null
             └─ getOrganizationContext()
                  └─ repositories ← queries run as that user; RLS applies
 ```
 
-**Middleware does two things a page cannot.** A server component cannot set a
+> **Correction, 2026-08-18.** This document said `middleware.ts` throughout.
+> The file is `src/proxy.ts` — Next.js 16 renamed the convention and this
+> repository followed it, but the prose here did not. Every reference below is
+> corrected; the behaviour it describes never changed. Recorded rather than
+> silently rewritten, because a reader working from an older commit will find
+> the old name in their checkout and should know why.
+
+**The proxy does two things a page cannot.** A server component cannot set a
 cookie, so a refreshed access token could not survive the request without it —
 `createSupabaseServerClient` swallows the write for exactly that reason. And it
 turns an unauthenticated request into a redirect rather than a 500.
@@ -202,7 +257,7 @@ turns an unauthenticated request into a redirect rather than a 500.
 It is **not** a security boundary. It runs on a browser-supplied cookie. The
 enforcement is row-level security in Postgres, where `auth.uid()` comes from the
 verified JWT — a forged cookie yields a session that can read nothing. Deleting
-the middleware would make the app unpleasant, not insecure.
+the proxy would make the app unpleasant, not insecure.
 
 **`auth.users.id` must equal `public.users.id`.** Every policy resolves through
 `auth.uid() = memberships.user_id`, and `memberships.user_id` references
@@ -210,8 +265,15 @@ the middleware would make the app unpleasant, not insecure.
 then sees nothing at all. `npm run auth:seed` creates the seeded logins with
 their exact UUIDs for this reason.
 
+**`/embed` is public because it was never a product path.** `PRODUCT_PATHS` in
+`src/proxy.ts` is a denylist, so the widget routes fall through to Next
+untouched — no carve-out was needed and none was added. That is the correct
+outcome and it is worth stating explicitly, because "the embed works when
+signed out" is a property somebody could break by adding `/embed` to that list
+while tidying it.
+
 **`/api/cron` is the one route family that bypasses this gate on purpose.**
-`middleware.ts`'s `SESSIONLESS_PATHS` lists it explicitly, because Vercel Cron
+`src/proxy.ts`'s `SESSIONLESS_PATHS` lists it explicitly, because Vercel Cron
 invokes these routes with no browser session at all — gating them here would
 redirect every scheduled invocation to `/sign-in` before the handler's own
 check ever ran. Authorization is a shared secret (`CRON_SECRET`) instead,
@@ -320,6 +382,33 @@ location — only when an enabled onboarding brand query shows the person
 opted into News monitoring, and never writing a row that already exists, so
 retries are idempotent and user edits are never overwritten.
 
+The News card asks for a **market and a local anchor**: a country from
+`MONITORING_COUNTRIES` (`src/lib/geo/countries.ts` — the 30 codes GNews
+accepts, so the picker cannot promise a filter the provider will ignore), plus
+an optional postal code that auto-fills a city and region. Country is the only
+one of these a poll uses today; `monitoring_queries.postal_code`,
+`locality_city`, and `locality_region` are stored and read by nothing, waiting
+on the provider upgrade that can search regionally (D71). They are captured now
+because an organization-wide brand watch has no location row to derive a
+neighbourhood from, and nobody will come back to a settings screen to add one
+later. `ensureOnboardingLocationQueries` takes a location query's locality from
+**that location's own persisted address**, not from the brand query, so head
+office's postal code is never stamped on a restaurant three states away.
+
+Auto-fill goes through `lookupPostalCodeAction` →
+`src/lib/geo/postal-lookup.ts`, the single HTTP boundary to Zippopotam — free,
+unauthenticated, adding no environment variable and no per-poll cost, and with
+no SLA, which is why nothing depends on it: the city and region are ordinary
+editable fields, a failed lookup says so and leaves them for the person, and a
+country with no lookup coverage (Ireland, Hong Kong, Singapore) is still a
+country the picker offers. `fetch` is injected exactly as `searchGNews` takes
+it, so `tests/postal-lookup.test.ts` covers every provider failure without
+touching the network. The shared behaviour — debounce, stale-response
+suppression, clearing the locality when the country changes — lives in
+`src/components/monitoring/use-postal-lookup.ts` and is used by both the
+onboarding configurator and the News & Media query editor; the markup is not
+shared, because the two screens are on different design systems.
+
 **Reddit monitoring is not implemented.** `reddit` exists as platform-enum
 vocabulary, seed/demo fixture data, and a presentation route
 (`/reddit/[id]`); there is no Reddit connector, monitor, persistence, or
@@ -391,7 +480,7 @@ they did.
 ```
 
 The callback is a **route handler, not a page**, for the same reason refresh
-lives in middleware: a server component cannot set a cookie, so the session
+lives in the proxy: a server component cannot set a cookie, so the session
 would be established and immediately lost.
 
 It accepts two link shapes, because which one arrives is decided by how the
@@ -415,6 +504,62 @@ Requesting a reset reports success whether or not the address exists. "No
 account with that email" is a free account-enumeration oracle on an endpoint
 reachable without a session, so provider errors are logged and swallowed too.
 
+### Website review widget
+
+Lia's first **outbound** surface: one Google review, rendered on a customer's
+own website from a copy-and-paste snippet. Everything else in this codebase
+describes something Lia read from somewhere else; this is the first thing it
+publishes, on a domain it does not own, to an audience with no session.
+
+```text
+customer's page
+  └─ <div data-lia-review-widget="rw_…">
+  └─ <script async src="/embed/review-widget.js">   ← loader: ES5, ~2 KB, no deps
+       └─ <iframe src="/embed/review-widget/rw_…">  ← self-contained document
+            └─ postMessage height ──▶ loader sizes the frame
+```
+
+Four decisions carry the rest of the design.
+
+**The document is a string, not a page.** A route handler returns complete HTML
+with inlined CSS and one inline script. A page under `src/app/` would inherit
+the root layout, `globals.css`, Tailwind's preflight, and the React runtime —
+all liabilities inside an iframe on somebody else's site, where a hydration
+error is a blank rectangle on a restaurant's homepage and a token change
+silently restyles thousands of customer pages. Nothing is fetched after the
+document itself, so the widget adds no third-party request to a customer's page.
+
+**Eligibility exists twice, and that is forced rather than chosen.** The
+anonymous path cannot run TypeScript, so `public.review_widget_render`'s `where`
+clauses mirror `firstFailedWidgetRule` in `src/lib/widgets/eligibility.ts`
+clause for clause. Each SQL clause carries its rule identifier as a trailing
+comment and `tests/review-widget-eligibility.test.ts` fails if the migration
+stops naming one. Every rule reuses a meaning the repository already has —
+`dismissed`, `escalated`, `source_removed_at`, `capture_method` — rather than
+inventing a new review state.
+
+**A pinned review that becomes unavailable shows an unavailable state, never a
+different review.** `selected_mention_id` is `on delete set null` with no
+paired check constraint, deliberately: the widget must be able to *be* pinned
+to nothing so the renderer can say so. "The selected review is not available"
+and "no review to show yet" are separate sentences because they are a
+configuration a person can fix and a wait, respectively.
+
+**Domain restriction is a CSP `frame-ancestors` directive**, so the visitor's
+browser enforces it on a URL anybody can fetch. Empty means unrestricted —
+closed-by-default would mean every widget was broken until somebody found the
+setting. `Referer` is never consulted: absent under `no-referrer` and forged by
+anything that is not a browser.
+
+**"Powered by Lia" is always shown**, because Lia has no billing model for a
+plan to gate it against. `resolveWidgetAttribution()` is the single decision
+point and `review_widgets.attribution_suppressed` is the seam a plan lands on —
+the same posture `monitoring_queries.postal_code` takes. A checkbox anyone
+could clear would not have been an implementation of the requirement.
+
+Full detail, including the eligibility table, the runbook, and what the feature
+deliberately does not build, is in `docs/review-widget.md`.
+
 ## Technical constraints
 
 - `CLAUDE.md` fixes the route list, the visual direction, and sentence casing.
@@ -428,6 +573,12 @@ reachable without a session, so provider errors are logged and swallowed too.
 - OAuth tokens never reach a client component, a repository DTO, an audit event,
   a log line, or a redirect URL. `src/lib/integrations/credentials.ts` is the
   only module that decrypts one.
+- Nothing but widget configuration and six named review fields may cross into
+  the anonymous embed path. `ReviewWidgetRenderRow` is the boundary and the
+  guarantee is structural: a caller cannot widen the type, so no status,
+  sentiment, risk level, or raw payload can reach a public page whatever the
+  renderer does. `anon` holds no table grant — one `SECURITY DEFINER` function
+  is the whole surface.
 - No model provider message reaches a user, a log, or a stored row. Stricter
   than the provider rule for Google, and for a specific reason: a model error
   can echo the prompt, and the prompt contains a review and a reviewer's name.
@@ -463,7 +614,15 @@ reachable without a session, so provider errors are logged and swallowed too.
   Lia-authored strings; the provider's own response body or a driver error is
   never interpolated into them.
 - Cron carries its own tenancy discipline; row-level security is not its
-  backstop there (D88). Both scheduled routes call `getServiceDataSource()` —
+  backstop there (D88).
+- A Yelp review count change is never described as a review. Yelp's count moves
+  when reviews are added, removed, or reclassified, and Lia sees only the
+  number — so the schema carries no count of new reviews, and no copy above it
+  may invent one (D180). "Review activity detected" means a counter moved.
+- A mention's `capture_method` is not reachable from a synchronisation. A
+  customer-typed review can never be relabelled as retrieved from an API, or
+  the reverse (D182), and a manually confirmed publication can never carry a
+  provider-assigned identifier (D185). Both scheduled routes call `getServiceDataSource()` —
   a service-role client with no user session — and build an
   `OrganizationScope` from each row's own `organization_id`, never from
   anything ambient, since `getOrganizationContext()` has no request session to
@@ -586,6 +745,21 @@ reachable without a session, so provider errors are logged and swallowed too.
 | D76 | `pending` is removed from the controls' `disabled` | Left in, every autosave would freeze the form mid-edit — the quickest way to make the feature feel broken. Serialisation happens in the hook instead. |
 | D77 | The status renders as the form's first row, not inside `PageHeader` | `PageHeader` is server-rendered by the page while the state lives in the client form — the same cross-component problem that put Save in a sticky bar originally. A context provider for one string is not worth the indirection. |
 
+## Decisions made aligning `/brand-voice` with onboarding step 4
+
+The two screens were already backed by one row — same repository, same
+`brandVoiceFormSeed`, same `saveBrandVoice`, pinned by
+`tests/brand-voice-onboarding-alignment.test.ts`. What had drifted was what they
+*showed*.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D174 | The preview module moves to `src/lib/brand-voice/`, and both screens render it | It was pure and took an `UpdateBrandVoiceInput`; nothing about it was ever onboarding-specific. Filing it under the wizard is what let the settings screen ship a placeholder instead — the screen somebody returns to was strictly less capable than the one they saw once. |
+| D175 | Response drafting having shipped does not make the deterministic preview redundant | The placeholder promised "a real mention answered in this voice… available once response drafting arrives", and drafting did arrive, which made the sentence false. Calling the model would still be wrong here: a real draft cannot follow a slider, costs a request per frame of a drag, and is blank exactly when `LIA_AI_MODE` is unset. A real draft is a better *sample* and a worse *control*. |
+| D176 | The preview is rendered by `VoiceForm`, not passed in as a server `ReactNode` | It is derived entirely from live form state. `channels` stays a prop because it renders the organization's connected platforms, which is server data; the preview is not. |
+| D177 | The conflict sentence and the phrase hint are shared constants, not restated copy | Both were places the two screens could word the same condition differently — and `/brand-voice` stated neither the matching rule nor the phrase caps, revealing the 20-phrase limit only by refusing a 21st chip. `describePreviewConflicts` and `PHRASE_LIMIT_HINT` make each a single fact. |
+| D178 | The chrome is deliberately **not** shared | Onboarding sits outside the app shell on the public-site brand; `/brand-voice` is a product page inside it. Each renders its own markup, and the alignment test reads both component sources — what regressed here was never a return value, it was one screen importing something the other did not. |
+
 ## Decisions made in workflow 06
 
 | # | Decision | Reason |
@@ -679,11 +853,43 @@ organization — that is an operator action against `RULES_EXECUTION_MODE` and
 | D162 | The audit contract for execution: identifiers, outcomes, status, SQLSTATE, and counts only — never mention, review, or rule-configuration content — written exclusively by service-role/security-definer paths, with the RPCs writing their own events inside the same transaction as the effects they describe | `automation_rule.executed` and `automation_rule.execution_failed` metadata carries `originSweepId` (the sweep that first claimed the unit — preserved across retries because the claim insert's `on conflict do nothing` never updates it), `attemptSweepId` (the sweep making *this* call), `mentionId`, `analysisId`, outcome counts (`applied`/`blocked`/`noOp`), and on failure `errorCode` (this attempt's SQLSTATE) — the same metadata-key vocabulary on both branches so a reader does not need to know which branch produced a row to query it. No mention content, no rule name beyond what the escalation's own `summary` field already states for a human reading the escalation itself. This lands together with `audit_events_insert` being dropped and `insert` revoked from `authenticated` (spec §6, closes F3): actor-stamping alone (`actor_user_id = auth.uid()`) stops impersonation but not fabrication, so the only remaining writers are the service-role adapter method (`recordAuditEvent`, one change point per F16) and the security-definer functions (`raise_escalation`, `execute_automation_rule`) writing their own rows as the function owner, inside the transaction whose effects they describe — an audit row for an execution can never exist without the execution it describes, and vice versa. |
 | D163 | `execute_automation_rule` executes only the stored rule revision — the caller names a unit (`rule_id`, `revision`, `mention_id`, `analysis_id`), never supplies action payloads — and validates the stored `actions` jsonb null-safely against all eight authorable action shapes before any business write | A caller-supplied payload would let a request define what a "rule" does at execution time, defeating the point of `revision`-gated activation (D138, D139): what runs is what was simulated and activated, looked up fresh from the row under `for share`, with a stale revision failing closed (`rule_changed`, terminal). Validation covers `generate_draft`, `auto_publish`, `require_approval`, `assign`, `escalate`, `notify`, `tag`, and `set_status` — the same eight `ruleActionSchema` recognizes — and is null-safe by construction: every case arm is wrapped in `coalesce(…, false)` so a missing or null field fails validation rather than evaluating to SQL `null`, which `bool_and` would silently discard from the aggregate and let slip through. A validation failure is `would_fail_validation` in dry run and terminal `failed`/`invalid_action` in apply, before any mutation. Once inside the apply loop, each action's raw decision (from `automation_set_status_decision`/`automation_escalate_decision`, or the escalation ladder's own `reason`) is mapped at the boundary into the pinned outcome vocabulary — `escalation_exists`/`occurrence_replayed` become `no_op`/`escalation_exists`; the matrix-unreachable `mention_dismissed`/`awaiting_retriage` arms map defensively to `blocked`/`forbidden_transition` — so SQL-internal reason strings never leak into the outcome rows the UI and the parity tests read. |
 | D164 | Sweep claiming is one atomic decision inside `claim_automation_sweep`: the existing `running` row (if any) is locked `for update` first, so exactly one caller performs a stale-lease takeover and every other concurrent caller blocks on that lock, re-reads, and receives the winner's claim as an ordinary `claimed: false` outcome — never a race against the insert | An application-level "check then insert" would race exactly like every other unlocked check-then-write in this codebase (D24's reasoning restated for sweeps). Locking the running row first, rather than racing straight to the insert, means the 30-minute lease-expiry decision itself only ever happens once per stale row, by whichever caller won the lock — no second caller can also decide the lease is expired and insert a competing claim. The unique-violation absorption on the fallback insert path is diagnostics-verified rather than assumed: `get stacked diagnostics constraint_name` is checked against the literal `automation_sweeps_one_running`, and anything else re-raises, because a partial unique index has no entry in `pg_constraint` — the constraint-name string in the diagnostics is the only reliable identity available, and asserting it (rather than swallowing every `unique_violation`) keeps an unrelated future unique constraint on the same table from being silently absorbed here too. |
-| D165 | CI is the parity gate: a `database` job runs the full `db:verify-execution` harness (RLS + execution-verification + the generated matrix-parity SQL + the concurrency race script) against a freshly started local Supabase instance on every PR and push to `master`, at a Supabase CLI version pinned to the exact combination the harness ran green on during Task 11 (`2.101.0`, Postgres 17.6) — not a combination verified "safe": that image's known segfault behavior is a fact the harness routes around, not one it clears | A TypeScript-only review of a matrix or RPC change cannot catch SQL that silently disagrees with `transitions.ts` or the demo adapter's twin; running the harness on every change is what makes that drift a merge blocker instead of a later production surprise. The CLI pin is not cosmetic: Task 11 found that this local Postgres image **segfaults** the whole cluster on an EXECUTE-denied call of a non-immutable function after `set role` — exactly the shape of an unauthorized PostgREST RPC call — while an *immutable* function under the same denial returns a clean `42501` (the ACL check happens during constant folding rather than in the executor, which is what narrows the trigger to non-immutable functions specifically). `db:verify-execution` is written around this, not fixed by it: the one place the spec calls for asserting "`service_role` cannot execute `raise_escalation` directly" is proven statically, from `pg_catalog.has_function_privilege`, rather than by attempting the denied call — because attempting it would take the harness's own database down mid-run. The pin exists to hold this avoidance strategy fixed against a known-quantity image, not to certify the image safe; bumping it requires a local `npm run db:verify-execution` run first precisely because a different image could change the segfault behavior in either direction — narrower (only a smaller set of calls crash it) or wider (more of the harness's own catalog-based workarounds stop being sufficient) — and nothing here would notice without that run. Marking the `database` job a required status check in branch protection is recorded as the runbook's owner action, not done by this task — CI enforces the check only once a human enables it as a merge gate. |
+| D165 | CI is the parity gate: a `database` job runs the full `db:verify-execution` harness (RLS + execution-verification + the generated matrix-parity SQL + the concurrency race script) against a freshly started local Supabase instance on every PR and push to `master`, at a Supabase CLI version pinned to the exact combination the harness ran green on during Task 11 (`2.101.0`, Postgres 17.6) — not a combination verified "safe": that image's known segfault behavior is a fact the harness routes around, not one it clears | A TypeScript-only review of a matrix or RPC change cannot catch SQL that silently disagrees with `transitions.ts` or the demo adapter's twin; running the harness on every change is what makes that drift a merge blocker instead of a later production surprise. The CLI pin is not cosmetic: Task 11 found that this local Postgres image **segfaults** the whole cluster on an EXECUTE-denied call of a non-immutable function after `set role` — exactly the shape of an unauthorized PostgREST RPC call — while an *immutable* function under the same denial returns a clean `42501` (the ACL check happens during constant folding rather than in the executor, which is what narrows the trigger to non-immutable functions specifically). `db:verify-execution` is written around this, not fixed by it: the one place the spec calls for asserting "`service_role` cannot execute `raise_escalation` directly" is proven statically, from `pg_catalog.has_function_privilege`, rather than by attempting the denied call — because attempting it would take the harness's own database down mid-run. The pin exists to hold this avoidance strategy fixed against a known-quantity image, not to certify the image safe; bumping it requires a local `npm run db:verify-execution` run first precisely because a different image could change the segfault behavior in either direction — narrower (only a smaller set of calls crash it) or wider (more of the harness's own catalog-based workarounds stop being sufficient) — and nothing here would notice without that run. Marking the `database` job a required status check in branch protection was recorded as the runbook's owner action, not done by the task that wrote this row — CI enforces the check only once a human enables it as a merge gate. **Done, 2026-08-12.** It could not be done sooner for a reason the row did not anticipate: branch protection is unavailable on private repositories at this account tier, and the API answered `403 — Upgrade to GitHub Pro or make this repository public` rather than anything about the check itself. The repository was made public, and `master` is now protected: `verify` and `database` both required, `strict: true` (a branch must be current with `master` before merging, so a stale branch cannot pass on an old base), force-pushes and branch deletion blocked. `enforce_admins` is deliberately **false** — the owner keeps an override for the case where CI itself is broken rather than the code. Every merge to `master`, including documentation, now goes through a pull request; direct pushes are refused because a bare push has no passing checks attached. |
 | D166 | A generation attempt is written by exactly three functions — `claim_generation_attempt`, `complete_generation_attempt`, `fail_generation_attempt` — which serialize on the **mention row**, hand the claimant a compare-and-set token, and commit the draft, the attempt, and the audit event as one transaction | `authenticated` holds no `insert`/`update`/`delete` on `generation_attempts` at all, so the trio is the whole write surface rather than the recommended path through it. The claim's first act is `select … from mentions where id = … for update`: two clicks on the same review cannot both reach the insert, because the second parks on that lock, re-reads after the first commits, and reports `in_progress` with its `dedup_hits` counted (proven by race 1 in `scripts/generation-race-test.sh`, which asserts session B is genuinely parked via `pg_stat_activity` rather than assuming it). `complete`/`fail` are compare-and-set on `(id, claim_token, status = 'pending')`, which is what makes a stale worker harmless: a hung claimant whose lease expired and whose review was taken over returns to find its completion refused as `superseded`, with the replacement attempt byte-identical afterwards (race 3 compares `to_jsonb(row)` either side). `complete` locks the mention up front too, matching the claim's order, because its `response_drafts` insert would otherwise take an implicit FK lock on the same row in the opposite order and deadlock a completing worker against a live lease. The lease sweep runs **before** the `draft_exists` short-circuit: ordering it the other way pinned an expired attempt at `pending` forever on any mention that had acquired a draft by some other path, since nothing ever reached the sweep again. `generation_attempts_one_pending` is a backstop behind the serialized claim, not the mechanism. |
 | D167 | Every attempt records the exact input it was given — the frozen `DraftingContext`, its canonical hash, the prompt version, and hashes of the rendered system and user messages — and the drafting prompt is version-pinned by a test that hashes the template and the version together | Provenance that can be reconstructed is not provenance: the mention, the location, the organization, and the brand-voice profile can all change between a draft being written and somebody asking why it says what it says, so `buildDraftingContext` deep-copies what it read and the row stores that snapshot verbatim rather than the ids to re-read it from. `context_hash` is over a key-order-independent encoding, so two attempts with the same inputs are comparable regardless of how the JSON happened to serialize. The pin test hashes `DRAFTING_PROMPT_VERSION` *together with* the template constants, so editing the wording without bumping the version fails, and bumping the version without editing the wording fails too — the pair moves or neither does. `output_schema_version` is recorded separately from the prompt version because the structured-output schema and the prose can change independently. The gate between the model and the database (`validateDraftText`) is the reason a stored draft is worth this provenance at all: no URL, e-mail, phone number, Markdown, preamble, or second option reaches `complete`, and a refusal is recorded as `invalid_output` rather than saved and flagged. |
 | D168 | `changes_requested` replaces `rejected` as the decision an approver emits; the `approval_status` enum keeps `rejected` for the rows that already carry it, and the composer says "Request changes" | The old label described the wrong thing. Sending a draft back does not end its life — it returns it to editable `draft` status for the writer — so "rejected" named a terminal outcome the code never produced. `decideResponseDraftInputSchema` now accepts `changes_requested` and **rejects** `rejected`, pinned in both directions, because a swap that merely adds the new value leaves the old emission path alive. The enum value stays: Postgres cannot remove one, and historical rows are history rather than a migration problem. The confirm dialog lost its `destructive` styling with the rename — red framing for "the writer gets it back" overstated what happens. |
 | D169 | The retention *mechanism* ships without a retention *policy*: `redact_generation_snapshots(interval)` empties finished attempts' context snapshots to the JSON-null sentinel, and nothing calls it | The period is an operational decision that needs a person, and a migration inventing "30 days" would make that decision silently. What the mechanism guarantees is testable now and independent of the number eventually chosen: only finished attempts are touched, hashes and telemetry survive so a redacted row stays auditable, no audit event is written, and a second pass reports zero. The column stays `not null` and a redacted snapshot reads as jsonb `null` — distinguishable from any real context object, where "deleted the row" or "wrote `{}`" would not be. **Open operational item:** choosing the period and scheduling the call. Related deviation, recorded as deliberate: the spec called for `scripts/verify-generation-concurrency.ts` over a new `pg` dev dependency, and the shipped proof is `scripts/generation-race-test.sh` over FIFO-driven psql sessions instead — the G1 race harness already established that pattern, it adds no dependency, and driving the interleaving statement by statement is what makes the races reproducible rather than timing-dependent. |
+
+## Decisions made building Yelp Assisted
+
+An integration for a provider that will not give Lia the data the product is
+normally built on. The Places plan returns a listing's review count and star
+rating and nothing else; full review text, review webhooks, and posting replies
+are all Yelp Partner API capabilities Lia does not hold. Full detail in
+`docs/integrations/yelp-assisted.md`.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D179 | Extend `platform_connections` / `platform_profiles` / `platform_sync_runs` rather than build Yelp-shaped tables | These already model "an organization's link to a platform", "one external presence bound to a location", and "one attempt to synchronise one resource from one profile" — the last complete with a `resource` column added in workflow 03 specifically so a connection could later check something other than reviews, and a partial unique index that makes the lock real. Yelp needs exactly those three. Forking them would fork connection health, the integrations screen, and the disconnect path, which is D21's argument applied to connections rather than to mentions. The one new pair of tables (`yelp_listing_snapshots`, `yelp_activity_occurrences`) exists because the question "what did Lia observe, and what changed between two observations" has no home in any of the three. |
+| D180 | The data model carries **no** count of new reviews, anywhere | Yelp's review count moves when reviews are added, removed, *or* reclassified by its recommendation software, and Lia sees only the number. A column called `new_review_count` would be a lie in the schema — quoted back by every screen, export, and report that ever read it, long after the caveat in the UI copy had been forgotten. So the vocabulary describes counters (`count_increased`, `rating_only`) and the occurrence records the before and after numbers, leaving the inference to the person who goes and looks. This is the decision every other one here defers to. |
+| D181 | Two new capability flags (`canMatchLocations`, `supportsAssistedPosting`) and a fourth `PublishingMode` | Yelp splits two things Google happened to hold together: it can identify which listing is which restaurant while being unable to read a single review, so `canReadMentions` could not stand in for both. And "Lia cannot publish" had one meaning before — prepare the text, somebody deals with it — which `manual` covered; Yelp Assisted is a different thing, where Lia knows the exact page, hands over the approved words, and takes a recorded confirmation back. Collapsing that into `manual` would have offered a bare copy button for a flow with three steps and a state to record at the end. Both flags default off through `NO_CAPABILITIES`, so no existing connector changed. |
+| D182 | Capture provenance is a column on `mentions`, platform-neutral, and structurally unreachable from an ingest | `source_type = 'yelp_review'` is equally true of a review an API returned and one a customer typed, and those carry very different evidentiary weight: the first can be re-fetched and re-verified, the second cannot be verified at all and no sync will ever refresh it. `capture_method` is absent from `IngestMentionInput` and from `SOURCE_OWNED_MENTION_FIELDS`, so no synchronisation can relabel a typed review as retrieved or the reverse — the same structural guarantee D22 gives workflow state — and `mentions_capture_actor_pairing` refuses the combinations that would misrepresent it. Named for the next manual source rather than for Yelp, because `yelp_manual` would have to be renamed the first time Trustpilot arrived. |
+| D183 | A captured review is an ordinary mention; there is no parallel pipeline | It enters at `status: 'new'` and is picked up by the same analysis sweep, rules evaluation, escalation contract, drafting, and approval workflow as an imported one. A separate path for typed content is how the guardrails stop applying to exactly the source that most needs them — this is the only content in the product that nothing upstream validated. |
+| D184 | Deduplication prefers a normalised review URL, falls back to a documented fingerprint, and offers a deliberate override rather than merging | `mentions_unique_external` is `not null`, so a captured review needs an external id Yelp never issued. A URL is a real provider-assigned identifier and is strictly better, canonicalised so two people pasting the same review from different places produce one key; the fingerprint (`rating + normalised text + normalised author + review date`) covers the reviews Yelp gives no permalink. A match is reported as an **outcome, not an error** — the interface shows the review Lia already holds and offers an explicit override, recorded in the audit event. Deliberately conservative about merging: a review captured once with a URL and once without produces two keys, because under-merging is recoverable by a person and over-merging silently folds one customer's complaint into another's. |
+| D185 | Publication provenance is two columns on `response_drafts`, not a new attempts table | The question `published_at` cannot answer is "on whose word". `publication_method` (`provider_api` \| `manual_external`) plus `published_by_user_id` answers it in the smallest coherent way, and `response_drafts_external_id_requires_provider` is what makes it load-bearing: a provider-assigned identifier can only accompany a provider publication, so a user-confirmed one can never be read as provider-verified. A full claim/lease/reconciliation lifecycle was considered and refused — assisted posting makes no provider call, so it has no claim, no lease, and no uncertain outcome, and modelling it that way would fabricate five states it can never occupy. |
+| D186 | Withdrawing a confirmation is a correction, not a retraction, and gets its own audit event | A retraction means a published reply was taken down from the platform — a public act with its own evidence. `response.publication_unconfirmed` means the reply was never posted and Lia's record was wrong. Naming them the same thing would put "we removed a bad reply" and "somebody mis-clicked" in one bucket, and the first is the one that has to be provable later. The correction path also refuses a `provider_api` publication, so a real one can never be rewritten as a mistake. A reason is required, because a bare reversal in an audit trail reads as indecision. |
+| D187 | A failed check writes no snapshot, and a null counter is not a change | Both are the same principle: an outage is a gap in Lia's observation, not an event on the listing. A failed check that moved the baseline would make the *next* successful one report a change that never happened, and reading `128 → null` as a decrease would announce that every review had been deleted off the back of a provider hiccup. A first check likewise establishes a baseline and reports nothing — manufacturing activity out of Lia's own arrival is the most obvious way this feature could lie to a customer on day one. |
+| D188 | `mention.capture_manual` and `response.confirm_publication` are new permissions, not reuses | Both hold the same three roles today, which is the D145 pattern: two genuinely different acts get two names before the day one of them needs to move. Relaying what a provider returned (`integration.sync_reviews`) and asserting content nothing can verify are not the same act, and the obvious divergence is already visible — a location manager adding their own restaurant's review is plausible, and an organization-wide sync permission could never express it. Confirming a publication is deliberately not `response.decide`: the separation between signing text off and being the sole witness that it went public would be hollow if the approver held both. |
+| D189 | One-listing-per-location is an application check; one-listing-per-tenant is a database constraint | The direction that matters — one external listing bound to at most one location per tenant — is `platform_profiles_unique_external`, an existing unique index. The reverse needs `platform = 'yelp'` in an index predicate, the platform lives on `platform_connections`, and Postgres refuses a subquery there — so the only route to an index is denormalising `platform` onto a table three other integrations share, to enforce a rule none of them currently has. Recorded as a real limitation rather than hidden: the failure mode if the application check ever races is a visible duplicate on the location's own settings screen, not a silent misattribution. |
+| D190 | The scheduled sweep is built and deliberately not scheduled | Vercel's Hobby plan caps both cron frequency and the number of cron jobs per project, and two are already scheduled; a third would fail the deploy at config validation. So checks run from a first-class **Check for activity** control on the integration screen — same service, same lock, same idempotency, different trigger — which is what keeps the scheduled and interactive paths from drifting apart while one of them waits on a billing change. Turning the schedule on is one line in `vercel.ts` and nothing else. |
+
+## Decisions made adding brand-voice phrase matching
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D170 | Both brand-voice phrase lists match as **phrases**, not as substrings: the customer's words in the order they typed them, with extra words permitted around *and* between them, bounded at two words per gap (`src/domain/entities/phrase-match.ts`) | The lists were matched with `haystack.includes(needle)`, which was wrong in both directions at once. It missed the case customers actually mean — "it made our day" did not cover "it really made our day", an insertion in the *middle*, which is also where this departs from the Google Ads phrase match it is modelled on (Google allows the extra words only at the ends) — and it matched across word boundaries, so avoiding "our day" also fired on "our dayboat scallops", a word nobody wrote. The gap is bounded rather than unlimited because an unbounded in-order match is not a phrase: "it made our day" would fire on "it was made clear our server had a bad day". Two covers the intensifiers and articles that get slipped in and stops short of drifting across a clause. Deliberately lexical — no stemming, no synonyms, no plural folding — because this is a rule a customer has to be able to predict from the words in front of them on a settings screen, and a cleverer matcher's misses cannot be explained to them. Matching is case- and punctuation-insensitive and folds the curly apostrophe to the straight one, so a phrase typed in a word processor and a reply generated elsewhere cannot miss each other over a character nobody can see. |
+| D171 | The use/avoid contradiction is checked under phrase matching, extending D68 | D68 rejected a phrase that appeared in both lists as the same string. Under D170 that net is too narrow to keep the promise D68 was making: with "made our day" on the avoid list, an approved "it really made our day" is unusable, because every use of it breaks the other rule. It is the same unresolvable instruction D68 refused to send to generation, so it is refused at the same boundary. Identical spellings still collide, since a phrase always matches itself. The reverse direction is deliberately *not* an error — avoiding "it made our day" while approving the shorter "made our day" is satisfiable, so the schema does not invent a conflict the rules do not have. |
+| D172 | `approvedPhrases` is mapped into the drafting context as `preferredPhrases`, closing a gap left by task 6 | Task 6 mapped `prohibitedPhrases` to `bannedPhrases` and left the approved list unmapped, so the two halves of one screen behaved differently: avoiding a phrase changed real replies, asking for one changed only the onboarding preview. A customer who fills in "use these phrases" and watches it do nothing has been given a control that is not connected. The prompt states it as *a vocabulary, not a checklist* and qualifies it with "where it fits naturally", because a bare list under a heading reads as something to exhaust — a reply welding all twenty phrases in would be both unnatural and a different thing from what the screen promised ("phrases Lia may include"), and forcing an invitation back into a reply to a serious complaint is how a voice setting becomes a liability. Both lists are operator-authored, so neither is wrapped as untrusted content the way the review body is; they sit at the same trust level and get the same treatment. Landed with a `DRAFTING_PROMPT_VERSION` bump and a re-recorded template hash, per D167's pin. |
+| D173 | The phrase lists offer **suggestions**, which are never applied on their own | `DEFAULT_BRAND_VOICE` ships both lists empty on purpose — a default phrase puts words in a customer's mouth — and that stands: nothing in `SUGGESTED_APPROVED_PHRASES` or `SUGGESTED_PROHIBITED_PHRASES` reaches a saved profile, a prompt, or a reply unless somebody pressed it. What they fix is a different problem: an empty box with a placeholder does not show what a *useful* entry looks like, and the entries that make this feature work are longer and more specific than what people type unprompted. A suggestion is withheld once it is on the list, once an existing phrase already covers it under D170, or once it appears on the opposite list, where pressing it could only produce D171's error. |
 
 ## Known gaps after workflow 04
 
@@ -966,6 +1172,23 @@ editor (a lost two-column grid; an inline edit form inside an unconstrained
 `DataTable` cell) — are tracked in `progress.md` rather than repeated here;
 they sit an abstraction level below what an architecture scan needs.
 
+Two defects found and fixed while adding the monitoring locality, both worth
+recording because neither was visible from the UI:
+
+- `QueryEditor` sent the literal `sourceCountry: "us"` on create and omitted
+  the field entirely on update, so every query created from the News & Media
+  screen watched the United States and no edit could change it. The country is
+  now a real field on both paths.
+- `updateMonitoringQueryInputSchema` derives from the create schema, and Zod's
+  `.partial()` makes a key optional **without** stripping its `.default()` — an
+  absent key still parses to the default. With `.default(null)` on the three
+  locality columns, any patch that did not mention them (a rename, a toggle)
+  would have arrived at the repository carrying explicit nulls, and both
+  adapters would have written them. The update schema now re-takes those three
+  fields from `monitoringQuerySchema`, where they have no default, so
+  `undefined` means "not mentioned" again. Pinned by
+  `tests/monitoring-repositories.test.ts`.
+
 New after integrating the branches:
 
 - The marketing site, help requests, and early access shipped without ever
@@ -1104,6 +1327,14 @@ New building rule execution (G1):
 
 ## Internal-apply runbook (G1)
 
+> **Resolved 2026-08-12 — hosted is current.** Every migration this note
+> worries about is on the hosted project (verified via
+> `supabase migration list --linked`: local and remote aligned through
+> `20260813000300`, schema pushed ahead of the deploy). The ordering
+> warning below is kept for the record and for the next branch that ships
+> migrations the deployed code depends on; it no longer describes a live
+> risk for this set.
+>
 > **Deploy-vs-migration-push ordering — read this before merging or
 > deploying this branch.** This branch's application code unconditionally
 > calls `record_analysis_occurrence` and `apply_analysis_occurrence` on
@@ -1371,6 +1602,16 @@ Two useful things fell out of doing it:
 
 ## Still open
 
+- **`toneNotes` and `signOff` reach every drafting prompt as `null`.** The
+  drafting voice snapshot carries four fields the brand-voice entity does not
+  model; D172 closed the third by mapping `approvedPhrases`, but these two have
+  no counterpart to map — `brand_voice_profiles` has no notes column and no
+  signature column — so every organization's prompt currently says "no
+  preferred sign-off given -- close naturally as the business". Closing this is
+  a migration, not a mapping, and the shape depends on a decision nobody has
+  made yet: whether a sign-off is per-organization (one column) or per-location
+  (a `location_id` override, in the shape D61 left open for the axes). Nothing
+  invents a value for either in the meantime.
 - **The real Google OAuth flow has still never been run**, and it cannot be
   run headlessly: it needs a person at a browser and a Google account with
   access to a Business Profile. Worth recording what does *not* substitute for
@@ -1410,3 +1651,262 @@ Two useful things fell out of doing it:
   pair moved to free slots that still sort before
   `20260809000100_automation_rule_authoring`, which must remain the last word
   on `audit_events_known_event_type`.
+
+## Decisions made adding the rule platform indicator
+
+Every rules surface — the table, the detail header, each template card, and the
+builder — shows which platforms a rule affects. The interesting part is not the
+badge, it is what the badge is allowed to claim.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D179 | Scope is **derived** from a rule's conditions, never stored | A stored answer disagrees with the rule the moment somebody edits a condition. `src/lib/rules/platform-scope.ts` is pure, so the server renders it for a saved rule and the builder recomputes it while conditions are edited, from the same function. |
+| D180 | `source_type` conditions count, not just `platform` ones | Every source type belongs to exactly one platform, and three of the five shipped templates scope themselves by `source_type` rather than by `platform`. Reading only `platform` conditions would have reported "all platforms" for most of the templates on the screen. |
+| D181 | "No conditions" is reported as **matches nothing**, not as "all platforms" | `matchesRule` returns false for an empty condition list on purpose (a rule that says nothing should not fire). Rendering that rule as the broadest one on the screen would be the most misleading thing this feature could do. |
+| D182 | Contradictory conditions get their own outcome, distinct from "no conditions" | They are different facts with different fixes. Two `is` values on the same field can never both hold — including two source types on the *same* platform (`reddit_post` AND `reddit_comment`), which a plain platform-level intersection would happily report as "affects Reddit" for a rule no mention can satisfy. |
+| D183 | Excluding a source type only excludes its platform when it takes the last one | `source_type is_not reddit_post` leaves `reddit_comment`, so the rule still affects Reddit. Reddit is the only platform with two source types today; `PLATFORM_SOURCE_TYPES` is derived from `SOURCE_TYPE_PLATFORM` rather than hard-coded around that, so the second one cannot break it. |
+| D184 | `SOURCE_TYPE_PLATFORM` is reused from `mention.ts`, not redeclared | It already existed there for grouping and routing. A second copy is a second thing to keep in step with the enum — the first draft of this work added one and the duplicate-export error caught it. |
+| D185 | Badges carry no availability state | Considered marking platforms Lia has no connector for (Reddit throws from `getConnector`; Yelp is fixture-only), on the grounds that a Reddit-scoped rule cannot fire today. Decided against on the owner's call: the indicator answers "what does this rule target", and connector readiness is the integrations screen's subject. The consequence, recorded here rather than hidden: a rule scoped to an unimplemented platform looks exactly like one scoped to Google. |
+
+## Decisions made building multi-organization and location management
+
+Any authenticated user can now create an organization from inside the product,
+switch between the ones they belong to, and add and administer locations in the
+active one. Six migrations, split across two releases by an expand-contract
+rollout; the contraction had not shipped when this was written.
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D191 | `/organizations/new` sits at `src/app/organizations/`, outside both route groups, and `/organizations` joins `PRODUCT_PATHS` | It cannot live in `(app)`: that layout calls `redirectIfOnboarding()` and `getOrganizationContext()` before rendering, and both need an organization the caller may not have — the exact condition the screen exists to fix. It must not live in `(site)`, which is public. `/onboarding` already occupies this position and the chrome is reused because it is the same moment in the same journey. Without the `PRODUCT_PATHS` entry an anonymous request falls through the denylist to a page that calls `requireSession()` and throws, which is the 500 the gate exists to convert into a redirect. |
+| D192 | `organization.created` is written inside `provision_organization`, never by the action | Three independent reasons, any one sufficient. `insert` on `audit_events` is revoked from `authenticated` (D162), so the action *cannot*; going through the service-role adapter would be an ambient privilege escalation inside a request path. `recordAuditEvent` needs an `OrganizationScope`, which does not exist until the organization does. And an organization existing with no creation event is a hole in the trail. Follows `raise_escalation` (D159). The row carries `organization_id` — the column RLS resolves through, so omitting it would both fail the constraint and hide the row from the tenant it describes. The demo adapter writes it too, from the same place, or the two adapters disagree about how many events a call produces. |
+| D193 | One `setActiveOrganizationCookie` for all four writers | Five attributes duplicated four ways is four chances for one to drift, and a wrong `path` or missing `httpOnly` is a security regression no test notices because the feature keeps working either way. |
+| D194 | Switching organizations navigates to `/overview`, unconditionally | Switching used to leave the browser where it was. On `/overview` that is invisible; on any record-detail route the page re-renders under the new scope, asks it for the old organization's record id, and 404s. The lookup failing is the scope working — but `notFound()` is a poor way to learn you changed tenant. Not "stay put when the route is tenant-neutral": that safe set is not stable, since `/mentions`, `/responses`, and `/escalations` all carry record ids in query params, and a rule re-derived whenever a screen gains a selection parameter will be wrong within a workflow or two. |
+| D195 | `provision_organization` is dropped and recreated with one canonical six-argument signature, and its idempotency is the insert itself | `CREATE OR REPLACE` cannot change an input signature — adding parameters produces an *overload*, leaving the old body callable and PostgREST resolving whichever matches the argument names a client sends. And a replay lookup followed by an insert loses the race it exists to solve: two concurrent calls can both miss it, one wins the unique index and the other gets `23505` instead of the id it asked for. `ON CONFLICT … DO NOTHING RETURNING` makes the insert the decision; a null return means create nothing else and resolve the winner through an actor-scoped lookup, which is safe against uncommitted state because the conflict arm waits for the other transaction before reporting zero rows. Proven under genuine concurrency by `scripts/tenancy-race-test.sh`, not by the sequential harness checks, which a read-then-insert implementation passes happily. |
+| D196 | Slug collisions need no new mechanism, but do need a test | The derivation, the 40-character cap, and the `-2`/`-3` loop already existed. What changed is that collisions became *expected* rather than exceptional, so the behaviour is pinned rather than left as an untested fallback. |
+| D197 | An account with no memberships goes to `/organizations/new` | It used to fall through to the requested destination, on the stated grounds that "the app shell reports 'your account is not a member of any organization yet'". It does not and never did: that sentence is a `DataError` thrown inside a layout, and the route error boundary renders a generic `ErrorState` with a Retry button that can only fail again. The honest destination is the one that fixes the condition. |
+| D198 | `/locations/new` and `/locations/[locationId]` inside `(app)` | `/rules/new` and `/rules/[ruleId]` are the established convention for this exact shape, down to `generateMetadata` reading the record and `notFound()` on a missing *or foreign* id. Following it means the loading state, error boundary, and permission-denied rendering are already solved. |
+| D199 | New `location.create` and `location.update`, owner/admin | Not a reuse of `location.update_manager`: that is about who holds authority over a site, which is why it is narrower than the general write gate, and folding "edit the address" into it makes the name a lie in one direction or the other. Not a reuse of `onboarding.manage`: first-run setup and ongoing administration are different authorities, and an organization that finished onboarding a year ago still needs its eleventh restaurant. |
+| D200 | `create_and_map_location`: creation is a side effect of binding, never a capability of its own | The database cannot tell a mapping insert from a hand-typed one, so narrowing `locations_insert` to owner/admin would have taken mapping away from communications leads, who are accountable for it. An earlier draft gave them a create-only function instead — which they could have called repeatedly to mint arbitrary orphaned locations, since restricting `status` and `manager` only narrows what the orphans look like. The shipped function takes the profile set being mapped, upserts and locks it, and commits the location, the binding, and three audit events together or not at all. It cannot produce a location without producing a mapping for it. This **narrows D17 rather than reversing it**: the batch is still a loop of independent, per-row-reported decisions; what became atomic is one decision that was never independent, since a location without its profile was always half-applied. |
+| D201 | `manager_user_id` gets a composite FK to `memberships` in the existing key order, and suspension keeps the assignment | The column referenced `users`, so nothing in the database required the manager to belong to the organization at all. The FK uses `(organization_id, manager_user_id)` against the unique that has existed since the initial schema, so no reversed index is added — an index nothing queries is a write cost with no reader. Suspension keeps the assignment because it is the reversible option for somebody on leave; silently unassigning their six restaurants and making an owner reconstruct the mapping on their return is a worse surprise than a label, and RLS already stops the suspended person reaching anything. Removal nulls the column, matching the rule that removal deletes the membership rather than the account. |
+| D202 | The four location statuses get written meanings, `inactive` is labelled "Inactive", and nothing gates processing on status | `inactive` was labelled "Paused" while Google review sync, news polling, analysis, and rule execution were all status-blind — the word promised a behaviour that was never built. An earlier draft made `inactive` skip Google review sync, which would have made it half-true: one pipeline stopping while three carry on is harder to reason about than none stopping. A real pause belongs in its own control covering every pipeline, not in a lifecycle value quietly acquiring a second meaning. |
+| D203 | Manual creation is a new action, never a reuse of `createOnboardingLocationAction` | That action also completes onboarding step 3, seeds monitoring queries, and returns the wizard's next path. Calling it from `/locations/new` would mark a three-month-old organization's setup complete because somebody added a restaurant. The two share the repository method and the field component and nothing else. |
+| D204 | Three location audit events, partitioned by field and mutually exclusive | `location.updated` covers identity, address, slug, and timezone; `location.status_changed` and `location.manager_changed` cover the other two. A manager-only edit emits exactly one event and **not** the generic one — if `location.updated` also fired for status and manager changes, every query for "who changed this restaurant's address" would return retirements and reassignments too, and the specific events would answer nothing. The field list is one declaration so three call sites cannot drift. |
+| D205 | Search and status filtering live in the URL, and apply to the table only | `?q=` and `?status=` make the view shareable and refresh-proof, following `RuleStatusTabs`. What the browser settled: filtering the comparison card as well as the table produced a page contradicting itself — the KPI read "Active locations 4" while the card beneath read "0 active locations". Both true of different sets; stacked vertically, nonsense. One rule — the filter changes the table — is legible; two scopes are not. |
+| D206 | Every composite FK on a nullable column uses a column-specific `ON DELETE SET NULL` | A bare `set null` nulls *every* referencing column, and `organization_id` is `not null` on all four tables — so deleting a membership or a location would raise `23502` instead of clearing the optional reference. PostgreSQL 15 added the column list for exactly this shape, and the migration asserts the server version rather than assuming it. The superseded single-column FK is dropped by a name resolved from `pg_constraint`, since inline constraint names are PostgreSQL's own construction and are not guaranteed identical across environments. |
+| D207 | A trigger enforces active membership on assignment, and only on assignment | A foreign key cannot carry a predicate on the referenced row, so the composite FK proves membership but not that it is active. The trigger's two early returns are the design: a null manager always passes, which is what lets the FK's `SET NULL` through on membership deletion; and on `UPDATE` an unchanged manager always passes, which is what makes suspension keep the assignment. `update of <columns>` fires whenever a column appears in the `SET` list even when the value is identical, so the `is not distinct from` guard lives in the body rather than being trusted to the trigger clause. Because a `BEFORE` trigger runs ahead of constraint checking it answers every case the FK would, so the harness disables it to prove the FK independently — and asserts that with the trigger off a *suspended* member is accepted, which is the whole reason the trigger exists. |
+| D208 | `mentions.platform_profile_id` is closed here, and every cross-table foreign key is inventoried from the catalog | Deferring a known tenant-integrity hole inside the stage whose purpose is tenant integrity defeats the stage, and the prerequisite unique was being added anyway. The rest are inventoried by a `pg_constraint` query rather than a reading of the migrations, so nothing is missed, and the still-defective set becomes SEC-1 below rather than a line in a gap list. |
+| D209 | The rollout is expand-contract across three releases | "Push the migrations immediately before or at deploy" has no safe side: database-first breaks communications-lead mapping the moment `locations_insert` narrows under the old application, application-first calls functions that do not exist, and rolling the application back after the database change restores a version whose mapping path is now blocked. Shortening the window is not eliminating it. The property this buys: after R1 the application can be rolled back and still work, and after R2 it can be rolled back and still work, because R3 has not run. |
+| D210 | Privileges revoke `service_role` as well as `public` and `anon`, and the claims match the SQL | Supabase's bootstrap grants `EXECUTE` on every new function to `postgres, anon, authenticated, service_role` through default privileges, so revoking `public` leaves three of them holding it. An earlier draft revoked `public` and `anon` while the prose said "authenticated only" — the SQL and the documentation cannot disagree. Both RPCs take their actor from `auth.uid()`, which is null for a service-role client, so the grant bought nothing and cost a surface. This also closes a gap `provision_organization` had carried since workflow 05: it was callable with the anon key, safe by *body* rather than by grant. The trigger function is revoked from all four, and the harness proves the trigger still fires afterwards rather than trusting that `CREATE TRIGGER` checks the privilege only at creation time. |
+| D211 | The onboarding wizard gains an escape — but only when the caller belongs to more than one organization | The wizard has no navigation on purpose: the counts would read zero and a sidebar of empty screens is a worse first impression than none. That was right when an account could hold one organization, where being held in setup for your only workspace is the point. It stopped being right the moment organizations became creatable from inside the product: creating one makes it active, `redirectIfOnboarding` diverts its owner into setup, and every product route bounces back — so somebody with three working organizations could be locked out of all of them by the fourth they made, with `/organizations/new`'s own "Back to Lia" link redirecting straight back too. The only escapes were finishing five steps or clearing a cookie. Found in a browser; no test could have caught it, because every guard was behaving exactly as its own contract said. The control renders only when there is genuinely somewhere else to go, so the single-organization signup — still the common path — sees the wizard unchanged. |
+| D212 | A retired deployment's missing chunks are recovered by reloading, and are never reported as an error | Lia deploys by merging to `master` and serves each build's JavaScript from a path containing that build's id, so a tab opened before a deploy holds markup pointing at files the new deployment no longer serves. Nothing breaks until the page needs a chunk it has not already downloaded — then a client-side navigation 404s and the nearest error boundary renders. Vercel sells the fix (skew protection routes a client back to the deployment that made it); it is a Pro feature and this project is on the hobby plan, so the application recovers on its own. **`reset()` cannot do it**: it re-renders the same tree from the same stale document and re-requests the file that just 404'd, usually from the browser's negative cache, which is why "Try again" on a skew failure appears to do nothing. Only replacing the document works. Three properties make this safe to automate: the detector matches only messages describing a *failed asset fetch*, never a failed execution, so a real defect cannot be answered with a reload that hides it; a `sessionStorage` marker with a fifteen-second cooldown means one reload per failure rather than a loop, which is the one failure a person cannot report because the screen never holds still; and the screen shown is a notice, not an error — nothing went wrong with their work, Lia shipped a new version, and the red triangle would teach distrust of a product behaving correctly. `/organizations` gained a boundary in the same change: it sits outside both `(app)` and `(site)` by design, which also put it outside both of their boundaries, so any throw there fell through to Next's own error page. |
+
+## Known gaps after multi-organization and location management
+
+- **A concurrent location edit can lose one.** `locations.update` is
+  read-then-write with no optimistic-concurrency token, so two admins saving the
+  same location within a few seconds leaves the loser's edit silently
+  overwritten and the loser un-notified. The same position
+  `brand_voice_profiles` is in. A `revision` column is the fix, and it is not
+  here because nothing else in the product has one yet and inventing the pattern
+  on a screen edited rarely by two or three people is the wrong place to start.
+- **No pipeline is location-status aware** (D202). A retired location goes on
+  receiving whatever its mapped profiles bring in. Deliberate: a real pause is
+  its own control across every pipeline.
+- **Organization deletion, ownership relinquishment, and leaving an organization
+  do not exist.** Consequence worth stating: somebody who creates an
+  organization by mistake cannot remove it, and the last-owner trigger means
+  they cannot demote themselves out of it either. The most obvious next piece of
+  work in this area.
+- **Nothing caps how many organizations one account may create.** The request
+  key stops accidents; it does not stop volume.
+- **The cross-tenant foreign keys in SEC-1 above** remain enforced only by
+  application scoping.
+- **Neither new RPC has run against hosted.** Both are exercised against a local
+  Postgres by `db:verify-tenancy` and its race harness, which is further than
+  most of this repository's write paths have got, but the hosted push is still
+  ahead (see the rollout above).
+- ~~The organization-creation form has not been submitted in a browser.~~
+  **Resolved.** Driven end to end: the switcher entry reaches the form, creating
+  lands on onboarding step one, the new organization becomes active and is
+  listed, and a genuine double-click produces exactly one organization. That
+  pass is also what proved criterion 7 — switching from `/reviews/google/[id]`
+  lands on `/overview` rather than the 404 the old behaviour produced — and
+  what found the wizard trap recorded as D211.
+
+## Multi-organization rollout (expand-contract)
+
+Six migrations, **two releases apart**. Nothing here is automated.
+
+| Version | File | Release |
+| --- | --- | --- |
+| `20260814000100` | `organization_provisioning_idempotency.sql` — drop/recreate `provision_organization` with the six-argument signature, the request key, the audit writer, and the corrected grants | R1 |
+| `20260814000200` | `location_tenant_integrity.sql` — four composite FKs with column-specific `SET NULL`, the active-manager trigger | R1 |
+| `20260814000300` | `location_mapping_rpc.sql` — `create_and_map_location` | R1 |
+| `20260814000400` | `location_audit_vocabulary.sql` — `location.updated`, `location.status_changed` | R1 |
+| `20260814000500` | `location_write_roles_contraction.sql` — narrow `locations_insert`/`update`, drop the delete policy, revoke `DELETE` | **R3** |
+
+### Why the split
+
+A database migration and an application deploy are not one atomic operation, and
+"push immediately before or at deploy" has no safe side:
+
+- **Database first.** `locations_insert` narrows while the deployed application
+  still inserts directly — communications-lead mapping breaks immediately.
+- **Application first.** It calls a six-argument function and an RPC that do not
+  exist.
+- **Rollback after either.** The previous application's mapping path is now
+  blocked by a policy it knows nothing about.
+
+Expand-contract removes the window rather than shortening it.
+
+### Sequence
+
+1. **R1 — expansion.** Push `…000100`–`…000400`. Do **not** push `…000500`.
+   The deployed application keeps working: four-argument `provision_organization`
+   calls resolve through the new defaults, `locations_insert` is still wide, the
+   new FKs reject only cross-tenant writes that the preflight proves do not
+   exist, and the trigger fires only on assignment.
+2. **F0 — compatibility gate. Blocking.** Against the expanded hosted database,
+   with the **currently deployed** application still running: create an
+   organization through sign-up, and map a Google location as a communications
+   lead. Both must succeed. Harness checks T-28 and T-26 are the local proofs;
+   this is the production one. Any failure stops R2 and triggers the R1 rollback
+   recorded in each migration's header.
+3. **R2 — application.** Deploy. Smoke test: create an organization from
+   `/organizations/new`, confirm it becomes active and lands on onboarding step
+   one, confirm the `organization.created` row exists with a non-null
+   `organization_id`; then map a Google listing and confirm the location **and**
+   its binding both exist with three audit rows.
+   Rollback is redeploying the previous version, and it works, because R3 has
+   not run.
+4. **R3 — contraction.** After the R2 rollback window closes, push `…000500`.
+   Re-verify: a communications lead's direct `INSERT` into `locations` is
+   refused, their mapping still succeeds, and
+   `has_table_privilege('authenticated', 'public.locations', 'delete')` is false.
+   Rolling the application back past R2 **after** this point breaks
+   communications-lead mapping — which is why R3 waits.
+
+### Verification
+
+```bash
+export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '"')"
+npm run db:preflight-tenancy       # read-only, against hosted, before pushing
+npm run db:verify-tenancy          # 150 checks + both concurrency races
+npm run db:verify-tenancy-expanded # the same file with the contraction reversed
+npm run db:verify-rls
+npm run db:verify-execution
+npm run db:verify-generation
+```
+
+`db:verify-tenancy-expanded` exists because `supabase db reset` applies every
+migration in the directory, contraction included — so the R1 state, which
+production genuinely occupies for a while, is not otherwise reachable locally or
+in CI. Without it T-26 would be skipped on every run, and a guarded section that
+never executes looks exactly like one that passed.
+
+## SEC-1 — cross-tenant foreign-key closure
+
+**Open security item, not a gap-list entry.** Filed with a priority and exit
+criteria so it can be closed rather than admired.
+
+Some foreign keys between organization-owned tables let a row in organization A
+reference a row in organization B. The database permits it; only application
+scoping prevents it. That has been true since the initial schema, and it was
+tolerable while an account belonging to two organizations was an edge case the
+product could not even produce.
+
+**Multi-organization support is what changes the risk.** Holding memberships in
+several organizations and switching between them is now ordinary product
+behaviour, so "a request carrying organization A's scope while the caller
+legitimately holds ids from organization B" stops being unlikely and starts
+being routine. An application-only guard now stands in front of a common case
+rather than a rare one.
+
+### Inventory
+
+Generated from the catalog, not from a reading of the migrations:
+
+```sql
+with org_owned as (
+  select c.relname
+  from pg_class c
+  join pg_attribute a on a.attrelid = c.oid and a.attname = 'organization_id'
+  where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
+)
+select con.conrelid::regclass, con.conname, con.confrelid::regclass,
+       pg_get_constraintdef(con.oid)
+from pg_constraint con
+where con.contype = 'f'
+  and con.connamespace = 'public'::regnamespace
+  and con.conrelid::regclass::text in (select relname from org_owned)
+  and con.confrelid::regclass::text in (select relname from org_owned)
+order by 1, 2;
+```
+
+As of 2026-08-18, against a database with every migration applied:
+
+| Priority | Reference | Verdict |
+| --- | --- | --- |
+| — | `automation_rule_executions` ×4, `generation_attempts` ×2, `escalations.trigger_analysis_id`, `mention_analyses.mention_id`, `mentions.location_id`, `mentions.platform_profile_id`, `platform_profiles.location_id`, `monitoring_queries.location_id`, `locations.manager_user_id` | **Composite.** Structural. The last four were closed by this workflow. |
+| **P1** | `mentions.platform_connection_id`, `platform_profiles.platform_connection_id` (both `not null`) | **Defective.** Connection rows drive credential lookup and sync targeting, so misattribution here is the closest any of these gets to the credential boundary. |
+| **P1** | `mentions.monitoring_query_id` (nullable) | **Defective.** A news mention attributed to another tenant's query, and therefore surfaced in their poll history and rejection diagnostics. |
+| **P2** | `response_drafts.mention_id`, `approvals.response_draft_id` (both `not null`) | **Defective.** A draft or an approval decision recorded against another tenant's mention — customer-facing text in the wrong approval queue. |
+| **P2** | `escalations.mention_id` | **Defective in principle, closed in practice.** `escalations_occurrence_same_mention` constrains the pair transitively — but only when `trigger_analysis_id` is set, and that column is **nullable**. D159 makes occurrence identity mandatory by raising `22004` inside `raise_escalation` rather than by a `NOT NULL`, so this is protected by contract rather than by constraint. Closing it is either a composite FK or a `NOT NULL`; the second is cheaper and says the same thing. |
+| **P3** | `platform_sync_runs.platform_connection_id` / `platform_profile_id`, `news_poll_runs.monitoring_query_id`, `news_rejected_candidates.monitoring_query_id` / `news_poll_run_id`, `platform_connection_secrets.platform_connection_id` | **Defective.** History and diagnostics attributed to the wrong tenant. Misleading rather than harmful — but it is the evidence trail operators reason from. |
+| **P3** | `mention_analyses.analysis_run_id` (nullable) | **Defective.** Run attribution. Hardened to `on delete restrict` by D160 for an unrelated reason; the tenant match is unenforced, and run ids are unreachable from a request path today. |
+
+Two single-column FKs are **deliberately retained** alongside a composite on the
+same column — `mentions.location_id` and `mention_analyses.mention_id`. The
+composite carries the tenant invariant and the retained simple one carries the
+`ON DELETE` action, because `20260811000100`'s composites were written without
+one. That arrangement is correct and is not a pattern to reproduce; the four
+constraints added by this workflow carry their own column-specific action and
+drop the superseded single (D206).
+
+### Exit criteria
+
+Every **P1** and **P2** row is either composite or carries a written exception,
+each with a hosted preflight run and a harness assertion — the same treatment
+the four closed here received. Every column listed is `not null` except where
+noted, so most fixes are a plain composite FK with no referential action.
+
+What makes this a separate pass rather than a widening of this one: each touches
+an ingest or approval path with its own test surface, and several have never run
+against real Google.
+
+## Decisions made building the empty rules screen
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D186 | "No rules at all" and "no rules on this tab" become different branches | They were one, so filtering to Draft with no drafts told somebody with ten active rules "No rules yet". They now lead somewhere different too: a genuinely empty workspace gets the templates beside it, and a filtered-empty view must not — those rules exist one tab away, and offering to create more answers a question nobody asked. |
+| D187 | The templates panel appears on the empty rules screen, not just in the builder | At zero rules the question is not "how do I create a rule" but "what would I even automate", which a bare empty state cannot answer. Same 7/5 split the builder already pairs templates with, so the relationship reads identically on both screens. |
+| D188 | `RuleTemplatesPanel` takes `canManage`, defaulting to true | The builder renders it only after its own permission check, so it must not have to pass the flag; the rules list shows it to anybody who can see an empty screen, and a reader whose role cannot create rules would otherwise get five buttons into a page that tells them so. No action renders at all for them — not a disabled button in an empty container. |
+| D189 | Status tabs are hidden when the organization has no rules | Four tabs all reading zero are a filter for nothing. |
+| D190 | The empty card stretches to the sidebar's height | Verified in a browser rather than assumed: with `items-start` the left card ended at 490px against a sidebar running to 1100px, leaving a 600px void that read as unfinished. The repo's test suite computes no layout, so this class of problem is only ever found by looking. |
+
+New in Yelp Assisted:
+
+- **The live Yelp Fusion API has never been called from this repository.** The
+  same position workflow 02 was in with Google and workflow 06 with GNews:
+  every test stubs `fetch`, and the request-building, error classification, and
+  normalisation are covered against a stub rather than a live response.
+- **The scheduled sweep is not wired to cron.** `/api/cron/yelp-listing-check`
+  exists, is `CRON_SECRET`-guarded, and is tested; it is absent from
+  `vercel.ts` because the Hobby plan's cron-job cap is already reached (D190).
+  Checks currently happen when somebody presses **Check for activity**.
+- **One-listing-per-location is an application check** rather than a database
+  constraint (D189). The tenant-level invariant is database-enforced.
+- **Location phone numbers are still not compared.** `locations` has no phone
+  column — the gap workflow 02 recorded for Google matching. Yelp *does* return
+  a phone number, so the weight is wired and tested in `scoreYelpCandidate` and
+  scores nothing until the column exists. It is the strongest signal available.
+- **Listing snapshots accumulate with no retention policy.** Two integers per
+  listing per check, append-only. A sweep will be wanted eventually; the
+  mechanism does not exist, the same posture D169 took for generation
+  snapshots.
+- **The seed's three published drafts carry fabricated `gbp-reply-*`
+  identifiers**, asserting a Google publishing capability Lia does not have.
+  That predates this work. `dataset.ts` now derives `publication_method` from
+  the presence of that identifier, which makes the assertion visible rather
+  than creating it — but the fixtures themselves are worth revisiting under
+  D143's standard.

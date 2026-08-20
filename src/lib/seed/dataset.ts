@@ -525,6 +525,15 @@ interface MonitoringQuerySeed {
   exclusions?: string[];
   allowedDomains?: string[];
   sourceCountry?: string | null;
+  /**
+   * The local anchor, given as a real postal code for the depicted city.
+   *
+   * Optional, and left unset on most rows on purpose: the column is new, so a
+   * dataset where every query has a locality would misrepresent what an
+   * existing workspace actually looks like. The two that set it are the ones
+   * whose city the rest of the seed already names.
+   */
+  locality?: { postalCode: string; city: string; region: string };
   relevanceThreshold?: number;
   pollIntervalMinutes?: number;
   lastPolledAt: string | null;
@@ -542,6 +551,9 @@ function monitoringQuery(seed: MonitoringQuerySeed): MonitoringQuery {
     allowedDomains: seed.allowedDomains ?? [],
     deniedDomains: [],
     sourceCountry: seed.sourceCountry ?? "us",
+    postalCode: seed.locality?.postalCode ?? null,
+    localityCity: seed.locality?.city ?? null,
+    localityRegion: seed.locality?.region ?? null,
     language: "en",
     relevanceThreshold: seed.relevanceThreshold ?? 0.35,
     enabled: true,
@@ -571,6 +583,10 @@ const monitoringQueries: MonitoringQuery[] = [
     // below actually use.
     keywords: ["Maison Laurent", "Union Square Hospitality Group", "USHG"],
     exclusions: ["obituary"],
+    // Organization-wide, so there is no location row to take a locality from —
+    // which is the case these columns exist for. Anchored to the city every
+    // seeded USHG location is in, the answer an admin would have given.
+    locality: { postalCode: "10003", city: "New York", region: "NY" },
     pollIntervalMinutes: 240,
     lastPolledAt: minutesAgo(9),
   }),
@@ -597,6 +613,10 @@ const monitoringQueries: MonitoringQuery[] = [
     // SoHo mentions below say "Maison Laurent" outright, so "Laurent" alone
     // is why this query would have found them.
     keywords: ["Laurent", "Prince Street"],
+    // LOC_SOHO's own postal code, city, and region, copied exactly. A location
+    // query's locality has to agree with the location it is bound to, or the
+    // seed depicts a state the product would never produce.
+    locality: { postalCode: "10012", city: "New York", region: "NY" },
     // A publisher on this list also earns LOCAL_OUTLET_BONUS in the gate —
     // both outlets below already cover this SoHo location.
     allowedDomains: ["eater.com", "timeout.com"],
@@ -648,6 +668,15 @@ interface MentionSeed {
   publisherName?: string | null;
   publisherDomain?: string | null;
   isSyndicated?: boolean;
+  // Discussion fields. Optional because only Reddit mentions are threads;
+  // every other source keeps `NEW_MENTION_DEFAULTS`' null/false.
+  conversationRootExternalId?: string | null;
+  sourceCommunity?: string | null;
+  sourceScore?: number | null;
+  sourceCommentCount?: number | null;
+  sourceIsLocked?: boolean;
+  sourceIsArchived?: boolean;
+  sourceIsNsfw?: boolean;
 }
 
 function mention(seed: MentionSeed): Mention {
@@ -689,6 +718,21 @@ function mention(seed: MentionSeed): Mention {
     publisherName: seed.publisherName ?? null,
     publisherDomain: seed.publisherDomain ?? null,
     isSyndicated: seed.isSyndicated ?? false,
+    // Discussion fields. A root post is its own conversation root, so the
+    // fixtures only name one on a comment — the factory fills the rest in
+    // from the mention's own id, which is what a real ingest does too.
+    conversationRootExternalId:
+      seed.conversationRootExternalId ??
+      (seed.sourceType === "reddit_post" ? seed.externalId : null),
+    sourceCommunity: seed.sourceCommunity ?? null,
+    sourceScore: seed.sourceScore ?? null,
+    sourceCommentCount: seed.sourceCommentCount ?? null,
+    sourceIsLocked: seed.sourceIsLocked ?? false,
+    sourceIsArchived: seed.sourceIsArchived ?? false,
+    sourceIsNsfw: seed.sourceIsNsfw ?? false,
+    // Deliberately not seeded: `sourceLastVerifiedAt` and `sourceRemovedAt`
+    // would claim a verification pass that never ran against these fixtures,
+    // the same reason `lastSyncedAt` stays null.
     createdAt: seed.publishedAt,
     updatedAt: seed.publishedAt,
   };
@@ -956,7 +1000,9 @@ const mentions: Mention[] = [
     riskLevel: "medium",
     relevanceScore: 0.89,
     engagementScore: 0.72,
-    rawPayload: { subreddit: "r/FoodNYC", upvotes: 284, comment_count: 96, upvote_ratio: 0.91 },
+    sourceCommunity: "foodnyc",
+    sourceScore: 284,
+    sourceCommentCount: 96,
   }),
   mention({
     label: MENTION_LABELS.redditRude,
@@ -975,7 +1021,9 @@ const mentions: Mention[] = [
     riskLevel: "high",
     relevanceScore: 0.87,
     engagementScore: 0.55,
-    rawPayload: { subreddit: "r/FoodNYC", upvotes: 96, comment_count: 41, upvote_ratio: 0.84 },
+    sourceCommunity: "foodnyc",
+    sourceScore: 96,
+    sourceCommentCount: 41,
   }),
   mention({
     label: MENTION_LABELS.redditAnniversary,
@@ -994,7 +1042,9 @@ const mentions: Mention[] = [
     riskLevel: "low",
     relevanceScore: 0.82,
     engagementScore: 0.83,
-    rawPayload: { subreddit: "r/nyc", upvotes: 412, comment_count: 33, upvote_ratio: 0.97 },
+    sourceCommunity: "nyc",
+    sourceScore: 412,
+    sourceCommentCount: 33,
   }),
   mention({
     label: MENTION_LABELS.redditComment,
@@ -1014,7 +1064,9 @@ const mentions: Mention[] = [
     riskLevel: "low",
     relevanceScore: 0.74,
     engagementScore: 0.31,
-    rawPayload: { subreddit: "r/FoodNYC", upvotes: 47 },
+    conversationRootExternalId: "t3_1abcde",
+    sourceCommunity: "foodnyc",
+    sourceScore: 47,
   }),
   mention({
     label: MENTION_LABELS.newsSpring,
@@ -1470,6 +1522,8 @@ interface DraftSeed {
   publishedAt?: string | null;
   externalResponseId?: string | null;
   publicationError?: string | null;
+  /** Who confirmed the publication. Only meaningful on a published draft. */
+  publishedByUserId?: string | null;
   createdAt?: string;
 }
 
@@ -1495,6 +1549,33 @@ function draft(seed: DraftSeed): ResponseDraft {
     publishedAt: seed.publishedAt ?? null,
     externalResponseId: seed.externalResponseId ?? null,
     publicationError: seed.publicationError ?? null,
+    // Derived rather than seeded independently, so a published draft cannot
+    // exist in the demo dataset without saying how it got there — and so the
+    // method can never contradict the identifier beside it.
+    //
+    // The rule reads the row's own evidence: a draft carrying a provider's
+    // reply id is depicting a provider publication, and one published without
+    // an id is depicting a person posting it themselves. That pairing is the
+    // same one the database constraint enforces, so the seed cannot load a
+    // combination the schema would refuse.
+    //
+    // Note for anyone auditing seed honesty: the three `gbp-reply-*`
+    // identifiers here predate this feature and assert a Google publishing
+    // capability Lia does not have. This derivation makes that assertion
+    // visible rather than creating it — see the note in the Yelp integration
+    // doc.
+    publicationMethod:
+      seed.status === "published"
+        ? seed.externalResponseId
+          ? "provider_api"
+          : "manual_external"
+        : null,
+    // Only a manual confirmation has a person behind it; a provider
+    // publication was acknowledged by the provider, not witnessed by anybody.
+    publishedByUserId:
+      seed.status === "published" && !seed.externalResponseId
+        ? (seed.publishedByUserId ?? null)
+        : null,
     createdAt,
     updatedAt: createdAt,
   };

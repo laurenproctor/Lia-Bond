@@ -6,7 +6,9 @@ import {
   BRAND_VOICE_AXIS_KEYS,
   canDecideOnDraft,
   canEditDraft,
+  createAndMapLocationInputSchema,
   createLocationInputSchema,
+  updateLocationInputSchema,
   createMentionAnalysisInputSchema,
   createMentionInputSchema,
   finishAnalysisRunInputSchema,
@@ -42,7 +44,7 @@ import {
   type SyncResource,
   type UpdateBrandVoiceInput,
 } from "@/domain";
-import { conflict, DataError, invalidInput, notFound } from "@/lib/data/errors";
+import { conflict, DataError, forbidden, invalidInput, notFound } from "@/lib/data/errors";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   computeLocationMetrics,
@@ -84,6 +86,8 @@ import {
   toUser,
 } from "@/lib/data/supabase/mappers";
 import { createMonitoringRepositories } from "@/lib/data/supabase/monitoring";
+import { createReviewWidgetRepository } from "@/lib/data/supabase/review-widgets";
+import { createYelpRepositories } from "@/lib/data/supabase/yelp";
 import { activationProblems } from "@/lib/rules/readiness";
 
 /**
@@ -491,6 +495,12 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           organization_industry: input.industry ?? "Restaurant group",
           organization_timezone: input.timezone ?? "UTC",
           organization_language: input.language ?? "en-US",
+          // Both trailing and defaulted in SQL, so this call shape is
+          // backward compatible in the direction that matters for the rollout:
+          // the previously deployed application sends four arguments and still
+          // resolves. Passing null here is the same as omitting them.
+          p_request_key: input.requestKey ?? null,
+          p_source: input.source ?? "self_serve",
         });
 
         if (error) fail(error, "create that organization");
@@ -577,6 +587,46 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (returned.length >= MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP) {
           console.warn(
             "[data:supabase] organizations_with_unanalyzed_mentions reached its row cap; the analyse-mentions sweep may be missing organizations",
+          );
+        }
+
+        return [
+          ...new Set(
+            returned.flatMap((row) =>
+              typeof row.organization_id === "string" ? [row.organization_id] : [],
+            ),
+          ),
+        ];
+      },
+
+      // Deliberately unscoped and run under the service-role client — see the
+      // doc comment on `listWithYelpListings` in types.ts.
+      //
+      // A plain select rather than a database function, unlike the analysis
+      // scan above, and the difference is that this read is already bounded by
+      // construction: it returns one row per *connected listing*, and a
+      // customer has one Yelp listing per restaurant. The analysis scan had to
+      // move into Postgres because it read `mentions`, which grows without
+      // limit. `.range()` is still explicit for the same reason it is there —
+      // leaving PostgREST's cap implicit is how a silent truncation starts.
+      async listWithYelpListings() {
+        const { data, error } = await serviceClient()
+          .from("platform_profiles")
+          .select("organization_id, platform_connections!inner(platform, status)")
+          .eq("platform_connections.platform", "yelp")
+          .neq("platform_connections.status", "disconnected")
+          .neq("status", "disconnected")
+          .range(0, MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP - 1);
+
+        if (error) fail(error, "find organizations with connected Yelp listings");
+        const returned = rows(data);
+
+        if (returned.length >= MAX_ORGANIZATIONS_PER_ANALYSIS_SWEEP) {
+          // Same capacity signal as the analysis scan, and no tenant
+          // identifier or count in the message: this is for an operator to act
+          // on, not a coverage report.
+          console.warn(
+            "[data:supabase] the Yelp listing scan reached its row cap; the listing-check sweep may be missing organizations",
           );
         }
 
@@ -1046,6 +1096,137 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (error) fail(error, "create the location");
         if (!data) throw notFound("Location");
         return toLocation(data as Row);
+      },
+
+      async update(scope, input) {
+        const value = updateLocationInputSchema.parse(input);
+
+        // Scoped lookup before the write, so a foreign id is indistinguishable
+        // from a missing one — the same pattern `updateLocationManagerAction`
+        // established and the monitoring-query cross-tenant fix adopted.
+        const existing = await this.get(scope, value.locationId);
+        if (!existing) throw notFound("Location");
+
+        // Only when the manager actually changes — mirroring
+        // `locations_manager_is_active_member`, which is a BEFORE trigger with
+        // the same guard. Postgres validates an assignment and never
+        // re-validates one that was legitimate when made, so checking here on
+        // every update would refuse an address edit the database would allow,
+        // and the demo adapter would have to be wrong in the same way to match.
+        if (value.managerUserId && value.managerUserId !== existing.managerUserId) {
+          await assertActiveMember(scope, value.managerUserId);
+        }
+
+        const { data, error } = await client
+          .from("locations")
+          .update({
+            name: value.name,
+            slug: value.slug,
+            address_line1: value.addressLine1,
+            address_line2: value.addressLine2,
+            city: value.city,
+            region: value.region,
+            postal_code: value.postalCode,
+            country_code: value.countryCode,
+            timezone: value.timezone,
+            status: value.status,
+            manager_user_id: value.managerUserId,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", value.locationId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) {
+          // The per-organization slug unique is the one collision a person can
+          // cause from the form, so it gets a field error rather than the
+          // generic message — matching how `organizations.update` surfaces its
+          // own slug conflict.
+          if (error.code === "23505") {
+            throw new DataError("conflict", "That address is already taken.", {
+              slug: "Another location in this organization already uses that address.",
+            });
+          }
+          fail(error, "update the location");
+        }
+        if (!data) throw notFound("Location");
+        return toLocation(data as Row);
+      },
+
+      async createAndMapFromIntegration(scope, input) {
+        const value = createAndMapLocationInputSchema.parse(input);
+
+        // Everything that makes this safe lives in the function: the
+        // organization is derived from the connection, the role check is
+        // restated there, status and manager are written literally, and the
+        // location, the binding, and three audit events commit together. This
+        // adapter's job is to call it and re-read what it produced — notably
+        // *not* to bind anything afterwards.
+        const { data, error } = await client.rpc("create_and_map_location", {
+          p_connection_id: value.platformConnectionId,
+          p_profiles: value.profiles.map((profile) => ({
+            externalProfileId: profile.externalProfileId,
+            externalProfileName: profile.externalProfileName,
+            externalAccountId: profile.externalAccountId,
+            profileUrl: profile.profileUrl,
+            verificationState: profile.verificationState,
+            providerMetadata: profile.providerMetadata,
+          })),
+          p_name: value.name,
+          p_address_line1: value.addressLine1,
+          p_address_line2: value.addressLine2,
+          p_city: value.city,
+          p_region: value.region,
+          p_postal_code: value.postalCode,
+          p_country_code: value.countryCode,
+          p_timezone: value.timezone,
+        });
+
+        if (error) {
+          // The function answers an unknown connection, a foreign one, and an
+          // unauthorized caller with one code and one message, so that it is
+          // not a probe for which connections exist. Preserve that here: a
+          // single `forbidden` for all three.
+          if (error.code === "42501") {
+            throw forbidden("That connection is not available.");
+          }
+          if (error.code === "23505") {
+            throw conflict("These profiles are already mapped to a different location.");
+          }
+          if (error.code === "55000") {
+            throw new DataError(
+              "conflict",
+              "This connection is disconnected. Reconnect it before mapping locations.",
+            );
+          }
+          fail(error, "create and map the location");
+        }
+
+        const returned = rows(data);
+        if (returned.length === 0) throw notFound("Location");
+
+        const locationId = String(returned[0]?.location_id);
+        const profileIds = returned.map((row) => String(row.profile_id));
+        const createdProfileIds = returned
+          .filter((row) => row.profile_created === true)
+          .map((row) => String(row.profile_id));
+        const replayed = returned[0]?.replayed === true;
+
+        const location = await this.get(scope, locationId);
+        if (!location) throw notFound("Location");
+
+        const { data: profileRows, error: profileError } = await from(
+          "platform_profiles",
+          scope,
+        ).in("id", profileIds);
+        if (profileError) fail(profileError, "load the mapped profiles");
+
+        return {
+          location,
+          profiles: rows(profileRows).map(toPlatformProfile),
+          createdProfileIds,
+          replayed,
+        };
       },
     },
 
@@ -1715,6 +1896,10 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
     // `supabase/monitoring.ts`.
     ...createMonitoringRepositories(client),
 
+    // Yelp Assisted's own file, for the same reason.
+    ...createYelpRepositories(client),
+    reviewWidgets: createReviewWidgetRepository(client),
+
     mentions: {
       async list(scope, filter = {}) {
         let query = from("mentions", scope).order("published_at", { ascending: false });
@@ -1907,6 +2092,15 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
               publisher_domain: value.publisherDomain,
               is_syndicated: value.isSyndicated,
               monitoring_query_id: value.monitoringQueryId,
+              conversation_root_external_id: value.conversationRootExternalId,
+              source_community: value.sourceCommunity,
+              source_score: value.sourceScore,
+              source_comment_count: value.sourceCommentCount,
+              source_is_locked: value.sourceIsLocked,
+              source_is_archived: value.sourceIsArchived,
+              source_is_nsfw: value.sourceIsNsfw,
+              source_removed_at: value.sourceRemovedAt,
+              source_last_verified_at: value.sourceLastVerifiedAt,
             },
             { onConflict: "platform_connection_id,source_type,external_id" },
           )
@@ -1979,6 +2173,15 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           last_synced_at: value.syncedAt,
           publisher_name: value.publisherName,
           publisher_domain: value.publisherDomain,
+          conversation_root_external_id: value.conversationRootExternalId,
+          source_community: value.sourceCommunity,
+          source_score: value.sourceScore,
+          source_comment_count: value.sourceCommentCount,
+          source_is_locked: value.sourceIsLocked,
+          source_is_archived: value.sourceIsArchived,
+          source_is_nsfw: value.sourceIsNsfw,
+          source_removed_at: value.sourceRemovedAt,
+          source_last_verified_at: value.sourceLastVerifiedAt,
         };
 
         if (existing) {
@@ -2236,6 +2439,21 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         return counts;
       },
 
+      async findByExternalId(scope, platformConnectionId, sourceType, externalId) {
+        // The same three columns `mentions_unique_external` names, plus the
+        // tenant filter every read in this adapter carries, so a hit means the
+        // insert would collide and a miss means it would not.
+        const { data, error } = await from("mentions", scope)
+          .eq("platform_connection_id", platformConnectionId)
+          .eq("source_type", sourceType)
+          .eq("external_id", externalId)
+          .limit(1);
+
+        if (error) fail(error, "check for an existing review");
+        const row = rows(data)[0];
+        return row ? toMention(row) : null;
+      },
+
       async updateStatus(scope, mentionId, status) {
         const { data, error } = await client
           .from("mentions")
@@ -2416,6 +2634,90 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           .order("created_at", { ascending: false });
         if (error) fail(error, "load approvals");
         return rows(data).map(toApproval);
+      },
+
+      async confirmPublication(scope, draftId, confirmedByUserId, confirmedAt) {
+        const { data, error } = await client
+          .from("response_drafts")
+          .update({
+            status: "published",
+            published_at: confirmedAt,
+            // Written literally rather than taken from an argument: a caller
+            // that could name the method could claim a provider had verified
+            // this. `external_response_id` is deliberately not set — the
+            // database refuses one on this path
+            // (`response_drafts_external_id_requires_provider`).
+            publication_method: "manual_external",
+            published_by_user_id: confirmedByUserId,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", draftId)
+          // The idempotency guard, in the WHERE clause rather than in a prior
+          // read. A second click matches no rows instead of writing a second
+          // confirmation with a later timestamp and a second audit event.
+          .eq("status", "approved")
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "record that this response was posted");
+
+        if (data) {
+          return { draft: toResponseDraft(data as Row), outcome: "confirmed" };
+        }
+
+        // Nothing matched. Either it is already confirmed — which is success,
+        // because the draft is recorded as published, which is what the caller
+        // wanted — or it is in a status that cannot be confirmed at all.
+        const { data: current, error: readError } = await from(
+          "response_drafts",
+          scope,
+        )
+          .eq("id", draftId)
+          .limit(1);
+
+        if (readError) fail(readError, "read this response");
+        const row = rows(current)[0];
+        if (!row) throw notFound("Response draft");
+
+        const draft = toResponseDraft(row);
+        if (
+          draft.status === "published" &&
+          draft.publicationMethod === "manual_external"
+        ) {
+          return { draft, outcome: "already_confirmed" };
+        }
+
+        throw conflict("Only an approved response can be marked as posted.");
+      },
+
+      async unconfirmPublication(scope, draftId) {
+        const { data, error } = await client
+          .from("response_drafts")
+          .update({
+            status: "approved",
+            published_at: null,
+            publication_method: null,
+            published_by_user_id: null,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", draftId)
+          .eq("status", "published")
+          // Guarded on the publication having been a manual confirmation. A
+          // provider publication is something Lia observed and holds an
+          // acknowledgement for; letting the correction path erase one would
+          // allow a real publication to be rewritten as a mistake.
+          .eq("publication_method", "manual_external")
+          .select("*")
+          .maybeSingle();
+
+        if (error) fail(error, "withdraw this posted confirmation");
+        if (!data) {
+          throw conflict(
+            "Only a response marked as posted by hand can have that confirmation withdrawn.",
+          );
+        }
+
+        return toResponseDraft(data as Row);
       },
     },
 

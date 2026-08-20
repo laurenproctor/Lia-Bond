@@ -12,6 +12,7 @@ import type {
   BrandVoiceProfile,
   BrandVoiceSource,
   ConnectionHealthUpdate,
+  CreateAndMapLocationInput,
   CreateEscalationInput,
   CreateLocationInput,
   CreateMentionAnalysisInput,
@@ -53,10 +54,14 @@ import type {
   PlatformConnection,
   PlatformProfile,
   PlatformSyncRun,
+  PublicationConfirmationOutcome,
   RaiseEscalationResult,
   RecordAuditEventInput,
   ResponseDraft,
   ResponseDraftFilter,
+  ReviewWidget,
+  ReviewWidgetRenderRow,
+  ReviewWidgetStatus,
   RiskLevel,
   Sentiment,
   StartAnalysisRunInput,
@@ -65,10 +70,18 @@ import type {
   SyncResource,
   Timestamp,
   UpdateBrandVoiceInput,
+  UpdateLocationInput,
   UpdateMonitoringQueryInput,
   UpsertPlatformConnectionInput,
+  UpsertReviewWidgetInput,
   UpsertPlatformProfileInput,
   User,
+  CreateYelpListingSnapshotInput,
+  YelpActivityChangeKind,
+  YelpActivityOccurrence,
+  YelpActivityOccurrenceFilter,
+  YelpActivityStatus,
+  YelpListingSnapshot,
 } from "@/domain";
 import type { DraftingContext } from "@/lib/responses/drafting-context";
 
@@ -235,6 +248,26 @@ export interface ProvisionOrganizationInput {
   industry?: string;
   timezone?: string;
   language?: string;
+  /**
+   * Idempotency key, generated once per mounted creation form.
+   *
+   * A retry after a failure reuses it; a fresh page load gets a new one. Supply
+   * it and a replay returns the organization the first call created, writing
+   * nothing — no second membership, no second onboarding row, no second
+   * `organization.created` event. Omit it and every call creates.
+   *
+   * The uniqueness is the lock, not a check performed before the insert: two
+   * clicks are routinely two serverless processes, and a read-then-insert
+   * version loses exactly the race it exists to solve.
+   */
+  requestKey?: string;
+  /**
+   * Which entry point asked. Reaches `audit_events.metadata`, and is validated
+   * against these two values in the database as well — an audit trail whose
+   * metadata is caller-authored free text is a trail somebody can write
+   * anything into.
+   */
+  source?: "self_serve" | "in_app";
 }
 
 /**
@@ -267,10 +300,15 @@ export interface OrganizationRepository {
   /**
    * Create an organization and the caller's owner membership, together.
    *
-   * Deliberately **not** scoped: the caller holds no membership yet, which is
-   * the entire point. This is the one write in the repository layer that
-   * cannot take an `OrganizationScope`, because it is what produces the first
-   * one.
+   * Deliberately **not** scoped, and the reason is worth stating precisely,
+   * because it used to be stated wrongly: it is not that the caller holds no
+   * membership. Since organizations can be created from inside the product,
+   * the caller usually holds several. It is that this method *produces* a
+   * scope, so there is none to pass in.
+   *
+   * Repeated use is supported and expected. Nothing in the function counts
+   * memberships, and the person creating their third restaurant group becomes
+   * its owner exactly as they did their first.
    *
    * Both rows must exist or neither must — an organization with no owner is
    * unreachable and uneditable by anyone. The Supabase adapter delegates to a
@@ -320,6 +358,24 @@ export interface OrganizationRepository {
    * Service-role only. Never call this from a request path.
    */
   listWithUnanalyzedMentions(): Promise<string[]>;
+  /**
+   * Organization ids holding at least one connected Yelp listing.
+   *
+   * The second deliberately unscoped read on this repository, and it exists for
+   * exactly the reason the first one does: the Yelp sweep runs under cron,
+   * holds no membership, and cannot enumerate tenants any other way.
+   *
+   * Kept narrow in the same way — it returns identifiers, never rows, and the
+   * per-organization `OrganizationScope` the sweep builds from each id is what
+   * carries tenancy from there (D88). Service-role only. Never call this from
+   * a request path.
+   *
+   * Deriving the swept set from `platform_connections` alone was rejected: a
+   * connection row exists as soon as somebody opens the connect flow, so
+   * sweeping on it would check organizations that never finished mapping a
+   * listing and have nothing to check.
+   */
+  listWithYelpListings(): Promise<string[]>;
 }
 
 export interface UpdateOwnProfileInput {
@@ -428,6 +484,58 @@ export interface LocationRepository {
    * de-duplicates within the organization.
    */
   create(scope: OrganizationScope, input: CreateLocationInput): Promise<Location>;
+  /**
+   * Edit a location's identity, address, timezone, status, and manager.
+   *
+   * `updateManager` stays separate rather than being folded in here, and it is
+   * not redundant: it is reached from the settings panel under
+   * `location.update_manager`, writes only `location.manager_changed`, and
+   * exists precisely because assigning a manager is a different authority from
+   * editing an address. This method is the management screen's superset, and
+   * the action above it emits the three audit events separately by field.
+   *
+   * A manager must hold an *active* membership in the same organization. Both
+   * adapters check it and return a field error; the database restates it as a
+   * composite foreign key plus a trigger, because a rule that lives only in
+   * application code protects only the paths that remember to call it.
+   */
+  update(scope: OrganizationScope, input: UpdateLocationInput): Promise<Location>;
+  /**
+   * Create a location and bind platform profiles to it, atomically, or do
+   * neither.
+   *
+   * The **only** path by which a communications lead can bring a location into
+   * existence, and it cannot produce one without a mapping: the profile set is
+   * required, and the location insert, the binding, and three audit events are
+   * one transaction. `status` and `managerUserId` are not parameters — they are
+   * written `setup` and null — and the organization is derived from the
+   * connection rather than supplied, so this cannot be aimed at another tenant.
+   *
+   * A repeat call with the same profiles returns the location the first call
+   * created (`replayed: true`) and writes nothing. A profile set already split
+   * across two locations is a conflict, not something a retry should resolve.
+   */
+  createAndMapFromIntegration(
+    scope: OrganizationScope,
+    input: CreateAndMapLocationInput,
+  ): Promise<CreateAndMapLocationResult>;
+}
+
+/**
+ * What `createAndMapFromIntegration` gives back.
+ *
+ * `profiles` carries the bound rows so the mapping service can build its result
+ * without a second read — and, more importantly, without a second *write*: the
+ * whole point of the RPC is that the application performs no separate binding
+ * step afterwards.
+ */
+export interface CreateAndMapLocationResult {
+  location: Location;
+  profiles: PlatformProfile[];
+  /** Profiles this call created, as opposed to ones it found and bound. */
+  createdProfileIds: string[];
+  /** True when an earlier identical call had already done the work. */
+  replayed: boolean;
 }
 
 export interface PlatformConnectionRepository {
@@ -603,6 +711,24 @@ export interface MentionRepository {
     profileIds: string[],
   ): Promise<Record<string, number>>;
   /**
+   * Find a mention by the deduplication key a manual capture derives.
+   *
+   * The read half of the capture contract. `mentions_unique_external` is what
+   * actually prevents a duplicate — this exists so the interface can *show*
+   * somebody the review Lia already holds and offer the override, rather than
+   * answering a deliberate act with a constraint violation.
+   *
+   * Scoped by connection and source type, matching the unique constraint
+   * exactly, so a hit here means the insert would collide and a miss means it
+   * would not.
+   */
+  findByExternalId(
+    scope: OrganizationScope,
+    platformConnectionId: string,
+    sourceType: MentionSourceType,
+    externalId: string,
+  ): Promise<Mention | null>;
+  /**
    * Mentions needing analysis work, oldest first.
    *
    * "Needing analysis work" is **no analysis row, or a latest row whose
@@ -737,6 +863,46 @@ export interface ResponseDraftRepository {
     finalText?: string,
   ): Promise<{ draft: ResponseDraft; approval: Approval | null }>;
   listApprovals(scope: OrganizationScope, draftId: string): Promise<Approval[]>;
+  /**
+   * Record that a person posted an approved response themselves.
+   *
+   * The assisted-posting confirmation. Not a publish: Lia sent nothing, saw
+   * nothing, and holds no provider acknowledgement — it is recording somebody's
+   * statement that they carried the approved words to the platform. Every field
+   * that would imply otherwise is written by the adapter rather than supplied:
+   * the method is `manual_external` literally, and `externalResponseId` stays
+   * null, which the database enforces
+   * (`response_drafts_external_id_requires_provider`).
+   *
+   * **Idempotent, and the idempotency is a conditional write rather than a
+   * read-then-write.** The update is guarded on the draft still being
+   * `approved`, so a second click affects no rows and reports
+   * `already_confirmed`. Reading the status first and then updating would be
+   * two statements with a race between them (D24's reasoning), and the race
+   * here would produce two `response.publication_confirmed` events for one act.
+   *
+   * Returns the outcome alongside the draft so a caller can tell a fresh
+   * confirmation from a repeat without comparing timestamps.
+   */
+  confirmPublication(
+    scope: OrganizationScope,
+    draftId: string,
+    confirmedByUserId: string,
+    confirmedAt: string,
+  ): Promise<{ draft: ResponseDraft; outcome: PublicationConfirmationOutcome }>;
+  /**
+   * Withdraw a confirmation somebody made by mistake.
+   *
+   * Returns the draft to `approved` and clears the provenance. Deliberately not
+   * a retraction: nothing was published, so there is nothing to take down — the
+   * record was simply wrong. Guarded on the draft being `published` by
+   * `manual_external`, so a provider publication (which Lia would have
+   * observed) can never be erased through this path.
+   */
+  unconfirmPublication(
+    scope: OrganizationScope,
+    draftId: string,
+  ): Promise<ResponseDraft>;
 }
 
 /**
@@ -1238,12 +1404,204 @@ export interface OnboardingRepository {
   markReadyViewed(scope: OrganizationScope): Promise<OrganizationOnboarding>;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Website review widget                                                       */
+/* -------------------------------------------------------------------------- */
+
+export interface ReviewWidgetRepository {
+  /** Every widget in the organization, for the configuration screen's picker. */
+  list(scope: OrganizationScope): Promise<ReviewWidget[]>;
+  /**
+   * The widget for one location, or null.
+   *
+   * Keyed by location rather than by id because that is the question every
+   * caller actually has — the configuration screen opens on a location, and
+   * `review_widgets_one_per_location` makes the answer singular.
+   */
+  getForLocation(
+    scope: OrganizationScope,
+    locationId: string,
+  ): Promise<ReviewWidget | null>;
+  /**
+   * Create the widget for a location, or update the one that exists.
+   *
+   * Upsert rather than separate create/update because the screen has one save
+   * button and one location, and "does a row exist yet" is not a question the
+   * person pressing it has an opinion about. The service still distinguishes
+   * the two — it reads first, so it can record `review_widget.created` or
+   * `review_widget.updated` rather than one event that means either.
+   *
+   * `publicId` on the input is resolved by the service, never chosen by a
+   * caller: on a create it is freshly issued, and on an update it is the
+   * existing one carried forward. Rotation is its own method for exactly that
+   * reason — it is the one act that changes it.
+   */
+  upsert(
+    scope: OrganizationScope,
+    input: UpsertReviewWidgetInput,
+  ): Promise<ReviewWidget>;
+  /**
+   * Switch the embed on or off, leaving everything else alone.
+   *
+   * Its own method rather than a field on `upsert`, so a customer saving a
+   * theme can never accidentally take their widget dark, and so the write that
+   * changes what a public page shows is always a deliberate call.
+   */
+  setStatus(
+    scope: OrganizationScope,
+    widgetId: string,
+    status: ReviewWidgetStatus,
+  ): Promise<ReviewWidget>;
+  /**
+   * Issue a new public id, invalidating every snippet already published.
+   *
+   * The id is generated by the caller (`generateWidgetPublicId`, which is
+   * server-only) and passed in, so the adapters share one source of randomness
+   * rather than each having their own.
+   */
+  rotatePublicId(
+    scope: OrganizationScope,
+    widgetId: string,
+    publicId: string,
+    rotatedAt: string,
+  ): Promise<ReviewWidget>;
+  /**
+   * Everything an anonymous embed request may read, keyed by the public id.
+   *
+   * **Not organization-scoped, and the only method in this file that is not.**
+   * The rule that every organization-owned read takes an `OrganizationScope`
+   * exists so a missing tenant filter is a type error; this method cannot obey
+   * it, because the caller is a stranger's browser on a restaurant's website
+   * and there is no membership to construct a scope from. `InvitationRepository.preview`
+   * is the existing precedent and carries the same exemption for the same
+   * reason.
+   *
+   * What replaces the scope is the return type. `ReviewWidgetRenderRow` holds
+   * widget configuration and six review fields, and nothing else — no status,
+   * no sentiment, no risk level, no raw payload, no organization id. A caller
+   * cannot widen it, so the anonymous surface is bounded by the type rather
+   * than by care at the call site. Under Supabase it is one `SECURITY DEFINER`
+   * function; under the demo adapter it is the same eligibility predicate the
+   * configuration screen uses.
+   */
+  render(publicId: string): Promise<ReviewWidgetRenderRow | null>;
+}
+
 export interface AuditEventRepository {
   list(scope: OrganizationScope, filter?: AuditEventFilter): Promise<AuditEvent[]>;
   record(scope: OrganizationScope, input: RecordAuditEventInput): Promise<AuditEvent>;
 }
 
 /** The full surface a data adapter must implement. */
+/* -------------------------------------------------------------------------- */
+/* Yelp Assisted                                                               */
+/* -------------------------------------------------------------------------- */
+
+export interface YelpListingSnapshotRepository {
+  /**
+   * Record one successful observation.
+   *
+   * Append-only: there is no update and no delete, because a snapshot is
+   * evidence of what Lia saw at a moment and editing it would make the
+   * occurrence that cites it unexplainable.
+   */
+  record(
+    scope: OrganizationScope,
+    input: CreateYelpListingSnapshotInput,
+  ): Promise<YelpListingSnapshot>;
+  /**
+   * The most recent observation for one listing, or null on a first check.
+   *
+   * Null is the baseline case, and the check service treats it as "record a
+   * snapshot and stop" rather than as an error — a first check has nothing to
+   * compare against and must not manufacture activity out of its own arrival.
+   */
+  latestForProfile(
+    scope: OrganizationScope,
+    profileId: string,
+  ): Promise<YelpListingSnapshot | null>;
+  /** Observation history for one listing, newest first. */
+  listForProfile(
+    scope: OrganizationScope,
+    profileId: string,
+    limit?: number,
+  ): Promise<YelpListingSnapshot[]>;
+}
+
+export interface YelpActivityOccurrenceRepository {
+  /**
+   * Record a change between two observations, or return the one already there.
+   *
+   * Idempotent on `(platformProfileId, fromSnapshotId, toSnapshotId)`, enforced
+   * by `yelp_activity_occurrences_unique_transition`. The adapter absorbs the
+   * unique violation and loads the winning row rather than checking first —
+   * two concurrent checks observing the same transition is exactly the race a
+   * read-then-insert would lose (D24).
+   *
+   * `created` distinguishes a fresh detection from a replay, so only a genuine
+   * first detection writes an audit event and only it is worth notifying about.
+   */
+  record(
+    scope: OrganizationScope,
+    input: RecordYelpActivityInput,
+  ): Promise<{ occurrence: YelpActivityOccurrence; created: boolean }>;
+  get(
+    scope: OrganizationScope,
+    occurrenceId: string,
+  ): Promise<YelpActivityOccurrence | null>;
+  list(
+    scope: OrganizationScope,
+    filter?: YelpActivityOccurrenceFilter,
+  ): Promise<YelpActivityOccurrence[]>;
+  /** How many occurrences are still open, for the integration screen's badge. */
+  countOpen(scope: OrganizationScope): Promise<number>;
+  /**
+   * Close an occurrence, either by naming the review somebody added or by
+   * dismissing it.
+   *
+   * One method rather than two because the write is the same shape and the
+   * database constrains the pairing (`yelp_activity_capture_pairing`): a
+   * `captured` resolution names a mention and a `dismissed` one does not.
+   *
+   * Guarded on the occurrence still being `open`, so two people resolving the
+   * same item do not both succeed — the second gets the first one's row back.
+   */
+  resolve(
+    scope: OrganizationScope,
+    input: ResolveYelpActivityInput,
+  ): Promise<YelpActivityOccurrence>;
+}
+
+/**
+ * A detected change, as the check service hands it over.
+ *
+ * `organizationId` is absent for the reason it is absent from every other write
+ * input: the tenant comes from the caller's verified scope, never the payload.
+ * Note there is no field for a number of new reviews — see the entity's own
+ * doc comment for why that absence is the point.
+ */
+export interface RecordYelpActivityInput {
+  platformProfileId: string;
+  locationId: string | null;
+  fromSnapshotId: string;
+  toSnapshotId: string;
+  detectedAt: string;
+  changeKind: YelpActivityChangeKind;
+  previousReviewCount: number | null;
+  currentReviewCount: number | null;
+  previousRating: number | null;
+  currentRating: number | null;
+}
+
+export interface ResolveYelpActivityInput {
+  occurrenceId: string;
+  /** `captured` must name a mention; `dismissed` must not. */
+  status: Extract<YelpActivityStatus, "captured" | "dismissed">;
+  capturedMentionId: string | null;
+  resolvedByUserId: string;
+  resolvedAt: string;
+}
+
 export interface LiaDataSource {
   readonly kind: "demo" | "supabase";
   organizations: OrganizationRepository;
@@ -1283,6 +1641,12 @@ export interface LiaDataSource {
   automationRuleExecutions: AutomationRuleExecutionRepository;
   /** How Lia is configured to sound. One row per organization. */
   brandVoice: BrandVoiceRepository;
+  /** What Lia observed about a connected Yelp listing, one row per check. */
+  yelpListingSnapshots: YelpListingSnapshotRepository;
+  /** Changes Lia noticed between two observations of a listing. */
+  yelpActivityOccurrences: YelpActivityOccurrenceRepository;
+  /** What Lia publishes on the customer's own website. One per location. */
+  reviewWidgets: ReviewWidgetRepository;
   auditEvents: AuditEventRepository;
 }
 

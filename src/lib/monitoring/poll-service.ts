@@ -2,6 +2,7 @@ import "server-only";
 
 import {
   MAX_ARTICLES_PER_POLL,
+  NON_DISCUSSION_INGEST_FIELDS,
   REJECTION_RETENTION_MS,
   SYNDICATION_WINDOW_MS,
   type MonitoringQuery,
@@ -378,6 +379,10 @@ export async function pollMonitoringQuery(
               publisherName: article.publisherName,
               publisherDomain: article.publisherDomain,
               monitoringQueryId: query.id,
+              // An article is not a threaded discussion. Reader comments under
+              // one are the article-comments connector's subject, not this
+              // one's, and they arrive as their own mentions if they arrive.
+              ...NON_DISCUSSION_INGEST_FIELDS,
             });
 
             // Only counted once storage actually succeeds.

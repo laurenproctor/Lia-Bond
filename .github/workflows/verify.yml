@@ -50,3 +50,40 @@ jobs:
         run: |
           export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
           npm run db:verify-generation
+      # Same arrangement again: the Yelp harness resets first, so it cannot
+      # inherit the generation fixtures. It proves the constraints that keep a
+      # typed review distinguishable from a fetched one, and a user-confirmed
+      # publication distinguishable from a provider-verified one — neither of
+      # which a TypeScript-only review could catch drifting.
+      - name: Run the yelp harness against freshly migrated Postgres
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+          npm run db:verify-yelp
+      # Same arrangement again: the Reddit harness resets first, so it cannot
+      # inherit the generation fixtures, and the race script cleans up its own
+      # throwaway organization whatever happens.
+      - name: Run the reddit harness against freshly migrated Postgres
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+          npm run db:verify-reddit
+      # Tenancy: the composite same-organization foreign keys, the active-manager
+      # trigger, provisioning idempotency, and create-and-map. Includes the
+      # two-session race harness, which is the only thing that can falsify the
+      # claim that each function's insert *is* its idempotency decision — the
+      # sequential checks in tenancy-verification.sql pass against a
+      # read-then-insert implementation too.
+      - name: Run the tenancy harness against freshly migrated Postgres
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+          npm run db:verify-tenancy
+      # And again with the R3 contraction reversed. The rollout is
+      # expand-contract, so production spends real time in a state `supabase db
+      # reset` cannot reproduce — it applies every migration in the directory,
+      # contraction included. Without this step the single most important
+      # rollout assertion (T-26: the currently deployed application still works
+      # after the expansion migrations land) is skipped on every run, and a
+      # guarded section that never executes looks exactly like one that passed.
+      - name: Rehearse the expansion-only rollout state
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
+          npm run db:verify-tenancy-expanded

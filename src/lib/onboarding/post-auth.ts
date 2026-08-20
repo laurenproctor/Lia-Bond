@@ -35,6 +35,15 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
  */
 export const PENDING_ORGANIZATION_METADATA_KEY = "lia_pending_organization";
 
+/**
+ * Where an account with no memberships goes after authenticating.
+ *
+ * Named rather than inlined because it is the answer to a condition, not a
+ * preference: there is exactly one screen in the product that a person with no
+ * organization can use.
+ */
+export const NO_ORGANIZATION_DESTINATION = "/organizations/new";
+
 function readPendingOrganizationName(metadata: unknown): string | null {
   if (metadata === null || typeof metadata !== "object") return null;
   const value = (metadata as Record<string, unknown>)[
@@ -50,11 +59,20 @@ function readPendingOrganizationName(metadata: unknown): string | null {
  *
  * Returns true when it created one. No-ops — and returns false — for anybody
  * who already belongs to an organization, which is what keeps an invited user
- * from ever getting an organization of their own: they joined one, so the
- * membership check below is already satisfied by the time they arrive here.
- * That is the same guarantee `acceptInvitationWithSignUpAction` relies on, and
- * it is deliberately a check on real membership rather than on which form was
- * submitted.
+ * from ever getting an organization of their own *by accident*: they joined
+ * one, so the membership check below is already satisfied by the time they
+ * arrive here. That is the same guarantee `acceptInvitationWithSignUpAction`
+ * relies on, and it is deliberately a check on real membership rather than on
+ * which form was submitted.
+ *
+ * "By accident" is the operative part, and it is narrower than it used to be.
+ * An invitee may now deliberately create an organization of their own from
+ * `/organizations/new`, and should be able to — somebody invited to their
+ * employer's workspace may also run a restaurant of their own. What this guard
+ * prevents is a *second, empty* organization appearing during a confirmation
+ * flow because a stale signup metadata key was still lying around. That is a
+ * different thing from a standing prohibition, and only the first was ever
+ * intended.
  *
  * The onboarding row is created by `provision_organization` itself, in the same
  * transaction — see the migration.
@@ -121,10 +139,18 @@ async function clearPendingOrganization(
  * path. It is honoured whenever setup is finished — somebody following a link
  * to a specific review should arrive at that review, not at the overview.
  *
- * An account belonging to no organization at all falls through to the requested
- * destination rather than to onboarding. There is nothing to onboard: the app
- * shell reports "your account is not a member of any organization yet", which is
- * the accurate thing to say, and a wizard would have no organization to write to.
+ * An account belonging to no organization at all goes to `/organizations/new`.
+ *
+ * This used to fall through to the requested destination, on the reasoning that
+ * "the app shell reports 'your account is not a member of any organization
+ * yet'". It does not, and never did: that sentence is a `DataError` message
+ * thrown inside `(app)/layout.tsx`, and the route error boundary renders a
+ * generic `ErrorState` with a Retry button that can only ever fail again. The
+ * person was told nothing useful and given a control that did nothing.
+ *
+ * Now that an authenticated route exists for creating an organization, the
+ * honest destination is the one that fixes the condition rather than the one
+ * that reports it.
  */
 export async function postAuthDestination(requested: string): Promise<string> {
   const session = await getSession();
@@ -132,7 +158,7 @@ export async function postAuthDestination(requested: string): Promise<string> {
 
   const dataSource = await getDataSource();
   const memberships = await dataSource.organizations.listForUser(session.id);
-  if (memberships.length === 0) return requested;
+  if (memberships.length === 0) return NO_ORGANIZATION_DESTINATION;
 
   return signInDestination(requested);
 }

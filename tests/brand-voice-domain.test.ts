@@ -90,7 +90,29 @@ describe("phrase lists", () => {
         approvedPhrases: ["We appreciate the feedback"],
         prohibitedPhrases: ["we appreciate the feedback"],
       }),
-    ).toThrow(/both/i);
+    ).toThrow(/we appreciate the feedback/i);
+  });
+
+  it("rejects an avoided phrase that phrase-matches inside an approved one", () => {
+    // Not the same string, but the same contradiction: every use of the
+    // approved phrase would break the avoid rule.
+    expect(() =>
+      updateBrandVoiceInputSchema.parse({
+        ...valid,
+        approvedPhrases: ["It really made our day"],
+        prohibitedPhrases: ["made our day"],
+      }),
+    ).toThrow(/made our day/i);
+  });
+
+  it("allows phrases that merely share words", () => {
+    const parsed = updateBrandVoiceInputSchema.parse({
+      ...valid,
+      approvedPhrases: ["We made time for every guest"],
+      prohibitedPhrases: ["made our day"],
+    });
+
+    expect(parsed.prohibitedPhrases).toEqual(["made our day"]);
   });
 
   it("allows both lists to be empty", () => {

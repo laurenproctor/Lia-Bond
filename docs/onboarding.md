@@ -221,7 +221,8 @@ there is no onboarding-only news table, no second validation schema, and no
 parallel write path.
 
 - **Input** is `onboardingNewsMonitoringInputSchema`, a `pick` of the real
-  create schema: name, keywords, exclusions, country, language, enabled. The
+  create schema: name, keywords, exclusions, country, postal code, city,
+  region, language, enabled. The
   advanced fields the wizard never shows get the documented defaults on
   create — `queryType: "brand"`, `locationId: null`, empty publisher lists,
   `DEFAULT_RELEVANCE_THRESHOLD` (0.35), `DEFAULT_POLL_INTERVAL_MINUTES` (240)
@@ -247,9 +248,77 @@ parallel write path.
   input, and the public create action forces `user` regardless of what the
   browser sent.
 - **Prefill** comes from real organization data only: the organization's name
-  as the first keyword, its website host as a one-press suggestion. No
-  fabricated aliases, people, or location names — step 3 has not chosen
-  locations yet, and the wizard does not pretend otherwise.
+  as the monitoring's name (`watchQueryName` — "Ember & Oak watch", the same
+  rule step 3 names its location queries by, shortened on the subject rather
+  than the suffix when the organization name exceeds
+  `MAX_MONITORING_QUERY_NAME_LENGTH`) and as the first keyword, with its
+  website host as a one-press suggestion. No fabricated aliases, people, or
+  location names — step 3 has not chosen locations yet, and the wizard does
+  not pretend otherwise. The country prefills from the organization's own
+  configured language tag ("en-GB" → United Kingdom) when that resolves to a
+  country the picker offers; the locality prefills as empty, for the same
+  reason — there is no address on file yet, and a guess here would become a
+  stated fact about where somebody operates.
+- **Market and local anchor.** The country picker is
+  `MONITORING_COUNTRIES` (`src/lib/geo/countries.ts`) — the 30 codes GNews
+  actually filters on, not a curated subset, because a country in the list
+  that the provider ignores is a promise the product cannot keep. Beneath it,
+  an optional postal code auto-fills a city and region through
+  `lookupPostalCodeAction`. Three rules make this safe to lean on:
+  - The postal field is **disabled until a country is chosen**, and changing
+    the country clears the code and the locality with it. This is where the
+    "a postal code needs a country" invariant lives —
+    `monitoringQuerySchema` deliberately does not enforce it, because a
+    partial update carries no country to check against.
+  - **City and region are always editable**, in every country. The lookup
+    resolves an area rather than a precise town in several markets (a UK
+    outward code, a Canadian forward sortation area), and a country with no
+    lookup coverage at all is still offered — the fields are simply typed in.
+  - **A failed lookup fills nothing.** It says what went wrong in Lia's own
+    words and leaves the fields alone. The provider (Zippopotam) is free and
+    unauthenticated, so it has no SLA and nothing is allowed to depend on it.
+  What is saved changes no behaviour today: only the country reaches a poll.
+  The postal code and locality are stored for the provider upgrade that can
+  search regionally (D71), and the card's own copy says so rather than
+  implying local coverage already works.
+- **There is no Save button.** The panel autosaves through the shared
+  `useAutosave` hook (`src/components/autosave/`, promoted out of brand voice
+  so both surfaces share one implementation): an 800 ms settling window, one
+  request in flight at a time, and the shared `SaveStatus` line saying
+  whether what is on screen is on the server. Fields are never disabled while
+  a save runs, and a failure keeps the edits on screen with a retry.
+  - Client-side validation (a name, at least one keyword) short-circuits
+    before the request, so autosave spends nothing discovering what the
+    server would reject anyway.
+  - Both ways out of the panel — **Done** / the close control, and the step's
+    own **Save and continue** — `flush()` first, so the settling window can
+    never swallow the last edit. A flush that fails keeps the panel open;
+    navigating would discard the input over it.
+  - "Save and continue" with the panel open on **untouched defaults** and
+    nothing yet persisted writes those defaults: with the Save button gone
+    that press is the confirmation of them. Closing the panel untouched is
+    not, and writes nothing.
+  - **Audit volume is managed at the two places it can be.** One
+    configuration session used to be one `monitoring_query.updated` event;
+    under autosave it is one per settled edit, and `audit_events` is
+    append-only by construction, so nothing can be merged after the fact.
+    Two levers, both taken:
+    - **A 2 s settling window** (`SETTLING_MS`) rather than the hook's 800 ms
+      default, which folds the way people actually fill this in — one
+      keyword, then the next — into a single write. The panel can afford the
+      longer wait precisely because every exit flushes: unlike the brand
+      voice screen, the timer is not the only thing standing between an edit
+      and the database, so it is tuned for coalescing rather than for safety.
+    - **No event when no field moved.** `saveOnboardingNewsQuery` records
+      only when the diff is non-empty. Under a Save button a no-op press was
+      at least a decision somebody made; under autosave it is a timer firing,
+      and an entry saying nothing could never be cleaned up. Every event that
+      does survive still carries its real before-and-after, so the chain
+      stays continuous.
+
+    What remains — one event per genuinely distinct edit — is the honest
+    record of what happened, and is the trade already accepted for brand
+    voice autosave.
 - **The summary** on the card (`summarizeNewsMonitoring`,
   `lastSuccessfulNewsPollAt`) is derived from persisted queries and
   `news_poll_runs`: enabled-query count, unique keyword count, language and
@@ -319,6 +388,17 @@ Step 4 reads and writes the **existing** profile through `saveBrandVoice`, the
 same service `/brand-voice` uses. There is no second brand-voice schema and no
 onboarding-only storage, so a voice set here is the voice the product uses.
 
+Edits on step 4 **save themselves**, through the same shared `useAutosave` hook
+and the same `updateBrandVoiceAction` as `/brand-voice`: a slider on release, a
+phrase immediately, then the 800 ms settling window so a burst of edits becomes
+one request, with the shared `SaveStatus` line saying whether what is on screen
+is on the server. Autosave writes the **voice only** — it never advances the
+wizard, because settling step 4 is the person pressing the button, not them
+touching a slider. **Save and continue** flushes anything outstanding first, so
+two writes to the same profile cannot interleave, then completes the step
+exactly as before; a step reached without any autosave landing behaves as it
+always did. A failure keeps the edits on screen.
+
 The two writes — the profile, then the step — are not one transaction (the
 repository interface has none to open). The order is what makes that safe: the
 voice is saved first, so a crash between them leaves the settings persisted and
@@ -333,6 +413,28 @@ customer must not meet a configuration error; and a model's answer would be one
 sample from a distribution shown beside a claim that this is how Lia replies.
 The screen labels it *"Preview — an illustration, not a published reply"* and
 states that the example review is made up.
+
+**The same preview now renders on `/brand-voice`.** It lives in
+`src/lib/brand-voice/preview.ts` — it moved out of `src/lib/onboarding/`, where
+being filed under the wizard was what let the two screens diverge. The settings
+page had shown a placeholder reading *"Available once response drafting
+arrives"*; drafting shipped, which made the sentence false, and the deeper
+problem was that the screen somebody returns to was less capable than the one
+they saw once. Response drafting having arrived does **not** make this module
+redundant: a real draft is a better sample and a worse control, because it
+cannot follow a slider and it fails when no provider is configured.
+
+Three things are shared rather than restated, and each was a way the two could
+drift: the reply text (`buildVoicePreview`), which phrases are flagged
+(`prohibitedPhraseMatchesInPreview`), and the sentence used to flag them
+(`describePreviewConflicts`). The phrase-field hint is shared the same way, as
+`PHRASE_LIMIT_HINT` beside the two limits it quotes — `/brand-voice` used to
+state neither the matching rule nor the caps, revealing the 20-phrase limit only
+by refusing a 21st chip. What is deliberately *not* shared is the chrome:
+onboarding sits outside the app shell on the public-site brand, so each surface
+renders its own markup. `tests/brand-voice-onboarding-alignment.test.ts` pins
+the parity by reading both component sources, because what regressed here was
+never a return value — it was one screen importing something the other did not.
 
 ## 10. Invitation-link behavior
 
@@ -469,7 +571,7 @@ Eight suites, all against the demo adapter and the real source:
 | `onboarding-progress.test.ts` | settlement, reachability, resume, step table, step-1 input schema, offered options |
 | `onboarding-repository.test.ts` | provisioning, transitions, idempotence, completion refusal, cross-organization isolation |
 | `onboarding-routing.test.ts` | signup, invited signup, completed bypass, resume, role-gated diversion, guard shape, ready framing |
-| `onboarding-preview.test.ts` | determinism, no provider, every axis has an effect, phrase handling |
+| `brand-voice-preview.test.ts` | determinism, no provider, every axis has an effect, phrase handling (was `onboarding-preview.test.ts`; renamed with the module, which both screens now share) |
 | `onboarding-ready.test.ts` | quick-win hierarchy end to end, import status from real runs, no percentage field |
 | `onboarding-permissions.test.ts` | permission matrix, RLS policy text, OAuth allowlist, audit vocabulary, no credentials in client code, mock mode |
 | `onboarding-accessibility.test.ts` | `aria-current`, labels, sliders, hidden decoration, the disabled Reddit control's explanation, the configurator's focus and announcement behaviour, heading order, no product palette |
@@ -558,3 +660,36 @@ column list matches the new table's real columns.
     location added later from `/locations` gets no automatic News query —
     the pass is deliberately scoped to the wizard, and later coverage is a
     decision for the News & Media screen.
+
+## Organizations created from inside the product
+
+Setup is no longer only a sign-up flow. `/organizations/new` lets any
+authenticated user create an organization — regardless of their role in any they
+already belong to — and it enters this same wizard at step one, because a
+brand-new organization is a name and nothing else whether it arrived through
+sign-up or through the switcher.
+
+Three things follow, and all three are deliberate:
+
+- **The new organization becomes active immediately.** The creating action
+  writes the selection cookie before returning, so the wizard it hands to is the
+  new organization's own.
+- **Existing organizations are untouched.** Creating one writes nothing to any
+  other organization's onboarding row — pinned by a byte-identical snapshot in
+  `tests/organization-creation.test.ts`, because "still in progress" is a weaker
+  assertion than "unchanged", and advancing `currentStep` would be the same
+  defect in a quieter form.
+- **A double-click creates one organization, not two.** The form carries a
+  request key generated once per mount; a replay returns what the first call
+  created and writes nothing — no second membership, no second onboarding row,
+  no second audit event.
+
+`provisionPendingOrganization`'s membership guard still prevents an invitee from
+picking up a *second, empty* organization during a confirmation flow. That was
+never a standing prohibition on invitees owning an organization, and now that
+there is a deliberate way to create one, the distinction matters: somebody
+invited to their employer's workspace may also run a restaurant of their own.
+
+Adding a location outside the wizard does **not** touch onboarding. That is why
+`createLocationAction` exists separately from `createOnboardingLocationAction`,
+which also completes step 3 and seeds monitoring queries.

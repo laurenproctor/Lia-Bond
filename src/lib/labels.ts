@@ -16,6 +16,9 @@ import type {
   MonitoringQueryType,
   Platform,
   PlatformConnectionStatus,
+  PublicationAttemptStatus,
+  RedditCommunityPostureValue,
+  RedditPollRunKind,
   RecommendedAction,
   ResponseDraftStatus,
   ResponseType,
@@ -183,11 +186,38 @@ export const PLATFORM_CONNECTION_STATUS_LABELS: Record<
   error: "Connection error",
 };
 
+/**
+ * What each location status means, operationally.
+ *
+ * Written down here, beside the labels, because the labels are the only place
+ * most people ever meet these words and a meaning kept somewhere else drifts
+ * from the word within a workflow or two.
+ *
+ * - **setup** — the record exists but the restaurant is not in service yet.
+ *   Excluded from portfolio roll-ups and the comparison card. Every manually
+ *   created and every integration-created location starts here.
+ * - **active** — in service, counted everywhere.
+ * - **review** — an operator flag meaning "watch this one". Counted in
+ *   roll-ups exactly like `active`, because it describes attention rather than
+ *   service.
+ * - **inactive** — retired. Excluded from roll-ups. Every mention, mapping,
+ *   draft, escalation, metric, and audit row is retained, and reactivating
+ *   restores the location with its history intact.
+ *
+ * **No pipeline branches on any of them.** Google review sync, news polling,
+ * analysis, and rule execution are all status-blind, so a retired location goes
+ * on receiving whatever its mapped profiles bring in. That is why `inactive`
+ * reads "Inactive" and not "Paused": pausing is a thing this product does not
+ * do yet, and a label promising it would be the interface lying about the code.
+ * The location screen says so in as many words. When a real pause arrives it
+ * should be its own control covering every pipeline, not a lifecycle value
+ * quietly acquiring a second meaning.
+ */
 export const LOCATION_STATUS_LABELS: Record<LocationStatus, string> = {
   setup: "Onboarding",
   active: "Active",
   review: "Under review",
-  inactive: "Paused",
+  inactive: "Inactive",
 };
 
 export const MEMBERSHIP_ROLE_LABELS: Record<MembershipRole, string> = {
@@ -245,6 +275,8 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "integration.profile_connected": "Profile connected",
   "integration.profile_mapped": "Profile mapped to a location",
   "location.created_from_integration": "Location created from an integration",
+  "location.updated": "Location details updated",
+  "location.status_changed": "Location status changed",
   "integration.disconnected": "Integration disconnected",
   "integration.credentials_revoked": "Credentials revoked",
   // Named for what actually happened. "Revocation failed" is the honest label:
@@ -284,6 +316,39 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "onboarding.team_skipped": "Team invitations skipped",
   "onboarding.completed": "Setup completed",
   "onboarding.ready_viewed": "Workspace ready screen opened",
+  // Yelp Assisted. Every one of these is worded to say what Lia actually did:
+  // it checked a listing, it noticed a counter move, somebody typed a review
+  // in, somebody said they had posted a reply. None of them says "synced",
+  // "imported", or "published".
+  "integration.listing_checked": "Yelp listing checked",
+  "integration.listing_check_failed": "Yelp listing check failed",
+  "yelp_activity.detected": "Yelp review activity detected",
+  "mention.captured_manually": "Review added by hand",
+  "response.publication_confirmed": "Response marked as posted",
+  "response.publication_unconfirmed": "Posted confirmation withdrawn",
+  "reddit_monitor.created": "Reddit monitor created",
+  "reddit_monitor.updated": "Reddit monitor updated",
+  "reddit_monitor.deleted": "Reddit monitor deleted",
+  "reddit_monitor.polled": "Reddit monitor polled",
+  "reddit_monitor.poll_failed": "Reddit poll failed",
+  "reddit_community.decision_recorded": "Community reply policy decided",
+  "reddit_community.review_required": "Community rules changed, needs review",
+  "reddit_content.removed": "Reddit content removed at source",
+  "reddit_content.reconciled": "Reddit content re-verified",
+  "response.published": "Response published",
+  "response.publish_failed": "Response publishing failed",
+  // Not "failed". Lia does not know whether the reply was posted, and saying
+  // it failed would invite exactly the retry this state exists to prevent.
+  "response.publish_reconciled": "Response publishing checked with the platform",
+  "response.retracted": "Response retracted",
+  // Website widget. "Embed code" rather than "public id" throughout: the
+  // customer's word for the thing they pasted into their site is the code, and
+  // the trail is read by them at least as often as by us.
+  "review_widget.created": "Website widget created",
+  "review_widget.updated": "Website widget updated",
+  "review_widget.disabled": "Website widget switched off",
+  "review_widget.enabled": "Website widget switched on",
+  "review_widget.embed_id_rotated": "Website widget embed code regenerated",
 };
 
 /** Sync-run outcomes, as a person would describe them. */
@@ -307,6 +372,7 @@ export const CONNECTION_HEALTH_LABELS: Record<ConnectionHealthStatus, string> = 
   authorization_required: "Reauthorization required",
   insufficient_permissions: "Missing permissions",
   quota_limited: "Rate limited by Google",
+  quota_not_provisioned: "Google API access not granted",
   provider_unavailable: "Google unavailable",
   unknown_error: "Unknown error",
 };
@@ -319,6 +385,48 @@ export const INTEGRATION_CAPABILITY_STATE_LABELS: Record<
   enabled: "Enabled",
   not_configured: "Not configured",
   unavailable: "Unavailable",
+};
+
+/**
+ * Reddit community postures.
+ *
+ * The three non-permissive labels say what a person has to *do*, not what the
+ * database holds. "Unknown" would be accurate and useless — it is the state of
+ * a community nobody has looked at, and the label's job is to say that
+ * somebody has to.
+ */
+export const REDDIT_COMMUNITY_POSTURE_LABELS: Record<
+  RedditCommunityPostureValue,
+  string
+> = {
+  unknown: "Rules not checked",
+  review_required: "Needs a decision",
+  allowed: "Approved for replies",
+  blocked: "Replies blocked",
+};
+
+export const REDDIT_POLL_RUN_KIND_LABELS: Record<RedditPollRunKind, string> = {
+  search: "Post search",
+  thread_refresh: "Thread refresh",
+  deletion_reconcile: "Deletion check",
+};
+
+/**
+ * Publication attempt states.
+ *
+ * `reconciliation_required` deliberately does not read as a failure. Lia does
+ * not know whether the reply was posted, and telling somebody it failed would
+ * invite exactly the retry the state exists to prevent.
+ */
+export const PUBLICATION_ATTEMPT_STATUS_LABELS: Record<
+  PublicationAttemptStatus,
+  string
+> = {
+  pending: "Publishing",
+  succeeded: "Published",
+  failed: "Failed",
+  reconciliation_required: "Checking with Reddit",
+  superseded: "Superseded",
 };
 
 export const MONITORING_QUERY_TYPE_LABELS: Record<MonitoringQueryType, string> = {
@@ -347,4 +455,9 @@ export const CAPABILITY_LABELS: Record<string, string> = {
   canDeleteResponses: "Delete responses",
   requiresApproval: "Human approval required",
   requiresPartnerAccess: "Partner access required",
+  canMatchLocations: "Match listings to locations",
+  // "Assisted posting" rather than "Publish responses (manual)": the second
+  // reading would put the word publish next to a capability that is precisely
+  // not publishing.
+  supportsAssistedPosting: "Assisted posting",
 };

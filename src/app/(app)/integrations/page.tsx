@@ -4,6 +4,8 @@ import { AlertTriangle, ArrowRight, Check, Minus } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
 import { ConnectGoogleForm } from "@/components/integrations/connect-google-form";
 import { NewsEntryCard } from "@/components/integrations/news-entry-card";
+import { ReviewWidgetEntryCard } from "@/components/integrations/review-widget-entry-card";
+import { YelpEntryCard } from "@/components/integrations/yelp-entry-card";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -16,19 +18,26 @@ import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
 import { isGoogleConnectorAvailable } from "@/integrations/registry";
 import { isNewsMonitorAvailable } from "@/news/registry";
+import { isYelpAvailable } from "@/yelp/registry";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
-import { resolvePublishingMode, type PlatformConnection } from "@/domain";
+import {
+  resolvePublishingMode,
+  type PlatformConnection,
+  type PublishingMode,
+} from "@/domain";
 
 export const metadata: Metadata = { title: "Integrations" };
 
-const PUBLISHING_COPY = {
+const PUBLISHING_COPY: Record<PublishingMode, string> = {
   direct: "Lia can publish responses directly.",
+  assisted: "Lia prepares the response; you post it and confirm.",
   manual: "Read-only. Lia prepares the text and a person posts it.",
   unavailable: "No mention access yet.",
-} as const;
+};
 
 const GOOGLE = "google_business_profile";
 const NEWS = "news_media";
+const YELP = "yelp";
 
 function CapabilityList({ connection }: { connection: PlatformConnection }) {
   const entries = Object.entries(connection.capabilities) as [string, boolean][];
@@ -63,9 +72,10 @@ export default async function IntegrationsPage({
   ]);
   const { scope, role } = context;
 
-  const [connections, profiles] = await Promise.all([
+  const [connections, profiles, reviewWidgets] = await Promise.all([
     dataSource.platformConnections.list(scope),
     dataSource.platformProfiles.list(scope),
+    dataSource.reviewWidgets.list(scope),
   ]);
 
   const profileCounts = new Map<string, number>();
@@ -88,6 +98,8 @@ export default async function IntegrationsPage({
   // to work whether or not that row exists yet.
   const newsConnection = connections.find((connection) => connection.platform === NEWS) ?? null;
   const newsAvailable = isNewsMonitorAvailable();
+  const yelpConnection = connections.find((connection) => connection.platform === YELP) ?? null;
+  const yelpAvailable = isYelpAvailable();
 
   return (
     <PageBody>
@@ -157,6 +169,7 @@ export default async function IntegrationsPage({
             const publishing = resolvePublishingMode(connection.capabilities);
             const isGoogle = connection.platform === GOOGLE;
             const isNews = connection.platform === NEWS;
+            const isYelp = connection.platform === YELP;
 
             return (
               <Card key={connection.id}>
@@ -208,12 +221,14 @@ export default async function IntegrationsPage({
                   rather than offering buttons that do nothing.
                 */}
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  {isGoogle || isNews ? (
+                  {isGoogle || isNews || isYelp ? (
                     <Link
                       href={
                         isGoogle
                           ? "/integrations/google-business-profile"
-                          : "/integrations/news-media"
+                          : isYelp
+                            ? "/integrations/yelp"
+                            : "/integrations/news-media"
                       }
                       className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-2.5 text-[13px] font-medium whitespace-nowrap text-gray-700 transition-colors hover:bg-gray-50 hover:text-gray-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
                     >
@@ -239,6 +254,17 @@ export default async function IntegrationsPage({
         creates one.
       */}
       {newsConnection === null ? <NewsEntryCard available={newsAvailable} /> : null}
+
+      {/* Same arrangement as news: Yelp has no connect button of its own, so
+          this card is the only route to the screen that creates the connection. */}
+      {yelpConnection === null ? <YelpEntryCard available={yelpAvailable} /> : null}
+
+      {/* Unconditional, unlike the two above. The website widget has no
+          connection row whose absence this card would be standing in for —
+          it sends reviews out rather than reading them in. */}
+      <ReviewWidgetEntryCard
+        configuredCount={reviewWidgets.filter((widget) => widget.status === "active").length}
+      />
 
       <SectionPlaceholder
         title="Available integrations"

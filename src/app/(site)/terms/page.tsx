@@ -42,7 +42,7 @@ export default function TermsPage() {
         {
           heading: "Billing",
           paragraphs: [
-            "Paid plans are billed monthly per location. You can cancel at any time, effective at the end of the current billing period.",
+            "Paid plans are billed per location, monthly or annually. You can cancel at any time, effective at the end of the current billing period.",
           ],
         },
         {

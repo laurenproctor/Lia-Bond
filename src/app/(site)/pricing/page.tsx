@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { ClosingCta } from "@/components/site/closing-cta";
-import { PricingTier } from "@/components/site/pricing-tier";
+import { PricingBands } from "@/components/site/pricing-bands";
+import { PricingEstimator } from "@/components/site/pricing-estimator";
+import { PricingPlans } from "@/components/site/pricing-plans";
 import { SpeechBubble } from "@/components/site/speech-bubble";
 import {
   Eyebrow,
@@ -9,59 +11,17 @@ import {
   Section,
   SectionHeading,
 } from "@/components/site/section";
+import {
+  ANNUAL_DISCOUNT_LABEL,
+  ANNUAL_DISCOUNT_PERCENT,
+  ANNUAL_MONTHS_BILLED,
+} from "@/lib/site/content/pricing";
 
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Per location, billed monthly, no long contracts. Start with Google reviews and add platforms as you grow.",
+    "Per location, and the rate falls with every band you cross. From $59 for one location down to $34 each at scale — pay annually and two months are free.",
 };
-
-const TIERS = [
-  {
-    name: "Single location",
-    blurb: "For independent hotels, restaurants, and clinics.",
-    price: "$149",
-    priceNote: "per location, per month",
-    ctaLabel: "Get started",
-    ctaHref: "/sign-up",
-    features: [
-      "Google review monitoring",
-      "AI-assisted response drafts",
-      "Human review on sensitive replies",
-      "Weekly reputation report",
-    ],
-  },
-  {
-    name: "Growth",
-    blurb: "For multi-location brands and groups.",
-    price: "$129",
-    priceNote: "per location, per month · volume pricing",
-    ctaLabel: "Get started",
-    ctaHref: "/sign-up",
-    featured: true,
-    features: [
-      "Everything in single location",
-      "All review platforms connected",
-      "Brand voice and escalation rules",
-      "Monthly insights summary",
-      "Priority support",
-    ],
-  },
-  {
-    name: "Brand",
-    blurb: "For agencies and large multi-brand groups.",
-    price: "Custom",
-    priceNote: "tailored to your portfolio",
-    ctaLabel: "Talk to us",
-    ctaHref: "/contact",
-    features: [
-      "Everything in growth",
-      "Dedicated reputation strategist",
-      "Custom workflows and approvals",
-      "SSO and role-based access",
-    ],
-  },
-] as const;
 
 /**
  * The FAQ answers are load-bearing marketing claims, so each one is checked
@@ -75,6 +35,11 @@ const TIERS = [
  */
 const FAQS = [
   {
+    question: "How does per-location pricing work?",
+    answer:
+      "Each location is priced at the band it falls into, the way tax brackets work. Adding an eleventh location does not reprice the first ten — it is charged at the lower band, and so is every location after it.",
+  },
+  {
     question: "Does Lia post replies automatically?",
     answer:
       "No. Lia drafts responses, but nothing goes public until a person approves it. Sensitive reviews are always held for review first.",
@@ -82,7 +47,7 @@ const FAQS = [
   {
     question: "Which platforms do you support?",
     answer:
-      "Google Business Profile is core, with Tripadvisor, Yelp, Trustpilot, Facebook, and Reddit available. News coverage and supported article comments are monitored too. We add platforms on request.",
+      "Google Business Profile is core, with Yelp, Trustpilot, Facebook, and Reddit available. News coverage and supported article comments are monitored too. We add platforms on request.",
   },
   {
     question: "How long does setup take?",
@@ -90,9 +55,13 @@ const FAQS = [
       "Most teams are live in an afternoon. We connect your profiles, import your brand voice, and tune escalation rules with you.",
   },
   {
+    question: "What does annual billing save?",
+    answer: `Paying for the year up front is charged at ${ANNUAL_MONTHS_BILLED} months rather than 12 — ${ANNUAL_DISCOUNT_LABEL}, about ${ANNUAL_DISCOUNT_PERCENT}% off, at every band. The saving applies to every location you run, so it grows with the group.`,
+  },
+  {
     question: "Is there a contract?",
     answer:
-      "No long commitment. Billing is monthly per location, and you can cancel any time without penalty.",
+      "No long commitment. Choose monthly billing and cancel any time without penalty; choose annual and you are committing to the year you have paid for, which is where the discount comes from.",
   },
 ] as const;
 
@@ -122,23 +91,42 @@ export default function PricingPage() {
           Pricing that fits how you run.
         </PageHeading>
         <Lede className="max-w-[560px]">
-          Per location, billed monthly, no long contracts. Start with Google
-          reviews and add platforms as you grow.
+          Per location, monthly or annual, no long contracts. The rate falls
+          with every band you cross, you only pay the lower rate on the
+          locations that reach it, and paying for the year up front is{" "}
+          {ANNUAL_DISCOUNT_LABEL}.
         </Lede>
       </header>
 
       <div className="mx-auto w-full max-w-[1200px] px-[clamp(24px,6vw,106px)] pt-[clamp(20px,3vw,32px)] pb-[clamp(40px,5vw,56px)]">
-        <div className="grid grid-cols-1 items-stretch gap-6 lg:grid-cols-3">
-          {TIERS.map((tier) => (
-            <PricingTier key={tier.name} {...tier} />
-          ))}
-        </div>
+        <PricingPlans />
         <p className="mt-6.5 text-center text-[13.5px] text-site-muted">
           Launch pricing, locked in for your first year. Cancel anytime.
         </p>
       </div>
 
       <Section tinted>
+        <SectionHeading className="mb-3 text-center">
+          What each location costs.
+        </SectionHeading>
+        <p className="mx-auto mb-[clamp(28px,4vw,44px)] max-w-[620px] text-center text-[15px] leading-[1.6] text-site-body">
+          Locations are priced in bands. Every location is charged at the rate
+          of the band it lands in, so the price per location drops as the group
+          grows — and the annual rate is {ANNUAL_MONTHS_BILLED} months of it,
+          not 12.
+        </p>
+        <div className="mx-auto max-w-[760px]">
+          <PricingBands />
+          {/* The worked example is interactive rather than fixed: the discount
+              is a dollar figure that depends on the size of the group, so the
+              reader picks their own size instead of reading someone else's. */}
+          <div className="mt-6">
+            <PricingEstimator />
+          </div>
+        </div>
+      </Section>
+
+      <Section>
         <div className="mx-auto max-w-[1000px]">
           <SectionHeading className="mb-[clamp(32px,4vw,48px)] text-center">
             Questions, answered.

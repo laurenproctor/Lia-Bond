@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { activationProblems } from "@/lib/rules/readiness";
+import { RulePlatformBadges } from "@/components/rules/rule-platform-badges";
 import { ruleSentence } from "@/lib/rules/sentence";
 import type {
   AutomationRule,
@@ -30,8 +31,15 @@ export interface RuleBuilderProps {
   locations: LocationOption[];
   /** manage-holder AND rule not active/archived. False renders every control read-only. */
   editable: boolean;
-  /** Template instantiation via `/rules/new?template=<id>`. Ignored in edit mode. */
+  /**
+   * Template instantiation via `/rules/new?template=<id>`. Ignored in edit
+   * mode. Read once, at mount — the new-rule page keys this component on the
+   * template id so a different template arrives as a fresh mount rather than
+   * as a prop change this component would have to reconcile.
+   */
   initialConfig?: AutomationRuleConfig;
+  /** Name of the template `initialConfig` came from, for the seeded-from note. */
+  templateName?: string | null;
 }
 
 const FIELD_CLASS =
@@ -81,7 +89,7 @@ function moveItem<T>(items: T[], index: number, delta: number): T[] {
  * they are about to save without submitting first.
  */
 export function RuleBuilder(props: RuleBuilderProps) {
-  const { mode, rule, locations, editable } = props;
+  const { mode, rule, locations, editable, templateName = null } = props;
   const router = useRouter();
   const nameId = useId();
   const descriptionId = useId();
@@ -212,6 +220,13 @@ export function RuleBuilder(props: RuleBuilderProps) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      {mode === "create" && templateName ? (
+        <p className="rounded-lg border border-purple-600/20 bg-purple-50 px-3 py-2 text-[13px] text-gray-950">
+          Filled in from the <span className="font-medium">{templateName}</span>{" "}
+          template. Everything below is editable — adjust it and save it as a draft.
+        </p>
+      ) : null}
+
       <Card>
         <CardHeader
           title="Details"
@@ -357,8 +372,20 @@ export function RuleBuilder(props: RuleBuilderProps) {
         ) : null}
       </Card>
 
+      {/*
+        The plain-language sentence and the platform scope are the same
+        question asked two ways — "what did I just build?" — so they share a
+        card. Both recompute from `conditions` as it is edited, which is the
+        point of putting the badges here rather than only on the saved rule:
+        adding a `source_type is google_review` condition narrows this from
+        "All platforms" the moment it is chosen, before anything is saved.
+      */}
       <Card className="bg-gray-50">
         <p className="text-[13px] text-gray-700">{sentence}</p>
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <span className="text-[12.5px] text-gray-500">Affects</span>
+          <RulePlatformBadges conditions={conditions} />
+        </div>
       </Card>
 
       <Card>

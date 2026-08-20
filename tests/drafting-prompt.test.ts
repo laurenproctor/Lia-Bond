@@ -71,6 +71,7 @@ const CONTEXT: DraftingPromptContext = {
     confidence: 40,
     hospitality: 70,
     toneNotes: "Keep it upbeat and specific.",
+    preferredPhrases: ["we'd love to welcome you back"],
     bannedPhrases: ["we apologize for any inconvenience"],
     signOff: "The Lia Bistro Team",
   },
@@ -97,6 +98,7 @@ describe("renderDraftingPrompt", () => {
     expect(user).toContain(String(CONTEXT.voice.confidence));
     expect(user).toContain(String(CONTEXT.voice.hospitality));
     expect(user).toContain(CONTEXT.voice.toneNotes!);
+    expect(user).toContain(CONTEXT.voice.preferredPhrases[0]!);
     expect(user).toContain(CONTEXT.voice.bannedPhrases[0]!);
     expect(user).toContain(CONTEXT.voice.signOff!);
   });
@@ -181,6 +183,7 @@ describe("renderDraftingPrompt", () => {
         confidence: 50,
         hospitality: 50,
         toneNotes: null,
+        preferredPhrases: [],
         bannedPhrases: [],
         signOff: null,
       },
@@ -220,7 +223,7 @@ describe("hashRendered", () => {
 
 describe("version identifiers", () => {
   it("pins the current prompt and output schema versions", () => {
-    expect(DRAFTING_PROMPT_VERSION).toBe("drafting@2026-08-12");
+    expect(DRAFTING_PROMPT_VERSION).toBe("drafting@2026-08-13");
     expect(DRAFTING_OUTPUT_SCHEMA_VERSION).toBe("draft-output@1");
   });
 });
@@ -243,8 +246,13 @@ describe("version identifiers", () => {
  * prints, and paste it in as the new `RECORDED_TEMPLATE_HASH`.
  */
 describe("template pin", () => {
+  // Bumped with `drafting@2026-08-13`, which made two changes to the voice
+  // block: the banned-phrase label now states the phrase-matching rule so the
+  // model is held to the same rule the checker applies
+  // (`src/domain/entities/phrase-match.ts`), and `voicePreferredPhrases*` was
+  // added so the "use these phrases" list reaches drafting at all.
   const RECORDED_TEMPLATE_HASH =
-    "43aa33fcb882088e0fd25f159208dccedf60a068ff0ba07d454f6115b4d3a377";
+    "66ff539a3aa0b0a4c8a40813c2e7831d4224830e3e06c823c04bed00ab7b6f19";
 
   it("matches the recorded hash of the version-pinned template constants", () => {
     const actual = hashRendered(DRAFTING_PROMPT_VERSION + DRAFTING_TEMPLATE_CONSTANTS.join(""));

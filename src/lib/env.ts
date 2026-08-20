@@ -65,6 +65,21 @@ const newsModeSchema = z.enum(["live", "mock"]);
 export type NewsMode = z.infer<typeof newsModeSchema>;
 
 /**
+ * Which Yelp provider is in play.
+ *
+ * Same two words as everywhere else, refused in production for the same
+ * reason — but the fabrication this one guards against is worth naming, because
+ * it does not look like fabrication. The mock hands out a review count and a
+ * rating, and those two numbers are the *entire* evidence base for "review
+ * activity detected". A production deployment quietly serving mock counters
+ * would not show a customer a fake review; it would tell them a real review had
+ * appeared on their real listing and ask them to go and find it. There is
+ * nothing on the screen at that point that could give the lie away.
+ */
+const yelpModeSchema = z.enum(["live", "mock"]);
+export type YelpMode = z.infer<typeof yelpModeSchema>;
+
+/**
  * Which mode the rules engine runs in.
  *
  * Execution changes what the product does to customer data without a person
@@ -77,6 +92,73 @@ export type NewsMode = z.infer<typeof newsModeSchema>;
  */
 const rulesExecutionModeSchema = z.enum(["off", "dry_run", "apply"]);
 export type RulesExecutionMode = z.infer<typeof rulesExecutionModeSchema>;
+
+/**
+ * Which Reddit implementation is in play.
+ *
+ * Same two words as everywhere else, refused in production for the same
+ * reason: fabricated public discussion about a restaurant is worse than an
+ * honest "Reddit is not configured".
+ */
+const redditModeSchema = z.enum(["live", "mock"]);
+export type RedditMode = z.infer<typeof redditModeSchema>;
+
+/**
+ * How far Reddit is turned on for this deployment.
+ *
+ * Separate from the mode, because "the connector works" and "we are permitted
+ * to use it" are different facts about Reddit in a way they are not about
+ * Google or GNews. Reddit grants commercial API access by contract, so a
+ * deployment can hold a valid OAuth client and still have no right to call
+ * anything — and the right to *read* and the right to *post on a customer's
+ * behalf* are negotiated separately.
+ *
+ * `off` calls nothing. `read_only` discovers, refreshes, and analyses. Only
+ * `read_write` may ever reach `POST /api/comment`, and only then behind a
+ * named human approval. Absence means `off`, following `RULES_EXECUTION_MODE`
+ * rather than the mode enums: this decides whether Lia touches a live public
+ * forum, so absence of configuration must mean absence of the behavior.
+ */
+const redditRolloutStageSchema = z.enum(["off", "read_only", "read_write"]);
+export type RedditRolloutStage = z.infer<typeof redditRolloutStageSchema>;
+
+/**
+ * Whether the signed terms permit running a model over Reddit content.
+ *
+ * Its own switch rather than something implied by `read_write`, because the
+ * two are genuinely separable: an agreement can allow display to a customer's
+ * team and withhold AI inference, and Lia must be able to ship monitoring
+ * under those terms without also shipping drafting. Fails closed — anything
+ * other than the recorded word means no inference.
+ */
+const redditAiInferenceSchema = z.enum(["permitted", "not_permitted"]);
+
+/**
+ * Reddit's requested user-agent shape:
+ * `<platform>:<app id>:<version> (by /u/<username>)`.
+ *
+ * Validated rather than trusted because a generic, shared, or absent agent is
+ * throttled far harder than an identified one — so a malformed value does not
+ * fail, it degrades, and it degrades as a 429 in production rather than as a
+ * startup error anybody would notice.
+ */
+const REDDIT_USER_AGENT_PATTERN =
+  /^[a-z]+:[A-Za-z0-9][A-Za-z0-9._-]*:\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.]+)? \(by \/u\/[A-Za-z0-9_-]{3,20}\)$/;
+
+/**
+ * The Gate 0 marker: `YYYY-MM-DD:<reference>`.
+ *
+ * Dated rather than free text for two reasons. It cannot be satisfied by
+ * typing "approved", which is the failure mode a bare boolean invites; and the
+ * retention schedule needs a date to count from, so the one value that records
+ * "Reddit agreed" also records when.
+ *
+ * Not a secret, and not a security boundary — an operator who wants to lie to
+ * this variable can. It is here so that turning Reddit on is a deliberate act
+ * that names the agreement permitting it, rather than a side effect of pasting
+ * in a client id.
+ */
+const REDDIT_APPROVAL_REF_PATTERN = /^\d{4}-\d{2}-\d{2}:[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const envSchema = z
   .object({
@@ -131,6 +213,22 @@ const envSchema = z
     /** Shared secret the scheduler presents so the poll route cannot be hit by anyone else. */
     CRON_SECRET: z.string().min(16).optional(),
 
+    /* Yelp Assisted. Server-only, and the key is Lia's rather than a tenant's. */
+    YELP_API_KEY: z.string().min(1).optional(),
+    LIA_YELP_MODE: yelpModeSchema.optional(),
+    /**
+     * Listing checks one scheduled sweep may make.
+     *
+     * Yelp meters per API key and the key is shared by every tenant, so this is
+     * a Lia-level resource enforced above the tenant loop — the same position
+     * D85 put the news budget in, for the same reason: one organization with
+     * forty connected listings can otherwise exhaust the day for everyone.
+     * Coerced because every environment variable is a string, and required
+     * positive so a misconfigured "0" fails at startup rather than silently
+     * disabling every check.
+     */
+    YELP_MAX_CHECKS_PER_SWEEP: z.coerce.number().int().positive().optional(),
+
     /* Rules execution. Server-only. No default here: see `resolveRulesExecutionMode`. */
     RULES_EXECUTION_MODE: rulesExecutionModeSchema.optional(),
     /** Comma-separated org ids permitted to run rules while this rolls out. */
@@ -145,6 +243,32 @@ const envSchema = z
     RULES_MAX_ACTIONS_PER_SWEEP: z.coerce.number().int().positive().optional(),
     RULES_MAX_RULES_PER_MENTION: z.coerce.number().int().positive().optional(),
     RULES_EXECUTION_BUDGET_MS: z.coerce.number().int().positive().optional(),
+
+    /* Reddit monitoring. Server-only, every one of them. */
+    REDDIT_CLIENT_ID: z.string().min(10).optional(),
+    REDDIT_CLIENT_SECRET: z.string().min(10).optional(),
+    /** Must match the single redirect URI registered on the Reddit app exactly. */
+    REDDIT_OAUTH_REDIRECT_URI: z.url().optional(),
+    REDDIT_USER_AGENT: z
+      .string()
+      .regex(
+        REDDIT_USER_AGENT_PATTERN,
+        "Use Reddit's shape: <platform>:<app id>:<version> (by /u/<username>)",
+      )
+      .optional(),
+    LIA_REDDIT_MODE: redditModeSchema.optional(),
+    /** No default here: see `resolveRedditDeployment`. Absence means `off`. */
+    REDDIT_ROLLOUT_STAGE: redditRolloutStageSchema.optional(),
+    /** Comma-separated org ids permitted to use Reddit while this rolls out. */
+    REDDIT_ORG_ALLOWLIST: z.string().optional(),
+    REDDIT_ACCESS_APPROVAL_REF: z
+      .string()
+      .regex(
+        REDDIT_APPROVAL_REF_PATTERN,
+        "Use YYYY-MM-DD:<reference> naming the recorded approval",
+      )
+      .optional(),
+    REDDIT_AI_INFERENCE: redditAiInferenceSchema.optional(),
 
     /** 32 bytes, base64 / base64url / hex. Encrypts stored OAuth credentials. */
     TOKEN_ENCRYPTION_KEY: z.string().min(32).optional(),
@@ -184,6 +308,20 @@ const envSchema = z
       message: "LIA_NEWS_MODE=mock is refused in production",
       path: ["LIA_NEWS_MODE"],
     },
+  )
+  .refine(
+    (value) => !(value.LIA_YELP_MODE === "mock" && value.NODE_ENV === "production"),
+    {
+      message: "LIA_YELP_MODE=mock is refused in production",
+      path: ["LIA_YELP_MODE"],
+    },
+  )
+  .refine(
+    (value) => !(value.LIA_REDDIT_MODE === "mock" && value.NODE_ENV === "production"),
+    {
+      message: "LIA_REDDIT_MODE=mock is refused in production",
+      path: ["LIA_REDDIT_MODE"],
+    },
   );
 
 export type Env = z.infer<typeof envSchema>;
@@ -211,7 +349,19 @@ function readEnv(): Env {
     LIA_AI_MODE: process.env.LIA_AI_MODE || undefined,
     LIA_ANALYSIS_BATCH_SIZE: process.env.LIA_ANALYSIS_BATCH_SIZE || undefined,
     GNEWS_API_KEY: process.env.GNEWS_API_KEY || undefined,
+    YELP_API_KEY: process.env.YELP_API_KEY || undefined,
+    LIA_YELP_MODE: process.env.LIA_YELP_MODE || undefined,
+    YELP_MAX_CHECKS_PER_SWEEP: process.env.YELP_MAX_CHECKS_PER_SWEEP || undefined,
     LIA_NEWS_MODE: process.env.LIA_NEWS_MODE || undefined,
+    REDDIT_CLIENT_ID: process.env.REDDIT_CLIENT_ID || undefined,
+    REDDIT_CLIENT_SECRET: process.env.REDDIT_CLIENT_SECRET || undefined,
+    REDDIT_OAUTH_REDIRECT_URI: process.env.REDDIT_OAUTH_REDIRECT_URI || undefined,
+    REDDIT_USER_AGENT: process.env.REDDIT_USER_AGENT || undefined,
+    LIA_REDDIT_MODE: process.env.LIA_REDDIT_MODE || undefined,
+    REDDIT_ROLLOUT_STAGE: process.env.REDDIT_ROLLOUT_STAGE || undefined,
+    REDDIT_ORG_ALLOWLIST: process.env.REDDIT_ORG_ALLOWLIST || undefined,
+    REDDIT_ACCESS_APPROVAL_REF: process.env.REDDIT_ACCESS_APPROVAL_REF || undefined,
+    REDDIT_AI_INFERENCE: process.env.REDDIT_AI_INFERENCE || undefined,
     CRON_SECRET: process.env.CRON_SECRET || undefined,
     RULES_EXECUTION_MODE: process.env.RULES_EXECUTION_MODE || undefined,
     RULES_EXECUTION_ORG_ALLOWLIST:
@@ -535,6 +685,247 @@ export function resolveNewsMode(): NewsMode | "unconfigured" {
 
   if (env.LIA_NEWS_MODE === "live" && env.GNEWS_API_KEY) return "live";
   return "unconfigured";
+}
+
+/* -------------------------------------------------------------------------- */
+/* Yelp Assisted                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which Yelp provider this process should use.
+ *
+ * The news rule rather than the Google one: a key alone does not imply live.
+ * Google's mode can be inferred from a configured OAuth client because
+ * possessing that client *is* the grant. A Yelp API key is not: the Places
+ * plan a key belongs to decides which endpoints answer, and an operator can
+ * hold a valid key whose plan does not cover business matching at all. Making
+ * `live` an explicit statement means turning Yelp on is a decision somebody
+ * took rather than a side effect of pasting in a credential.
+ */
+export function resolveYelpMode(): YelpMode | "unconfigured" {
+  if (env.LIA_YELP_MODE === "mock") {
+    // Belt and braces: the schema already refuses this combination, but this
+    // is the branch that would serve fabricated review counts on a real
+    // restaurant's listing, so it re-checks rather than trusts.
+    if (env.NODE_ENV === "production") {
+      throw new ConfigurationError(
+        "LIA_YELP_MODE=mock cannot be used in production.",
+        ["LIA_YELP_MODE"],
+      );
+    }
+    return "mock";
+  }
+
+  if (env.LIA_YELP_MODE === "live" && env.YELP_API_KEY) return "live";
+  return "unconfigured";
+}
+
+/**
+ * The Yelp API key, or a configuration error naming what is missing.
+ *
+ * Read at call time rather than at module load, and returned rather than held,
+ * so the only place a key exists in memory is inside the request that uses it.
+ * `next build` prerenders with `NODE_ENV=production` and no secrets, so
+ * requiring this at import would break the build for everybody.
+ */
+export function requireYelpApiKey(): string {
+  if (!env.YELP_API_KEY) {
+    throw new ConfigurationError("Yelp is not configured on this server.", [
+      "YELP_API_KEY",
+    ]);
+  }
+
+  return env.YELP_API_KEY;
+}
+
+/**
+ * Listing checks one scheduled sweep may make.
+ *
+ * Conservative by default. Yelp's Places allowance is a daily figure against a
+ * key shared by every tenant, and a sweep that spent it all in one pass would
+ * leave the interactive path — somebody sitting in the connect flow waiting for
+ * candidates — with nothing. The remaining headroom is deliberately not
+ * modelled here: this bounds the *scheduled* half, and interactive searches are
+ * what the leftover exists for.
+ */
+export const DEFAULT_YELP_MAX_CHECKS_PER_SWEEP = 50;
+
+export function yelpMaxChecksPerSweep(): number {
+  return env.YELP_MAX_CHECKS_PER_SWEEP ?? DEFAULT_YELP_MAX_CHECKS_PER_SWEEP;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Reddit monitoring                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which Reddit connector this process should use.
+ *
+ * The news rule rather than the Google one: `live` must be set explicitly
+ * *and* the OAuth client must be complete. Credentials alone do not imply
+ * live, because an operator can hold Reddit credentials for weeks while the
+ * commercial agreement is still in review — the one integration here where
+ * having the secret and being allowed to use it are separate events.
+ */
+export function resolveRedditMode(): RedditMode | "unconfigured" {
+  if (env.LIA_REDDIT_MODE === "mock") {
+    // Belt and braces: the schema already refuses this combination, but this
+    // is the branch that would serve fabricated public discussion about a real
+    // restaurant, so it re-checks rather than trusts.
+    if (env.NODE_ENV === "production") {
+      throw new ConfigurationError(
+        "LIA_REDDIT_MODE=mock cannot be used in production.",
+        ["LIA_REDDIT_MODE"],
+      );
+    }
+    return "mock";
+  }
+
+  if (env.LIA_REDDIT_MODE === "live" && isRedditOAuthConfigured()) return "live";
+  return "unconfigured";
+}
+
+export function isRedditOAuthConfigured(): boolean {
+  return Boolean(
+    env.REDDIT_CLIENT_ID &&
+      env.REDDIT_CLIENT_SECRET &&
+      env.REDDIT_OAUTH_REDIRECT_URI &&
+      env.REDDIT_USER_AGENT,
+  );
+}
+
+/**
+ * Why a requested rollout stage was not granted.
+ *
+ * Named rather than boolean because the operator's next action is different
+ * for each: paste a credential, generate an encryption key, or go and finish a
+ * conversation with Reddit that may take weeks.
+ */
+export type RedditDeploymentBlocker =
+  | "deployment_not_configured"
+  | "credential_encryption_missing"
+  | "approval_not_recorded";
+
+export interface RedditDeployment {
+  /** What the operator asked for. */
+  readonly requestedStage: RedditRolloutStage;
+  /** What this deployment may actually do, after every prerequisite is checked. */
+  readonly effectiveStage: RedditRolloutStage;
+  readonly mode: RedditMode | "unconfigured";
+  /** Empty when `effectiveStage` equals `requestedStage`. */
+  readonly blockers: readonly RedditDeploymentBlocker[];
+  /** Whether the recorded terms permit running a model over Reddit content. */
+  readonly aiInferencePermitted: boolean;
+  /** The Gate 0 marker, or null in mock mode where none is required. */
+  readonly approvalRef: string | null;
+}
+
+/**
+ * What this deployment is permitted to do with Reddit.
+ *
+ * Resolved rather than thrown, and downgraded rather than refused, because
+ * this has to be answerable during `next build` — which prerenders with
+ * `NODE_ENV=production` and no secrets — and because the integrations screen
+ * has to explain the gap. An operator whose approval marker is missing needs
+ * to read that sentence, not a stack trace.
+ *
+ * An unmet prerequisite falls all the way to `off`, never part-way to
+ * `read_only`. Reddit's agreement governs reading as much as posting, so
+ * degrading an unapproved `read_write` deployment to `read_only` would keep
+ * making the calls Reddit has not agreed to and stop only the ones it has.
+ */
+export function resolveRedditDeployment(): RedditDeployment {
+  const requestedStage = env.REDDIT_ROLLOUT_STAGE ?? "off";
+  const mode = resolveRedditMode();
+  // Reported whatever the stage, because they are facts about the agreement
+  // rather than about the rollout. Folding them into the `off` branch would
+  // make an unconfigured deployment claim the contract forbids inference, when
+  // what it actually knows is that nobody has turned Reddit on. Callers
+  // intersect these with `effectiveStage`; that is the capability model's job,
+  // not this function's.
+  const contract = {
+    aiInferencePermitted:
+      mode === "mock" || env.REDDIT_AI_INFERENCE === "permitted",
+    approvalRef: env.REDDIT_ACCESS_APPROVAL_REF ?? null,
+  };
+
+  // Somebody who has not asked for Reddit is not handed a list of things they
+  // failed to configure.
+  if (requestedStage === "off") {
+    return { requestedStage, effectiveStage: "off", mode, blockers: [], ...contract };
+  }
+
+  const blockers: RedditDeploymentBlocker[] = [];
+  if (mode === "unconfigured") blockers.push("deployment_not_configured");
+  // Required in mock mode too: the mock seals its fake tokens through the same
+  // vault, and running the real encryption path locally is what catches a
+  // broken one before production does.
+  if (!env.TOKEN_ENCRYPTION_KEY) blockers.push("credential_encryption_missing");
+  // Not asked of the mock. Fabricated threads are not Reddit's data, and
+  // requiring the marker here would lock out exactly the people the mock
+  // exists for — everyone still waiting on approval.
+  if (mode === "live" && !env.REDDIT_ACCESS_APPROVAL_REF) {
+    blockers.push("approval_not_recorded");
+  }
+
+  return {
+    requestedStage,
+    effectiveStage: blockers.length > 0 ? "off" : requestedStage,
+    mode,
+    blockers,
+    ...contract,
+  };
+}
+
+/**
+ * Organization ids permitted to use Reddit while this feature rolls out.
+ *
+ * Absent means empty — no organization is admitted by default, the same
+ * fail-closed posture as `rulesExecutionAllowlist`.
+ */
+export function redditOrganizationAllowlist(): string[] {
+  if (!env.REDDIT_ORG_ALLOWLIST) return [];
+  return env.REDDIT_ORG_ALLOWLIST.split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+}
+
+export interface RedditOAuthConfig {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  /** Reddit throttles on this, so it travels with the credential, not beside it. */
+  userAgent: string;
+}
+
+/** The OAuth client, or a configuration error naming what is missing. */
+export function requireRedditOAuthConfig(): RedditOAuthConfig {
+  const missing = [
+    !env.REDDIT_CLIENT_ID && "REDDIT_CLIENT_ID",
+    !env.REDDIT_CLIENT_SECRET && "REDDIT_CLIENT_SECRET",
+    !env.REDDIT_OAUTH_REDIRECT_URI && "REDDIT_OAUTH_REDIRECT_URI",
+    !env.REDDIT_USER_AGENT && "REDDIT_USER_AGENT",
+  ].filter((name): name is string => typeof name === "string");
+
+  if (
+    missing.length > 0 ||
+    !env.REDDIT_CLIENT_ID ||
+    !env.REDDIT_CLIENT_SECRET ||
+    !env.REDDIT_OAUTH_REDIRECT_URI ||
+    !env.REDDIT_USER_AGENT
+  ) {
+    throw new ConfigurationError(
+      "Reddit is not configured on this server.",
+      missing,
+    );
+  }
+
+  return {
+    clientId: env.REDDIT_CLIENT_ID,
+    clientSecret: env.REDDIT_CLIENT_SECRET,
+    redirectUri: env.REDDIT_OAUTH_REDIRECT_URI,
+    userAgent: env.REDDIT_USER_AGENT,
+  };
 }
 
 /* -------------------------------------------------------------------------- */

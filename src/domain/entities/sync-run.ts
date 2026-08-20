@@ -21,8 +21,21 @@ import {
  * cannot start; see `platform_sync_runs_one_active` in the migration.
  */
 
-/** What was synchronised. Named so posts and questions can follow later. */
-export const syncResourceSchema = z.enum(["reviews"]);
+/**
+ * What was synchronised. Named so posts and questions can follow later.
+ *
+ * `listing_activity` is Yelp Assisted's check, and the name is chosen to be
+ * unmistakable next to `reviews`. Nothing is synchronised on that path: Lia
+ * reads a listing's review count and rating and compares them with the last
+ * two numbers it saw. Calling it `reviews` would have let a Yelp check and a
+ * Google review import share a lock, a history view, and a set of counters
+ * whose names (`created`, `updated`, `unchanged`) mean nothing here.
+ *
+ * The `resource` column existed from workflow 03 precisely so a connection
+ * could later check something other than reviews, with its own lock and its own
+ * history — this is the first use of that room.
+ */
+export const syncResourceSchema = z.enum(["reviews", "listing_activity"]);
 export type SyncResource = z.infer<typeof syncResourceSchema>;
 
 /**

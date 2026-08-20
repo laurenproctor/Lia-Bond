@@ -45,13 +45,14 @@ export default function HomePage() {
           Know what people are saying. Respond when it matters.
         </PageHeading>
         <Lede className="mb-8 max-w-[560px]">
-          Lia watches your reviews, forums, and press from one workspace, drafts
-          replies in your voice, and holds the sensitive ones for a person to
-          approve.
+          Lia monitors reviews, Reddit, and press across every location,
+          recommends what to do next, and drafts thoughtful responses in your
+          voice. Sensitive mentions are held for the right person to review, and
+          overarching trend data shows how your business is being received.
         </Lede>
         <div className="flex flex-wrap gap-3">
-          <PrimaryButton href="/sign-up">Get started</PrimaryButton>
-          <SecondaryButton href="/product">See how it works</SecondaryButton>
+          <PrimaryButton href="/sign-up">Start free</PrimaryButton>
+          <SecondaryButton href="/product">See Lia in action</SecondaryButton>
         </div>
       </header>
 

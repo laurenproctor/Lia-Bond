@@ -5,20 +5,33 @@ import { RotateCw } from "lucide-react";
 import { updateBrandVoiceAction } from "@/app/actions/brand-voice";
 import { AxisSlider } from "@/components/brand-voice/axis-slider";
 import { PhraseEditor } from "@/components/brand-voice/phrase-editor";
-import { SaveStatus } from "@/components/brand-voice/save-status";
-import { useAutosave } from "@/components/brand-voice/use-autosave";
+import { SaveStatus } from "@/components/autosave/save-status";
+import { useAutosave } from "@/components/autosave/use-autosave";
+import { VoicePreview } from "@/components/brand-voice/voice-preview";
 import { VoiceSummary } from "@/components/brand-voice/voice-summary";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
-import { BRAND_VOICE_AXES, type UpdateBrandVoiceInput } from "@/domain";
+import {
+  BRAND_VOICE_AXES,
+  SUGGESTED_APPROVED_PHRASES,
+  SUGGESTED_PROHIBITED_PHRASES,
+  type UpdateBrandVoiceInput,
+} from "@/domain";
 
 export interface VoiceFormProps {
   initial: UpdateBrandVoiceInput;
   /** True when the caller's role cannot change the voice. */
   readOnly: boolean;
-  /** Server-rendered cards that sit inside the form's layout. */
+  /**
+   * Server-rendered cards that sit inside the form's layout.
+   *
+   * `channels` stays a prop because it renders the organization's *connected
+   * platforms* — server data this component has no business fetching. The
+   * preview used to arrive the same way and no longer does: it is derived
+   * entirely from the state held here, and a preview that cannot follow a
+   * slider is not a preview.
+   */
   channels: ReactNode;
-  preview: ReactNode;
 }
 
 /**
@@ -37,7 +50,7 @@ export interface VoiceFormProps {
  * request failed is not acceptable on a screen whose whole purpose is
  * accumulating small adjustments.
  */
-export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormProps) {
+export function VoiceForm({ initial, readOnly, channels }: VoiceFormProps) {
   const [value, setValue] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -119,6 +132,8 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
               legend="Add an approved phrase"
               tone="approved"
               phrases={value.approvedPhrases}
+              counterpartPhrases={value.prohibitedPhrases}
+              suggestions={SUGGESTED_APPROVED_PHRASES}
               disabled={readOnly}
               error={fieldErrors.approvedPhrases}
               onChange={(next) =>
@@ -137,6 +152,8 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
               legend="Add a prohibited phrase"
               tone="prohibited"
               phrases={value.prohibitedPhrases}
+              counterpartPhrases={value.approvedPhrases}
+              suggestions={SUGGESTED_PROHIBITED_PHRASES}
               disabled={readOnly}
               error={fieldErrors.prohibitedPhrases}
               onChange={(next) =>
@@ -149,7 +166,7 @@ export function VoiceForm({ initial, readOnly, channels, preview }: VoiceFormPro
         </div>
 
         <div className="flex flex-col gap-4 xl:col-span-5">
-          {preview}
+          <VoicePreview value={value} />
           <VoiceSummary axes={value.axes} />
         </div>
       </div>

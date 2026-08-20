@@ -7,9 +7,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
-import { RULE_TEMPLATES } from "@/lib/rules/templates";
+import { resolveRuleTemplate } from "@/lib/rules/templates";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
-import type { AutomationRuleConfig } from "@/domain";
 
 export const metadata: Metadata = { title: "New rule" };
 
@@ -50,8 +49,7 @@ export default async function NewRulePage({ searchParams }: NewRulePageProps) {
   const locations = await dataSource.locations.list(context.scope);
   const locationOptions = locations.map((location) => ({ id: location.id, name: location.name }));
 
-  const template = templateId ? RULE_TEMPLATES.find((entry) => entry.id === templateId) : undefined;
-  const initialConfig: AutomationRuleConfig | undefined = template?.config;
+  const template = resolveRuleTemplate(templateId);
 
   return (
     <PageBody>
@@ -59,15 +57,25 @@ export default async function NewRulePage({ searchParams }: NewRulePageProps) {
 
       <div className="grid items-start gap-4 xl:grid-cols-12">
         <div className="xl:col-span-7">
+          {/*
+            "Use template" navigates from /rules/new to /rules/new?template=id
+            — the same route, so React would keep the builder mounted and its
+            state initialiser (which reads `initialConfig`) would never re-run,
+            leaving the form stubbornly empty. Keying on the resolved template
+            forces a remount so the new config is actually seeded in, and
+            returning to the blank URL clears it again.
+          */}
           <RuleBuilder
+            key={template?.id ?? "blank"}
             mode="create"
             locations={locationOptions}
             editable
-            initialConfig={initialConfig}
+            initialConfig={template?.config}
+            templateName={template?.name ?? null}
           />
         </div>
         <div className="xl:col-span-5">
-          <RuleTemplatesPanel />
+          <RuleTemplatesPanel appliedTemplateId={template?.id ?? null} />
         </div>
       </div>
     </PageBody>

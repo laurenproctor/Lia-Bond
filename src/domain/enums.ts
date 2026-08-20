@@ -121,6 +121,14 @@ export const CONNECTION_HEALTH_STATUSES = [
   "authorization_required",
   "insufficient_permissions",
   "quota_limited",
+  /**
+   * Distinct from `quota_limited`, and the distinction is the whole point: a
+   * rate limit clears by itself and this never does. Google allows the
+   * Business Profile APIs zero quota until an access application is approved,
+   * so the connection is authorised, healthy-looking, and completely unable to
+   * fetch anything.
+   */
+  "quota_not_provisioned",
   "provider_unavailable",
   "unknown_error",
 ] as const;
@@ -188,6 +196,25 @@ export const MENTION_SOURCE_TYPES = [
 ] as const;
 export const mentionSourceTypeSchema = vocabulary(MENTION_SOURCE_TYPES).schema;
 export type MentionSourceType = z.infer<typeof mentionSourceTypeSchema>;
+
+/**
+ * How a mention's content got into Lia.
+ *
+ * Platform-neutral, and named for the next source rather than for Yelp: manual
+ * capture is what any provider without a readable review feed will need, and
+ * `yelp_manual` would have to be renamed the first time Trustpilot arrived.
+ *
+ * The distinction is not cosmetic. `provider_api` content was returned by a
+ * provider and can be re-fetched, re-verified, and overwritten by a later sync.
+ * `manual_entry` content is what a customer typed: nothing can confirm it, no
+ * sync will ever refresh it, and the interface must never describe it as
+ * imported. That is a different epistemic status, so it is a column rather than
+ * a convention — and it is deliberately absent from `IngestMentionInput`, so no
+ * synchronisation can relabel a typed review as retrieved, or the reverse.
+ */
+export const MENTION_CAPTURE_METHODS = ["provider_api", "manual_entry"] as const;
+export const mentionCaptureMethodSchema = vocabulary(MENTION_CAPTURE_METHODS).schema;
+export type MentionCaptureMethod = z.infer<typeof mentionCaptureMethodSchema>;
 
 export const MENTION_STATUSES = [
   "new",
@@ -277,6 +304,35 @@ export type ResponseType = z.infer<typeof responseTypeSchema>;
 export const GENERATED_BY = ["ai", "user", "imported"] as const;
 export const generatedBySchema = vocabulary(GENERATED_BY).schema;
 export type GeneratedBy = z.infer<typeof generatedBySchema>;
+
+/**
+ * How a published response actually reached the public.
+ *
+ * `published` on its own cannot answer the question that matters when somebody
+ * disputes a reply months later: did Lia watch this happen, or did a person
+ * tell us it had? Those carry very different evidentiary weight, and collapsing
+ * them would let a user-confirmed publication be defended as if a provider had
+ * acknowledged it.
+ *
+ * - `provider_api` — a provider accepted the response and returned an
+ *   identifier for it. Nothing writes this yet; no connector can publish.
+ * - `manual_external` — a person posted the response themselves on the
+ *   provider's own surface and confirmed it here afterwards. Lia has the
+ *   confirming actor and the time they confirmed, and **no** independent
+ *   verification. `external_response_id` stays null on this path, permanently,
+ *   because there is no provider-assigned identifier to hold.
+ *
+ * A third value for "we asked the provider and it agreed" is deliberately
+ * absent: that is what `provider_api` means, and inventing a
+ * `provider_verified` alongside it would imply the plain one is unverified.
+ */
+export const RESPONSE_PUBLICATION_METHODS = ["provider_api", "manual_external"] as const;
+export const responsePublicationMethodSchema = vocabulary(
+  RESPONSE_PUBLICATION_METHODS,
+).schema;
+export type ResponsePublicationMethod = z.infer<
+  typeof responsePublicationMethodSchema
+>;
 
 /* -------------------------------------------------------------------------- */
 /* Approvals                                                                   */
@@ -415,6 +471,29 @@ export const AUDIT_ENTITY_TYPES = [
   "automation_rule",
   "brand_voice",
   "monitoring_query",
+  // A detected change in a connected Yelp listing's counters. Its own subject
+  // rather than `platform_profile`, because "what happened to this listing
+  // connection" and "what did Lia observe about it on Tuesday" are different
+  // questions, and an auditor asking the second one would otherwise have to
+  // read every event on the profile to find the observations among them.
+  "yelp_activity_occurrence",
+  // Three new subjects, because "which thing did this happen to" has three
+  // genuinely different answers, and collapsing any of them would make the
+  // trail unqueryable in exactly the case somebody needs it. A Reddit monitor
+  // is not a `monitoring_query` — different table, different lifecycle. A
+  // community posture is not a `platform_connection` — it is a decision about
+  // somebody else's rules, not about Lia's access. A publication attempt is
+  // not a `response_draft` — the draft is the words, the attempt is the act of
+  // publishing them, and one draft can have several attempts.
+  "reddit_monitoring_query",
+  "reddit_community_posture",
+  "response_publication_attempt",
+  // The embedded website widget. Its own subject rather than `location`: the
+  // location is a restaurant and the widget is a thing published on the
+  // internet under that restaurant's name, and an auditor asking "when did
+  // this stop appearing on our homepage" must not have to read every event
+  // about the restaurant to find out.
+  "review_widget",
 ] as const;
 export const auditEntityTypeSchema = vocabulary(AUDIT_ENTITY_TYPES).schema;
 export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>;
@@ -469,6 +548,19 @@ export const AUDIT_EVENT_TYPES = [
   // "where did this restaurant record come from" is the question, and one
   // answer is a person and the other is Google.
   "location.created",
+  // The three location-change events partition the editable fields between
+  // them, and the partition is the point. `location.updated` covers identity,
+  // address, slug, and timezone; it is deliberately **not** emitted for a
+  // status or manager change, because those have their own events. A generic
+  // event that also fired for them would make "who changed this restaurant's
+  // address" return manager reassignments too, and the specific events would
+  // stop being worth having. An edit touching two partitions emits two events;
+  // a manager-only edit emits one.
+  "location.updated",
+  // Lifecycle: setup / active / review / inactive. A reporting and retirement
+  // state, not a processing switch — nothing in the product pauses collection,
+  // analysis, or rule execution on the strength of it.
+  "location.status_changed",
   // Integration lifecycle. Every consequential connection change appears here;
   // none of these events may carry tokens, authorization codes, or state values.
   "integration.oauth_started",
@@ -533,6 +625,81 @@ export const AUDIT_EVENT_TYPES = [
   "onboarding.team_skipped",
   "onboarding.completed",
   "onboarding.ready_viewed",
+  // Yelp Assisted — listing checks. Attributed to the platform_profile that was
+  // checked, matching `integration.reviews_synced`'s reasoning: "which
+  // restaurant's listing moved" is the question an auditor has. Metadata
+  // carries the two counters, a normalised error code, and nothing else.
+  // Deliberately *not* named `reviews_synced`: nothing was synced, and a
+  // shared event name would make the two indistinguishable in a query.
+  "integration.listing_checked",
+  "integration.listing_check_failed",
+  // A change Lia observed between two listing checks. Metadata carries the
+  // before and after counters and the kind of change — never a claim about how
+  // many reviews were written, which the counters cannot support.
+  "yelp_activity.detected",
+  // A review a customer typed into Lia. Metadata carries the source, the
+  // rating, the derived deduplication key, and whether a duplicate warning was
+  // deliberately overridden — never the review text, which is the same rule
+  // every other event on a mention already keeps.
+  "mention.captured_manually",
+  // Assisted posting. `confirmed` is a person stating they posted an approved
+  // response on the provider's own surface; `unconfirmed` is the correction
+  // path for somebody who said so by mistake. Neither claims provider
+  // verification, and the metadata says which method was recorded so a reader
+  // cannot mistake one for an API publication.
+  "response.publication_confirmed",
+  "response.publication_unconfirmed",
+  // Reddit monitoring. Metadata carries counts, identifiers, and normalised
+  // codes. Two Reddit-specific exclusions are named because they are not
+  // obviously "content" and would otherwise look safe to record: a monitor's
+  // search terms are the customer's own words about their brand, so a trail of
+  // them is a trail of what a restaurant is worried about; and a subreddit
+  // name, while not Reddit's content, is still a fact about the customer that
+  // the monitor row already holds.
+  "reddit_monitor.created",
+  "reddit_monitor.updated",
+  "reddit_monitor.deleted",
+  "reddit_monitor.polled",
+  "reddit_monitor.poll_failed",
+  // A person's recorded decision about whether Lia may reply in one community,
+  // and the automatic return to review when its rules change underneath a
+  // previously granted approval.
+  "reddit_community.decision_recorded",
+  "reddit_community.review_required",
+  // Content that stopped existing at the source. Lia's own row ids and a
+  // reason code only — an audit row about deleted content that quoted it would
+  // defeat itself.
+  "reddit_content.removed",
+  "reddit_content.reconciled",
+  // Publication: the response lifecycle's public half. Claiming the right to
+  // post, the outcome, the uncertain outcome that must be reconciled against
+  // the connected account's own history rather than retried, and a retraction.
+  // No draft text, no provider message, no Reddit content.
+  "response.published",
+  "response.publish_failed",
+  "response.publish_reconciled",
+  "response.retracted",
+  // The website review widget. Five names rather than a `created`/`updated`
+  // pair, because three of these change what a stranger sees on a customer's
+  // own website and the other two do not, and a trail that cannot separate
+  // them is a trail nobody can answer "when did our homepage change" from.
+  //
+  // Metadata carries widget configuration only — theme, layout, selection
+  // mode, approved domains, and the id of the pinned review. Never the review
+  // text and never the reviewer's name: the widget publishes those, but the
+  // audit trail is not where a copy of them belongs, which is the same rule
+  // every other event about a mention already keeps.
+  "review_widget.created",
+  "review_widget.updated",
+  // Reversible, and the public id survives. What a customer taking a page down
+  // for a fortnight is actually asking for.
+  "review_widget.disabled",
+  "review_widget.enabled",
+  // The irreversible one: every snippet already pasted into a website stops
+  // resolving. Its own event because it is the only widget act that cannot be
+  // undone from Lia, and the only one whose blast radius is somebody else's
+  // published HTML.
+  "review_widget.embed_id_rotated",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
@@ -579,3 +746,53 @@ export const GATE_REJECTION_REASONS = [
 ] as const;
 export const gateRejectionReasonSchema = vocabulary(GATE_REJECTION_REASONS).schema;
 export type GateRejectionReason = z.infer<typeof gateRejectionReasonSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Website review widget                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How the embedded widget looks.
+ *
+ * Two values, and no `auto`. A widget lives inside somebody else's page, where
+ * `prefers-color-scheme` describes the *visitor's* operating system and says
+ * nothing about the site around it — a light restaurant homepage would render
+ * a black card for every visitor who runs their laptop in dark mode. The
+ * customer picks, because the customer is the only party who can see the page.
+ */
+export const REVIEW_WIDGET_THEMES = ["light", "dark"] as const;
+export const reviewWidgetThemeSchema = vocabulary(REVIEW_WIDGET_THEMES).schema;
+export type ReviewWidgetTheme = z.infer<typeof reviewWidgetThemeSchema>;
+
+/**
+ * Which arrangement the widget draws.
+ *
+ * One value today. The photo- and video-led layouts in the product brief are
+ * deliberately not built, and this vocabulary is the seam they arrive through
+ * — named `single_review_text` rather than `default` so the second entry does
+ * not have to explain what the first one silently assumed.
+ */
+export const REVIEW_WIDGET_LAYOUTS = ["single_review_text"] as const;
+export const reviewWidgetLayoutSchema = vocabulary(REVIEW_WIDGET_LAYOUTS).schema;
+export type ReviewWidgetLayout = z.infer<typeof reviewWidgetLayoutSchema>;
+
+/** Whether the widget follows the feed or is pinned to one review. */
+export const REVIEW_WIDGET_SELECTION_MODES = ["most_recent", "specific"] as const;
+export const reviewWidgetSelectionModeSchema = vocabulary(
+  REVIEW_WIDGET_SELECTION_MODES,
+).schema;
+export type ReviewWidgetSelectionMode = z.infer<
+  typeof reviewWidgetSelectionModeSchema
+>;
+
+/**
+ * Whether the embed serves a review at all.
+ *
+ * `disabled` is reversible and keeps the public id, which is what a customer
+ * taking a page down for a week wants. Revocation — making an existing snippet
+ * permanently dead — is rotation of the public id, not a status, because the
+ * two questions ("is it on" and "which id is live") have independent answers.
+ */
+export const REVIEW_WIDGET_STATUSES = ["active", "disabled"] as const;
+export const reviewWidgetStatusSchema = vocabulary(REVIEW_WIDGET_STATUSES).schema;
+export type ReviewWidgetStatus = z.infer<typeof reviewWidgetStatusSchema>;
