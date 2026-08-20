@@ -60,17 +60,20 @@ export function findOnboardingNewsQuery(
 }
 
 const WATCH_SUFFIX = " watch";
+const BRAND_WATCH_SUFFIX = " brand name watch";
 /** Used only when a subject has no usable name, which the schemas forbid. */
 const FALLBACK_WATCH_NAME = "Brand watch";
+const FALLBACK_BRAND_WATCH_NAME = "Brand name watch";
 
 /**
  * What a generated monitoring query is called: the subject's own name, plus
- * "watch".
+ * what the row watches.
  *
- * The brand query takes the organization's name, and step 3's location
- * queries take the location's — one rule, so an organization's queries read
- * as a set ("Ember & Oak watch", "Ember & Oak Soho watch") instead of the
- * generic "Brand watch" nobody would recognise in a list.
+ * The organization-wide brand query takes the organization's name and says so
+ * ("Ember & Oak brand name watch"); step 3's location queries take the
+ * location's ("Ember & Oak Soho watch"). Both start from a real subject
+ * rather than the generic "Brand watch" nobody would recognise in a list, so
+ * an organization's queries still read as one set.
  *
  * Names are longer than a query name may be (160 against
  * `MAX_MONITORING_QUERY_NAME_LENGTH`), so a long one is shortened on the
@@ -78,15 +81,33 @@ const FALLBACK_WATCH_NAME = "Brand watch";
  * "Some Very Long Restaurant Group Incorpo" with no indication of what the
  * row is.
  */
-export function watchQueryName(subject: string): string {
+function composeWatchName(
+  subject: string,
+  suffix: string,
+  fallback: string,
+): string {
   const name = subject.trim();
-  if (name.length === 0) return FALLBACK_WATCH_NAME;
+  if (name.length === 0) return fallback;
 
-  const composed = `${name}${WATCH_SUFFIX}`;
+  const composed = `${name}${suffix}`;
   if (composed.length <= MAX_MONITORING_QUERY_NAME_LENGTH) return composed;
 
-  const room = MAX_MONITORING_QUERY_NAME_LENGTH - WATCH_SUFFIX.length;
-  return `${name.slice(0, room).trimEnd()}${WATCH_SUFFIX}`;
+  const room = MAX_MONITORING_QUERY_NAME_LENGTH - suffix.length;
+  return `${name.slice(0, room).trimEnd()}${suffix}`;
+}
+
+/** What the organization-wide brand query is called. */
+export function brandWatchQueryName(organizationName: string): string {
+  return composeWatchName(
+    organizationName,
+    BRAND_WATCH_SUFFIX,
+    FALLBACK_BRAND_WATCH_NAME,
+  );
+}
+
+/** What a per-location query is called. */
+export function watchQueryName(subject: string): string {
+  return composeWatchName(subject, WATCH_SUFFIX, FALLBACK_WATCH_NAME);
 }
 
 export interface OnboardingNewsServiceContext {

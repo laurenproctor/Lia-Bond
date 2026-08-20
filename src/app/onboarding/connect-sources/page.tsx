@@ -11,10 +11,10 @@ import { isGoogleConnectorAvailable } from "@/integrations/registry";
 import { findMonitoringCountry } from "@/lib/geo/countries";
 import { requireOnboardingStep } from "@/lib/onboarding/context";
 import {
+  brandWatchQueryName,
   findOnboardingNewsQuery,
   lastSuccessfulNewsPollAt,
   summarizeNewsMonitoring,
-  watchQueryName,
 } from "@/lib/onboarding/news";
 import { isNewsMonitorAvailable } from "@/news/registry";
 
@@ -184,9 +184,10 @@ function configuratorInitialValues(
   }
 
   return {
-    // "Ember & Oak watch", not "Brand watch": the same rule step 3 names its
-    // location queries by, so an organization's queries read as one set.
-    name: watchQueryName(organization.name),
+    // "Ember & Oak brand name watch", not "Brand watch": named after the
+    // organization the same way step 3 names its location queries, so an
+    // organization's queries read as one set.
+    name: brandWatchQueryName(organization.name),
     keywords: [organization.name],
     exclusions: [],
     // Derived from the organization's own configured language ("en-US" →

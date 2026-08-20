@@ -15,6 +15,7 @@ import {
 import { getConnector } from "@/integrations/registry";
 import { ConfigurationError } from "@/lib/env";
 import {
+  brandWatchQueryName,
   ensureOnboardingLocationQueries,
   findOnboardingNewsQuery,
   lastSuccessfulNewsPollAt,
@@ -104,6 +105,33 @@ describe("watchQueryName", () => {
     // The schemas forbid this upstream; the guard exists so a blank name can
     // never reach the database as " watch".
     expect(watchQueryName("   ")).toBe("Brand watch");
+  });
+});
+
+describe("brandWatchQueryName", () => {
+  it("says what the organization-wide query watches", () => {
+    expect(brandWatchQueryName("Ember & Oak")).toBe(
+      "Ember & Oak brand name watch",
+    );
+  });
+
+  it("trims the subject rather than trusting the caller", () => {
+    expect(brandWatchQueryName("  Ember & Oak  ")).toBe(
+      "Ember & Oak brand name watch",
+    );
+  });
+
+  it("shortens a long organization name to a name the schema accepts", () => {
+    const long = "A".repeat(160);
+    const name = brandWatchQueryName(long);
+
+    expect(name.length).toBeLessThanOrEqual(MAX_MONITORING_QUERY_NAME_LENGTH);
+    expect(name.endsWith(" brand name watch")).toBe(true);
+    expect(() => monitoringQuerySchema.shape.name.parse(name)).not.toThrow();
+  });
+
+  it("falls back rather than producing a nameless query", () => {
+    expect(brandWatchQueryName("   ")).toBe("Brand name watch");
   });
 });
 
