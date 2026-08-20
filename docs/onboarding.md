@@ -438,13 +438,30 @@ never a return value — it was one screen importing something the other did not
 
 ## 10. Invitation-link behavior
 
-Lia does **not** email invitations (D55: Supabase's built-in SMTP on a new
-project is rate-limited and may deliver only to project members, so an
-email-only invitation would fail silently and look like a bug in Lia). Step 5
-issues copyable links, and the screen says so in as many words — the button
-reads "Finish setup", the results panel reads "Copy these invitation links now",
-and the *what happens next* list says links can be copied and shared. Nothing on
-the screen contains the word "sent".
+Lia emails invitations **when a verified sender is configured**, and always
+issues a copyable link as well (D191, extending D55). D55 originally made the
+link the only delivery path because Supabase's built-in SMTP on a new project is
+rate-limited and may deliver only to project members, so an email-only
+invitation would fail silently and look like a bug in Lia. Mail now goes through
+Resend instead, and the same concern shapes what the screen is allowed to claim.
+
+The rule is that **no wording is shared between the emailed and not-emailed
+cases**:
+
+- *Before submitting*, the server reads `canEmailInvitations()` — true only when
+  `INVITE_FROM_EMAIL` is set **and** the email mode is `live` — and passes it to
+  `TeamStepForm`. The *what happens next* list promises an email only when that
+  is true. Log mode counts as false: it delivers nothing.
+- *After submitting*, every issued row carries its own `delivery` status, so the
+  results panel reports each address separately. The panel heading has three
+  forms — all emailed, none emailed, and a mixed set — because a heading that
+  averages a mixed batch hides the rows that still need a person to act.
+
+`INVITE_FROM_EMAIL` is deliberately separate from `SUPPORT_FROM_EMAIL`, and
+there is no fallback from one to the other. The support sender defaults to
+Resend's shared identity, which delivers only to the address that owns the
+Resend account — harmless for a help request addressed to us, and silent total
+failure for an invitation addressed to a stranger.
 
 Each link is shown **exactly once**. Only the SHA-256 hash reaches the database;
 the raw token is never persisted, never logged, and never written to an audit

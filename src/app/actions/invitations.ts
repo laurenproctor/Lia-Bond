@@ -14,19 +14,31 @@ import {
 } from "@/lib/auth/invitation-token";
 import { requireSession } from "@/lib/auth/session";
 import { getDataSource } from "@/lib/data";
+import { deliverInvitation } from "@/lib/email/invitation-delivery";
+import type { InvitationDeliveryStatus } from "@/lib/email/invitation-message";
 import { appOrigin } from "@/lib/env";
 import { setActiveOrganizationCookie } from "@/lib/tenancy/organization-context";
 
 /**
  * Invitations.
  *
- * The delivery decision shapes this file: inviting somebody produces a link the
- * inviter copies, rather than an email Lia sends. Supabase's built-in SMTP on a
- * new project is rate-limited to a handful of messages an hour and may deliver
- * only to project members, so an email-only invitation would fail silently and
- * look like a bug in Lia. Recorded as D55.
+ * The delivery decision shapes this file. D55 originally made an invitation a
+ * link the inviter copies rather than an email Lia sends, because there was no
+ * delivery mechanism that worked: Supabase's built-in SMTP on a new project is
+ * rate-limited to a handful of messages an hour and may deliver only to project
+ * members, so an email-only invitation would fail silently and look like a bug
+ * in Lia. D55 recorded that "the delivery mechanism can be added without
+ * changing the model", and D191 is that addition — Lia now emails the link
+ * through Resend when a verified sender is configured.
  *
- * That makes the link itself the credential, which drives two rules:
+ * The model is unchanged, and so is the copy-link fallback. Email is an extra
+ * delivery path, never the only one: the send is attempted after the invitation
+ * exists, it is caught rather than thrown, and its outcome is reported to the
+ * inviter alongside the link. An invitation that could not be emailed is still
+ * a valid invitation, and the person who just issued it is the one person able
+ * to pass it on by hand.
+ *
+ * The link is still the credential, which drives two rules:
  *
  * - the raw token is returned to the inviter exactly once — never persisted,
  *   never logged, never written to an audit event; and
@@ -48,6 +60,11 @@ export interface IssuedInvitation {
   /** Shown once. Not stored anywhere it could be read a second time. */
   url: string;
   expiresAt: string;
+  /**
+   * What became of the email. Never `sent` unless it actually left, so the UI
+   * can tell the inviter to pass the link on themselves when it did not.
+   */
+  delivery: InvitationDeliveryStatus;
 }
 
 /**
@@ -65,6 +82,10 @@ export async function inviteMemberAction(
     const { email, role } = inviteSchema.parse(input);
     const context = await authorize("organization.manage_members");
 
+    // Read before the invitation is created so a missing profile fails here,
+    // where nothing has been written yet, rather than after a row exists.
+    const session = await requireSession();
+
     const token = generateInvitationToken();
     const expiresAt = new Date(
       Date.now() + INVITATION_TTL_DAYS * 24 * 60 * 60 * 1000,
@@ -80,6 +101,19 @@ export async function inviteMemberAction(
       expiresAt,
     });
 
+    const url = invitationUrl(appOrigin(), token);
+
+    // After the row exists, so a mail outage cannot cost us the invitation, and
+    // before the audit event, so the record says what actually happened to it.
+    const delivery = await deliverInvitation({
+      email: invitation.email,
+      organizationName: context.organization.name,
+      inviterName: session.fullName,
+      role: invitation.role,
+      url,
+      expiresAt,
+    });
+
     await recordAuditEvent(context, {
       eventType: "membership.invited",
       entityType: "membership",
@@ -88,7 +122,10 @@ export async function inviteMemberAction(
       // The address and the role, never the token. An audit trail carrying the
       // token would be a way in rather than a record of one.
       newState: { email: invitation.email, role: invitation.role },
-      metadata: { expiresAt },
+      // `delivery` and not the link, for the same reason. Worth recording:
+      // "they never got it" is the first question asked about an invitation
+      // that went unaccepted, and this is the only place the answer survives.
+      metadata: { expiresAt, delivery },
     });
 
     revalidatePath("/settings");
@@ -96,8 +133,9 @@ export async function inviteMemberAction(
     return {
       invitationId: invitation.id,
       email: invitation.email,
-      url: invitationUrl(appOrigin(), token),
+      url,
       expiresAt,
+      delivery,
     };
   });
 }

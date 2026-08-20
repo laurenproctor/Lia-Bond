@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { freshDataSource, harbor, ushg, ORG_HARBOR, ORG_USHG } from "./helpers/scope";
 import { DataError } from "@/lib/data/errors";
 import type { LiaDataSource } from "@/lib/data/types";
-import { organizationDetailsSchema } from "@/app/actions/organization-settings";
+import { organizationDetailsSchema } from "@/lib/organization/details";
 
 /**
  * Editing the organization's own details, slug included.

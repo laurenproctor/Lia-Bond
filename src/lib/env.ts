@@ -207,6 +207,18 @@ const envSchema = z
      * it is not `z.email()`. Must sit on a domain verified with Resend.
      */
     SUPPORT_FROM_EMAIL: z.string().min(5).optional(),
+    /**
+     * Envelope sender for invitations. Same shape as `SUPPORT_FROM_EMAIL` — a
+     * bare address or "Name <address>" — and deliberately a separate variable
+     * rather than a reuse of it.
+     *
+     * The support sender defaults to Resend's shared identity, which only ever
+     * delivers to the address that owns the Resend account. That is harmless
+     * for help requests, which are addressed to us; it is silent total failure
+     * for an invitation, which is addressed to a stranger. Unset means Lia
+     * does not claim to have emailed anything — see `inviteFromAddress`.
+     */
+    INVITE_FROM_EMAIL: z.string().min(5).optional(),
     /* News monitoring. Server-only. */
     GNEWS_API_KEY: z.string().min(1).optional(),
     LIA_NEWS_MODE: newsModeSchema.optional(),
@@ -345,6 +357,7 @@ function readEnv(): Env {
     LIA_EMAIL_MODE: process.env.LIA_EMAIL_MODE || undefined,
     SUPPORT_INBOX_EMAIL: process.env.SUPPORT_INBOX_EMAIL || undefined,
     SUPPORT_FROM_EMAIL: process.env.SUPPORT_FROM_EMAIL || undefined,
+    INVITE_FROM_EMAIL: process.env.INVITE_FROM_EMAIL || undefined,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || undefined,
     LIA_AI_MODE: process.env.LIA_AI_MODE || undefined,
     LIA_ANALYSIS_BATCH_SIZE: process.env.LIA_ANALYSIS_BATCH_SIZE || undefined,
@@ -651,6 +664,36 @@ export function supportInboxAddress(): string {
 /** The address help requests are sent from. */
 export function supportFromAddress(): string {
   return env.SUPPORT_FROM_EMAIL ?? DEFAULT_SUPPORT_FROM;
+}
+
+/**
+ * The address invitations are sent from, or null when none is configured.
+ *
+ * Null rather than a fallback to `supportFromAddress()`, and that is the whole
+ * point of this helper. The support default is `onboarding@resend.dev`, which
+ * Resend delivers only to the account owner — so falling back would mean every
+ * invitation to an actual restaurant manager was accepted by the provider,
+ * reported as sent, and delivered to nobody. D55 exists because a silently
+ * undelivered invitation looks like a bug in Lia rather than a missing
+ * environment variable.
+ *
+ * Callers treat null as "do not send", not as an error: the invitation is
+ * still created and the inviter still gets the link to pass on by hand.
+ */
+export function inviteFromAddress(): string | null {
+  return env.INVITE_FROM_EMAIL ?? null;
+}
+
+/**
+ * Whether this deployment can actually put an invitation in someone's inbox.
+ *
+ * For screens that promise something *before* a send is attempted, so the
+ * promise matches what will happen. Log mode counts as false: it delivers
+ * nothing, and a screen that says "we'll email them" over a run that only
+ * writes to stdout is exactly the false claim this is here to prevent.
+ */
+export function canEmailInvitations(): boolean {
+  return inviteFromAddress() !== null && resolveEmailMode() === "live";
 }
 
 /**

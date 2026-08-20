@@ -20,7 +20,10 @@ import {
   hashInvitationToken,
   invitationUrl,
 } from "@/lib/auth/invitation-token";
+import { requireSession } from "@/lib/auth/session";
 import { recordAuditEvent } from "@/lib/audit/record";
+import { deliverInvitation } from "@/lib/email/invitation-delivery";
+import type { InvitationDeliveryStatus } from "@/lib/email/invitation-message";
 import { saveBrandVoice } from "@/lib/brand-voice/save";
 import { appOrigin } from "@/lib/env";
 import { conflict, DataError } from "@/lib/data/errors";
@@ -419,6 +422,8 @@ export interface IssuedOnboardingInvitation {
   /** Shown once. Never persisted, never logged, never audited. */
   url: string;
   expiresAt: string;
+  /** What became of the email. Per row: one address can bounce while others go. */
+  delivery: InvitationDeliveryStatus;
 }
 
 export interface InvitationRowFailure {
@@ -455,6 +460,9 @@ export async function completeOnboardingTeamAction(
     await authorize("organization.manage_members");
     const context = await authorize("onboarding.manage");
 
+    // Read once, outside the loop: the inviter is the same person for every row.
+    const session = await requireSession();
+
     const issued: IssuedOnboardingInvitation[] = [];
     const failures: InvitationRowFailure[] = [];
     const seen = new Set<string>();
@@ -486,6 +494,21 @@ export async function completeOnboardingTeamAction(
           expiresAt,
         });
 
+        const url = invitationUrl(appOrigin(), token);
+
+        // Inside the per-row try, after the row exists. A send that throws is
+        // already caught by `deliverInvitation`, but the placement matters
+        // anyway: nothing about delivery may cost a link that cannot be
+        // regenerated.
+        const delivery = await deliverInvitation({
+          email: invitation.email,
+          organizationName: context.organization.name,
+          inviterName: session.fullName,
+          role: invitation.role,
+          url,
+          expiresAt,
+        });
+
         await recordAuditEvent(context, {
           eventType: "membership.invited",
           entityType: "membership",
@@ -493,13 +516,14 @@ export async function completeOnboardingTeamAction(
           previousState: null,
           // The address and the role, never the token.
           newState: { email: invitation.email, role: invitation.role },
-          metadata: { expiresAt, source: "onboarding" },
+          metadata: { expiresAt, source: "onboarding", delivery },
         });
 
         issued.push({
           email: invitation.email,
-          url: invitationUrl(appOrigin(), token),
+          url,
           expiresAt,
+          delivery,
         });
       } catch (error) {
         // Per row, so one bad address cannot erase the links beside it. The

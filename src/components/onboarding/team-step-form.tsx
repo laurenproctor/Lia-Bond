@@ -29,10 +29,13 @@ import { MEMBERSHIP_ROLE_LABELS } from "@/lib/labels";
  *
  * Two things about this screen are load-bearing and easy to get wrong:
  *
- * 1. **It never claims an email was sent.** Lia issues copyable links. The
- *    button says "Create invitation links", the results panel says the links
- *    must be shared, and the "what happens next" list says the same. Nothing on
- *    this screen contains the word "sent".
+ * 1. **It never claims an email was sent unless one was.** Lia emails
+ *    invitations when a verified sender is configured (D191) and always issues
+ *    a copyable link as well. Before submitting, `canEmailInvitations` — read
+ *    on the server — decides whether the screen may promise a message at all.
+ *    After submitting, each row reports its own `delivery`, because one address
+ *    can be emailed while the next one is refused. No wording on this screen is
+ *    shared between the emailed and not-emailed cases.
  * 2. **A link is shown exactly once.** The raw token is not persisted, not
  *    logged, and not audited — only its SHA-256 hash reaches the database — so
  *    a link that is not copied from this panel cannot be recovered. It can only
@@ -71,10 +74,13 @@ export function TeamStepForm({
   owner,
   brandVoiceSaved,
   locationsConfigured,
+  canEmailInvitations,
 }: {
   owner: OwnerRow;
   brandVoiceSaved: boolean;
   locationsConfigured: boolean;
+  /** Whether this server can deliver invitation mail. Never assumed true. */
+  canEmailInvitations: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -308,6 +314,7 @@ export function TeamStepForm({
         <WhatHappensNext
           brandVoiceSaved={brandVoiceSaved}
           locationsConfigured={locationsConfigured}
+          canEmailInvitations={canEmailInvitations}
         />
 
         {error ? <OnboardingError>{error}</OnboardingError> : null}
@@ -335,16 +342,18 @@ export function TeamStepForm({
  * What finishing actually does.
  *
  * Every line is checked against real state before it is written. "Your brand
- * voice has been saved" appears only when it has, and the invitation line says
- * links can be copied and shared — never that anybody will receive an email,
- * because nobody will.
+ * voice has been saved" appears only when it has, and the invitation line
+ * promises an email only where this server is configured to send one — the
+ * link half is always true, so it is always said.
  */
 function WhatHappensNext({
   brandVoiceSaved,
   locationsConfigured,
+  canEmailInvitations,
 }: {
   brandVoiceSaved: boolean;
   locationsConfigured: boolean;
+  canEmailInvitations: boolean;
 }) {
   const lines = [
     "Your workspace setup will be completed.",
@@ -354,7 +363,9 @@ function WhatHappensNext({
     brandVoiceSaved
       ? "Your brand voice has been saved."
       : "You can set your brand voice at any time from your workspace.",
-    "Invitation links can be copied and shared with your teammates.",
+    canEmailInvitations
+      ? "Each teammate will be emailed their invitation, and you can copy the links to share yourself."
+      : "Invitation links can be copied and shared with your teammates.",
   ];
 
   return (
@@ -372,12 +383,53 @@ function WhatHappensNext({
 }
 
 /**
+ * The heading for a set of invitations, which may have gone out in different
+ * ways.
+ *
+ * Three cases rather than two. "All emailed" and "none emailed" are the easy
+ * ones; the mixed set is the one worth writing out, because a heading that
+ * averages it — "invitations sent" over a batch where two of five bounced —
+ * hides the rows that still need a human to act.
+ */
+function issuedHeading(issued: IssuedOnboardingInvitation[]): {
+  title: string;
+  description: string;
+} {
+  const emailed = issued.filter((row) => row.delivery === "sent").length;
+
+  if (emailed === 0) {
+    return {
+      title: "Copy these invitation links now",
+      description:
+        "These invitations were not emailed. Send each link to the person it belongs to — this is the only time it is shown.",
+    };
+  }
+
+  if (emailed === issued.length) {
+    return {
+      title: "Invitations sent",
+      description:
+        "Each teammate has been emailed their invitation. Copy the links below as a backup — this is the only time they are shown.",
+    };
+  }
+
+  return {
+    title: "Some invitations need sending by hand",
+    description:
+      "We emailed the invitations marked below and could not email the rest. Send those links yourself — this is the only time they are shown.",
+  };
+}
+
+/**
  * The links, shown once.
  *
  * `Copy` uses the async clipboard API, which needs a secure context. The link
  * is also rendered as selectable text in a `<code>` block, so somebody on plain
  * HTTP — or with clipboard permission denied — can still select it by hand
  * rather than losing the invitation entirely.
+ *
+ * Every row shows its link regardless of whether it was emailed. A link hidden
+ * behind a successful send is unrecoverable the moment that mail goes to spam.
  */
 function IssuedLinksPanel({
   issued,
@@ -389,6 +441,7 @@ function IssuedLinksPanel({
   onContinue: () => void;
 }) {
   const [copied, setCopied] = useState<string | null>(null);
+  const heading = issuedHeading(issued);
 
   async function copy(url: string, email: string) {
     try {
@@ -407,8 +460,8 @@ function IssuedLinksPanel({
     <OnboardingCard className="flex flex-col gap-6">
       <OnboardingStepHeader
         icon={Users}
-        title="Copy these invitation links now"
-        description="Lia does not email invitations. Send each link to the person it belongs to — this is the only time it is shown."
+        title={heading.title}
+        description={heading.description}
       />
 
       {issued.length > 0 ? (
@@ -423,7 +476,8 @@ function IssuedLinksPanel({
                   {invitation.email}
                 </p>
                 <p className="text-[12px] text-site-muted">
-                  Expires{" "}
+                  {/* Per row, because delivery is decided per row. */}
+                  {invitation.delivery === "sent" ? "Emailed · expires" : "Not emailed · expires"}{" "}
                   {new Date(invitation.expiresAt).toLocaleDateString(undefined, {
                     year: "numeric",
                     month: "long",

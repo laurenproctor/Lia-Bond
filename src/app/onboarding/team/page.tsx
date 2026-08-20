@@ -5,6 +5,7 @@ import { OnboardingShell } from "@/components/onboarding/onboarding-shell";
 import { TeamStepForm } from "@/components/onboarding/team-step-form";
 import { onboardingStepDefinition } from "@/domain";
 import { requireSession } from "@/lib/auth/session";
+import { canEmailInvitations } from "@/lib/env";
 import { requireOnboardingStep } from "@/lib/onboarding/context";
 import { initialsFor } from "@/lib/view-models/mention";
 
@@ -18,12 +19,13 @@ export const metadata: Metadata = { title: "Bring your team into Lia" };
  * active owner — a constraint trigger in the database enforces it — so offering
  * to edit or delete this row would offer something the database refuses.
  *
- * What this step produces is **copyable invitation links, not emails.** Lia does
- * not send invitation mail (D55: Supabase's built-in SMTP on a new project is
- * rate-limited and may deliver only to project members, so an email-only
- * invitation would fail silently and look like a bug in Lia). The screen says so
- * in as many words, because a customer who believes an email went out will wait
- * for a reply that is never coming.
+ * What this step produces is **copyable invitation links, which Lia also emails
+ * when a verified sender is configured** (D191, extending D55). Both halves of
+ * that matter. The link is always produced, because a deployment with no sender
+ * must still be able to bring a team in; and the screen is told, via
+ * `canEmailInvitations`, whether mail will actually go out, so it never promises
+ * a message this server cannot send. A customer who believes an email went out
+ * will wait for a reply that is never coming.
  */
 export default async function OnboardingTeamPage() {
   const [context, session] = await Promise.all([
@@ -80,6 +82,9 @@ export default async function OnboardingTeamPage() {
         // never configured must not be claimed as saved.
         brandVoiceSaved={context.state.brandVoiceCompletedAt !== null}
         locationsConfigured={context.state.locationsCompletedAt !== null}
+        // Read on the server, where the configuration lives. Decides whether
+        // this screen may say an invitation will be emailed at all.
+        canEmailInvitations={canEmailInvitations()}
       />
     </OnboardingShell>
   );
