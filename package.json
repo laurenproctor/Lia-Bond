@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "db:seed:generate": "node --experimental-strip-types --no-warnings --import ./scripts/tsconfig-paths-hook.mjs scripts/generate-seed-sql.ts",
     "matrix:parity:generate": "node --experimental-strip-types --no-warnings --import ./scripts/tsconfig-paths-hook.mjs scripts/generate-matrix-parity-sql.ts",
+    "audit:vocabulary:generate": "node --experimental-strip-types --no-warnings --import ./scripts/tsconfig-paths-hook.mjs scripts/generate-audit-vocabulary-sql.ts",
     "db:seed:remote": "node --experimental-strip-types --no-warnings --env-file=.env --import ./scripts/tsconfig-paths-hook.mjs scripts/seed-remote.ts",
     "auth:seed": "node --experimental-strip-types --no-warnings --env-file=.env --import ./scripts/tsconfig-paths-hook.mjs scripts/create-auth-users.ts",
     "db:validate": "node scripts/validate-migrations.mjs",
