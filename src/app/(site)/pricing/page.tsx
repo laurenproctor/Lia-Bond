@@ -47,7 +47,7 @@ const FAQS = [
   {
     question: "Which platforms do you support?",
     answer:
-      "Google Business Profile is core, with Tripadvisor, Yelp, Trustpilot, Facebook, and Reddit available. News coverage and supported article comments are monitored too. We add platforms on request.",
+      "Google Business Profile is core, with Yelp, Trustpilot, Facebook, and Reddit available. News coverage and supported article comments are monitored too. We add platforms on request.",
   },
   {
     question: "How long does setup take?",

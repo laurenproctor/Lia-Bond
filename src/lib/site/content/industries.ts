@@ -22,7 +22,7 @@ export interface IndustryContent {
 export const INDUSTRY_CONTENT: Record<IndustrySlug, IndustryContent> = {
   hotels: {
     heading: "Every stay ends in a review somebody else reads.",
-    lede: "Hotel reputation is decided across Google, Tripadvisor, and a dozen booking sites at once — usually while your front desk is busy with the guests already in the building.",
+    lede: "Hotel reputation is decided across Google, the booking sites, and a dozen review pages at once — usually while your front desk is busy with the guests already in the building.",
     pressures: [
       {
         title: "One bad night travels",
@@ -42,7 +42,7 @@ export const INDUSTRY_CONTENT: Record<IndustrySlug, IndustryContent> = {
       attribution: "Group operations director",
     },
     metaDescription:
-      "Reputation monitoring and reply drafting for hotels and hotel groups, across Google, Tripadvisor, and the review sites guests actually read.",
+      "Reputation monitoring and reply drafting for hotels and hotel groups, across Google and the review sites guests actually read.",
   },
   restaurants: {
     heading: "The dining room closes. The reviews do not.",

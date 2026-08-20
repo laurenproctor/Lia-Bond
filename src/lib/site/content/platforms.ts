@@ -70,12 +70,6 @@ export const PLATFORM_ROWS: readonly PlatformRow[] = [
     available: true,
   },
   {
-    name: "Tripadvisor",
-    note: "Reviews and traveller ratings, with drafted replies for manual posting.",
-    publishing: "manual",
-    available: true,
-  },
-  {
     name: "Trustpilot",
     note: "Reviews and ratings, with drafted replies for manual posting.",
     publishing: "manual",
