@@ -488,6 +488,12 @@ export const AUDIT_ENTITY_TYPES = [
   "reddit_monitoring_query",
   "reddit_community_posture",
   "response_publication_attempt",
+  // The embedded website widget. Its own subject rather than `location`: the
+  // location is a restaurant and the widget is a thing published on the
+  // internet under that restaurant's name, and an auditor asking "when did
+  // this stop appearing on our homepage" must not have to read every event
+  // about the restaurant to find out.
+  "review_widget",
 ] as const;
 export const auditEntityTypeSchema = vocabulary(AUDIT_ENTITY_TYPES).schema;
 export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>;
@@ -673,6 +679,27 @@ export const AUDIT_EVENT_TYPES = [
   "response.publish_failed",
   "response.publish_reconciled",
   "response.retracted",
+  // The website review widget. Five names rather than a `created`/`updated`
+  // pair, because three of these change what a stranger sees on a customer's
+  // own website and the other two do not, and a trail that cannot separate
+  // them is a trail nobody can answer "when did our homepage change" from.
+  //
+  // Metadata carries widget configuration only — theme, layout, selection
+  // mode, approved domains, and the id of the pinned review. Never the review
+  // text and never the reviewer's name: the widget publishes those, but the
+  // audit trail is not where a copy of them belongs, which is the same rule
+  // every other event about a mention already keeps.
+  "review_widget.created",
+  "review_widget.updated",
+  // Reversible, and the public id survives. What a customer taking a page down
+  // for a fortnight is actually asking for.
+  "review_widget.disabled",
+  "review_widget.enabled",
+  // The irreversible one: every snippet already pasted into a website stops
+  // resolving. Its own event because it is the only widget act that cannot be
+  // undone from Lia, and the only one whose blast radius is somebody else's
+  // published HTML.
+  "review_widget.embed_id_rotated",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
@@ -719,3 +746,53 @@ export const GATE_REJECTION_REASONS = [
 ] as const;
 export const gateRejectionReasonSchema = vocabulary(GATE_REJECTION_REASONS).schema;
 export type GateRejectionReason = z.infer<typeof gateRejectionReasonSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Website review widget                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How the embedded widget looks.
+ *
+ * Two values, and no `auto`. A widget lives inside somebody else's page, where
+ * `prefers-color-scheme` describes the *visitor's* operating system and says
+ * nothing about the site around it — a light restaurant homepage would render
+ * a black card for every visitor who runs their laptop in dark mode. The
+ * customer picks, because the customer is the only party who can see the page.
+ */
+export const REVIEW_WIDGET_THEMES = ["light", "dark"] as const;
+export const reviewWidgetThemeSchema = vocabulary(REVIEW_WIDGET_THEMES).schema;
+export type ReviewWidgetTheme = z.infer<typeof reviewWidgetThemeSchema>;
+
+/**
+ * Which arrangement the widget draws.
+ *
+ * One value today. The photo- and video-led layouts in the product brief are
+ * deliberately not built, and this vocabulary is the seam they arrive through
+ * — named `single_review_text` rather than `default` so the second entry does
+ * not have to explain what the first one silently assumed.
+ */
+export const REVIEW_WIDGET_LAYOUTS = ["single_review_text"] as const;
+export const reviewWidgetLayoutSchema = vocabulary(REVIEW_WIDGET_LAYOUTS).schema;
+export type ReviewWidgetLayout = z.infer<typeof reviewWidgetLayoutSchema>;
+
+/** Whether the widget follows the feed or is pinned to one review. */
+export const REVIEW_WIDGET_SELECTION_MODES = ["most_recent", "specific"] as const;
+export const reviewWidgetSelectionModeSchema = vocabulary(
+  REVIEW_WIDGET_SELECTION_MODES,
+).schema;
+export type ReviewWidgetSelectionMode = z.infer<
+  typeof reviewWidgetSelectionModeSchema
+>;
+
+/**
+ * Whether the embed serves a review at all.
+ *
+ * `disabled` is reversible and keeps the public id, which is what a customer
+ * taking a page down for a week wants. Revocation — making an existing snippet
+ * permanently dead — is rotation of the public id, not a status, because the
+ * two questions ("is it on" and "which id is live") have independent answers.
+ */
+export const REVIEW_WIDGET_STATUSES = ["active", "disabled"] as const;
+export const reviewWidgetStatusSchema = vocabulary(REVIEW_WIDGET_STATUSES).schema;
+export type ReviewWidgetStatus = z.infer<typeof reviewWidgetStatusSchema>;

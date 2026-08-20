@@ -88,6 +88,7 @@ import {
   type DemoGenerationAttempt,
 } from "@/lib/data/demo/store";
 import { createMonitoringRepositories } from "@/lib/data/demo/monitoring";
+import { createReviewWidgetRepository } from "@/lib/data/demo/review-widgets";
 import { createYelpRepositories } from "@/lib/data/demo/yelp";
 import {
   AnalysisRunInProgressError,
@@ -755,6 +756,7 @@ export function createDemoDataSource(): LiaDataSource {
     kind: "demo",
     ...createMonitoringRepositories(),
     ...createYelpRepositories(),
+    reviewWidgets: createReviewWidgetRepository(),
 
     organizations: {
       async listForUser(userId) {

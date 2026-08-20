@@ -341,6 +341,14 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   // it failed would invite exactly the retry this state exists to prevent.
   "response.publish_reconciled": "Response publishing checked with the platform",
   "response.retracted": "Response retracted",
+  // Website widget. "Embed code" rather than "public id" throughout: the
+  // customer's word for the thing they pasted into their site is the code, and
+  // the trail is read by them at least as often as by us.
+  "review_widget.created": "Website widget created",
+  "review_widget.updated": "Website widget updated",
+  "review_widget.disabled": "Website widget switched off",
+  "review_widget.enabled": "Website widget switched on",
+  "review_widget.embed_id_rotated": "Website widget embed code regenerated",
 };
 
 /** Sync-run outcomes, as a person would describe them. */

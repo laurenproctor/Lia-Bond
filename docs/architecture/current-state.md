@@ -47,6 +47,7 @@ recorded under "Decisions made integrating the branches".
 | `src/yelp/` | Yelp Places provider boundary (`YelpPlacesProvider`). All Yelp Fusion behaviour lives behind it, plus the deterministic mock. Deliberately not a `PlatformConnector` — the same judgement D78 made for news. |
 | `src/lib/monitoring/` | News orchestration: the relevance gate, the poll service, budget enforcement, implicit connection creation, query CRUD. |
 | `src/lib/yelp/` | Yelp Assisted orchestration: listing matching, connect/disconnect, the activity check, the scheduled sweep, manual capture and its deduplication contract, the assisted-posting destination resolver. |
+| `src/lib/widgets/` | The website review widget: eligibility, approved domains, the public id, the plan seam for attribution, the embedded document, and the loader script. The one part of the product that renders for an audience with no session. |
 | `src/lib/integrations/` | OAuth state, credential handling, discovery, mapping, health. |
 | `src/lib/crypto/` | AES-256-GCM credential vault. Server-only. |
 | `src/lib/auth/` | Session resolution and the central permission matrix. |
@@ -93,6 +94,10 @@ nothing with it but the root layout's font.
 | `/integrations/yelp` | Yelp Assisted: capability table, connected listings, detected activity, manual capture, disconnect | repositories + Yelp Places API |
 | `/integrations/yelp/connect` | Listing search and confirmation for one location | repositories + Yelp Places API |
 | `/api/cron/yelp-listing-check` | Scheduled listing-check sweep across every tenant. **Built but not scheduled** — the Hobby plan's cron-job cap is already reached, so checks run from the interactive control until the account moves to Pro (`docs/integrations/yelp-assisted.md` §10) | repositories + Yelp Places API |
+| `/integrations/review-widget` | Website review widget: theme, review selection, approved domains, live preview, embed code, switch off, regenerate | repositories |
+| `/embed/review-widget.js` | The loader script every embed snippet points at. **Public, no session** — ES5, ~2 KB, origin baked in per deployment | — |
+| `/embed/review-widget/[publicId]` | The widget document a customer's website frames. **Public, no session** — one `SECURITY DEFINER` function is the entire anonymous surface (see Tenancy) | `review_widget_render` |
+| `/embed/review-widget/preview` | The same document against unsaved configuration. Session-gated on `review_widget.manage`; `frame-ancestors 'self'`, `no-store` | repositories |
 | `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
 | `/sign-up` | Creates an account **and** the organization it owns. Outside the app shell. | Supabase Auth + `provision_organization` |
 | `/invite/[token]` | Accept an invitation. Public — the invitee has no account yet. | `invitation_preview` / `accept_invitation` |
@@ -192,6 +197,23 @@ Five attributes spelled out four times is four chances for one of them to drift,
 and a missing `httpOnly` is a regression no test notices because the feature
 keeps working.
 
+The website review widget added a **third** deliberate exception, and it is a
+different shape from the two above: `ReviewWidgetRepository.render(publicId)` takes no
+scope at all. Its caller is a stranger's browser on a restaurant's website —
+there is no membership from which a scope could be constructed, and no session
+for `getOrganizationContext()` to read. `InvitationRepository.preview` is the
+existing precedent and carries the same exemption for the same reason.
+
+What replaces the scope is the **return type**. `ReviewWidgetRenderRow` holds
+widget configuration and six review fields, and nothing else: no status, no
+sentiment, no risk level, no raw payload, no organization id. A caller cannot
+widen it, so the anonymous surface is bounded by the type rather than by care
+at the call site. Under Supabase the method is one `SECURITY DEFINER` function
+(`public.review_widget_render`) which `anon` may execute and which is the only
+thing `anon` may reach — the table itself grants `anon` nothing, and section 13
+of `supabase/tests/rls-verification.sql` proves a direct select returns zero
+rows while the function returns one. Full detail in `docs/review-widget.md`.
+
 The active organization is stored in the `lia_active_organization` cookie
 (`httpOnly`, `sameSite=lax`). The organization slug is deliberately **not** in the
 URL: `CLAUDE.md` fixes the route list (`/overview`, `/mentions`, …), and prefixing
@@ -242,6 +264,13 @@ the proxy would make the app unpleasant, not insecure.
 `public.users.id`. An account created with a fresh id authenticates perfectly and
 then sees nothing at all. `npm run auth:seed` creates the seeded logins with
 their exact UUIDs for this reason.
+
+**`/embed` is public because it was never a product path.** `PRODUCT_PATHS` in
+`src/proxy.ts` is a denylist, so the widget routes fall through to Next
+untouched — no carve-out was needed and none was added. That is the correct
+outcome and it is worth stating explicitly, because "the embed works when
+signed out" is a property somebody could break by adding `/embed` to that list
+while tidying it.
 
 **`/api/cron` is the one route family that bypasses this gate on purpose.**
 `src/proxy.ts`'s `SESSIONLESS_PATHS` lists it explicitly, because Vercel Cron
@@ -475,6 +504,62 @@ Requesting a reset reports success whether or not the address exists. "No
 account with that email" is a free account-enumeration oracle on an endpoint
 reachable without a session, so provider errors are logged and swallowed too.
 
+### Website review widget
+
+Lia's first **outbound** surface: one Google review, rendered on a customer's
+own website from a copy-and-paste snippet. Everything else in this codebase
+describes something Lia read from somewhere else; this is the first thing it
+publishes, on a domain it does not own, to an audience with no session.
+
+```text
+customer's page
+  └─ <div data-lia-review-widget="rw_…">
+  └─ <script async src="/embed/review-widget.js">   ← loader: ES5, ~2 KB, no deps
+       └─ <iframe src="/embed/review-widget/rw_…">  ← self-contained document
+            └─ postMessage height ──▶ loader sizes the frame
+```
+
+Four decisions carry the rest of the design.
+
+**The document is a string, not a page.** A route handler returns complete HTML
+with inlined CSS and one inline script. A page under `src/app/` would inherit
+the root layout, `globals.css`, Tailwind's preflight, and the React runtime —
+all liabilities inside an iframe on somebody else's site, where a hydration
+error is a blank rectangle on a restaurant's homepage and a token change
+silently restyles thousands of customer pages. Nothing is fetched after the
+document itself, so the widget adds no third-party request to a customer's page.
+
+**Eligibility exists twice, and that is forced rather than chosen.** The
+anonymous path cannot run TypeScript, so `public.review_widget_render`'s `where`
+clauses mirror `firstFailedWidgetRule` in `src/lib/widgets/eligibility.ts`
+clause for clause. Each SQL clause carries its rule identifier as a trailing
+comment and `tests/review-widget-eligibility.test.ts` fails if the migration
+stops naming one. Every rule reuses a meaning the repository already has —
+`dismissed`, `escalated`, `source_removed_at`, `capture_method` — rather than
+inventing a new review state.
+
+**A pinned review that becomes unavailable shows an unavailable state, never a
+different review.** `selected_mention_id` is `on delete set null` with no
+paired check constraint, deliberately: the widget must be able to *be* pinned
+to nothing so the renderer can say so. "The selected review is not available"
+and "no review to show yet" are separate sentences because they are a
+configuration a person can fix and a wait, respectively.
+
+**Domain restriction is a CSP `frame-ancestors` directive**, so the visitor's
+browser enforces it on a URL anybody can fetch. Empty means unrestricted —
+closed-by-default would mean every widget was broken until somebody found the
+setting. `Referer` is never consulted: absent under `no-referrer` and forged by
+anything that is not a browser.
+
+**"Powered by Lia" is always shown**, because Lia has no billing model for a
+plan to gate it against. `resolveWidgetAttribution()` is the single decision
+point and `review_widgets.attribution_suppressed` is the seam a plan lands on —
+the same posture `monitoring_queries.postal_code` takes. A checkbox anyone
+could clear would not have been an implementation of the requirement.
+
+Full detail, including the eligibility table, the runbook, and what the feature
+deliberately does not build, is in `docs/review-widget.md`.
+
 ## Technical constraints
 
 - `CLAUDE.md` fixes the route list, the visual direction, and sentence casing.
@@ -488,6 +573,12 @@ reachable without a session, so provider errors are logged and swallowed too.
 - OAuth tokens never reach a client component, a repository DTO, an audit event,
   a log line, or a redirect URL. `src/lib/integrations/credentials.ts` is the
   only module that decrypts one.
+- Nothing but widget configuration and six named review fields may cross into
+  the anonymous embed path. `ReviewWidgetRenderRow` is the boundary and the
+  guarantee is structural: a caller cannot widen the type, so no status,
+  sentiment, risk level, or raw payload can reach a public page whatever the
+  renderer does. `anon` holds no table grant — one `SECURITY DEFINER` function
+  is the whole surface.
 - No model provider message reaches a user, a log, or a stored row. Stricter
   than the provider rule for Google, and for a specific reason: a model error
   can echo the prompt, and the prompt contains a review and a reviewer's name.
