@@ -6,18 +6,64 @@ import { AlertTriangle, Check, Copy, UserPlus } from "lucide-react";
 import { inviteMemberAction, type IssuedInvitation } from "@/app/actions/invitations";
 import { Button } from "@/components/ui/button";
 import { INVITABLE_ROLES } from "@/domain";
+import type { InvitationDeliveryStatus } from "@/lib/email/invitation-message";
 import { MEMBERSHIP_ROLE_LABELS } from "@/lib/labels";
 
 /**
- * Invite somebody by email, and hand back the link.
+ * Invite somebody by email, and say what became of the invitation.
+ *
+ * Lia emails the link when a verified sender is configured, and shows it to the
+ * inviter either way. The link is *not* hidden on a successful send: it costs
+ * one line, and it is the only recovery available when a message goes to spam
+ * or the address had a typo that is still a deliverable mailbox.
  *
  * The link is shown **once**. Nothing stores it — the server keeps only a
  * SHA-256 hash — so navigating away loses it and the remedy is to revoke and
  * re-invite. That is stated on screen rather than left to be discovered.
  *
+ * The three outcomes that are not a send each say who has to do what next,
+ * because "invitation created" alone reads as "we emailed them" and leaves an
+ * inviter waiting on a message that was never going to arrive.
+ *
  * Owner is absent from the picker on purpose: ownership is transferred between
  * people who already share an organization, not granted through a link.
  */
+
+/** What the inviter is told, per outcome. Sentence case, and never a claim. */
+const DELIVERY_COPY: Record<
+  InvitationDeliveryStatus,
+  { tone: "green" | "amber"; headline: string; detail: string }
+> = {
+  sent: {
+    tone: "green",
+    headline: "Invitation emailed to",
+    detail:
+      "Keep this link in case the email does not arrive — it is the same invitation.",
+  },
+  logged: {
+    tone: "amber",
+    headline: "Invitation created for",
+    detail:
+      "Email is in log mode on this server, so nothing was delivered. The message was written to the server log. Send this link yourself.",
+  },
+  not_configured: {
+    tone: "amber",
+    headline: "Invitation created for",
+    detail:
+      "Lia is not set up to send invitation email on this server, so nothing was delivered. Send this link yourself, or ask your administrator to configure a sender.",
+  },
+  failed: {
+    tone: "amber",
+    headline: "Invitation created for",
+    detail:
+      "We could not email it — the mail service refused the message. The invitation is valid, so send this link yourself.",
+  },
+};
+
+const TONE_STYLES = {
+  green: "border-green-600/20 bg-green-50",
+  amber: "border-amber-600/20 bg-amber-100",
+} as const;
 export function InviteMemberForm() {
   const router = useRouter();
   const emailId = useId();
@@ -115,12 +161,14 @@ export function InviteMemberForm() {
       {issued ? (
         <div
           role="status"
-          className="flex flex-col gap-2 rounded-lg border border-green-600/20 bg-green-50 px-3 py-3"
+          className={`flex flex-col gap-2 rounded-lg border px-3 py-3 ${
+            TONE_STYLES[DELIVERY_COPY[issued.delivery].tone]
+          }`}
         >
           <p className="text-[13px] text-gray-950">
-            Invitation created for{" "}
-            <span className="font-medium">{issued.email}</span>. Send them this
-            link — it works once and expires in seven days.
+            {DELIVERY_COPY[issued.delivery].headline}{" "}
+            <span className="font-medium">{issued.email}</span>. The link works
+            once and expires in seven days.
           </p>
 
           <div className="flex items-center gap-2">
@@ -142,8 +190,8 @@ export function InviteMemberForm() {
           </div>
 
           <p className="text-[12px] text-gray-500">
-            We do not store this link. If you lose it, revoke the invitation and
-            send a new one.
+            {DELIVERY_COPY[issued.delivery].detail} We do not store it — if you
+            lose it, revoke the invitation and send a new one.
           </p>
         </div>
       ) : null}

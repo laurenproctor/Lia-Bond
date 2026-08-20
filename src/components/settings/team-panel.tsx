@@ -27,12 +27,15 @@ export function TeamPanel({
   actingUserId,
   actingRole,
   canManage,
+  canEmailInvitations,
 }: {
   members: MembershipWithUser[];
   invitations: InvitationWithInviter[];
   actingUserId: string;
   actingRole: MembershipRole;
   canManage: boolean;
+  /** Whether this server can deliver invitation mail. Never assumed true. */
+  canEmailInvitations: boolean;
 }) {
   // Computed once and passed down, rather than re-derived per row. The answer
   // is a property of the organization, not of the member being rendered.
@@ -122,7 +125,9 @@ export function TeamPanel({
           title="Invitations"
           description={
             canManage
-              ? "Invite by email, then send the person the link. Each link works once."
+              ? canEmailInvitations
+                ? "Lia emails each invitation and shows you the link as a backup. Each link works once."
+                : "Invitation email is not configured on this server, so send the person the link yourself. Each link works once."
               : "People who have been invited but have not joined yet."
           }
         />

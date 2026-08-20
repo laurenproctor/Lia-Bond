@@ -37,6 +37,15 @@ export interface OutboundAttachment {
 }
 
 export interface OutboundEmail {
+  /**
+   * Envelope sender. Defaults to the support identity.
+   *
+   * An override rather than a required field because the help form, the
+   * contact form and early access all legitimately come from Lia support, and
+   * only invitations — addressed to someone outside the account — need a
+   * sender on a verified domain.
+   */
+  from?: string;
   to: string[];
   cc?: string[];
   /** Where a reply goes — the person who asked, not the sending identity. */
@@ -74,6 +83,7 @@ export async function sendEmail(message: OutboundEmail): Promise<EmailDelivery> 
     console.info(
       [
         "[email:log] not delivered — LIA_EMAIL_MODE=log",
+        `from: ${message.from ?? supportFromAddress()}`,
         `to: ${message.to.join(", ")}`,
         message.cc?.length ? `cc: ${message.cc.join(", ")}` : null,
         message.replyTo?.length ? `reply-to: ${message.replyTo.join(", ")}` : null,
@@ -96,7 +106,7 @@ export async function sendEmail(message: OutboundEmail): Promise<EmailDelivery> 
 
   const apiKey = requireResendApiKey();
   const response = await post(apiKey, {
-    from: supportFromAddress(),
+    from: message.from ?? supportFromAddress(),
     to: message.to,
     ...(message.cc?.length ? { cc: message.cc } : {}),
     ...(message.replyTo?.length ? { reply_to: message.replyTo } : {}),

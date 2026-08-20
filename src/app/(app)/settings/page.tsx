@@ -8,6 +8,7 @@ import { SegmentedTabs } from "@/components/ui/segmented-tabs";
 import { OrganizationPanel } from "@/components/settings/organization-panel";
 import { ProfilePanel } from "@/components/settings/profile-panel";
 import { TeamPanel } from "@/components/settings/team-panel";
+import { canEmailInvitations } from "@/lib/env";
 import { can } from "@/lib/auth/permissions";
 import { MEMBERSHIP_ROLE_LABELS } from "@/lib/labels";
 import { getDataSource } from "@/lib/data";
@@ -91,6 +92,9 @@ export default async function SettingsPage() {
             actingUserId={context.scope.userId}
             actingRole={context.role}
             canManage={canManage}
+            // Read on the server: the panel must not promise mail this
+            // deployment cannot send.
+            canEmailInvitations={canEmailInvitations()}
           />
 
           <SectionPlaceholder
