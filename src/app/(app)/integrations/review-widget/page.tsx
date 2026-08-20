@@ -1,21 +1,28 @@
 import type { Metadata } from "next";
+import { MapPin } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
+import { ConnectGoogleForm } from "@/components/integrations/connect-google-form";
 import {
   ReviewWidgetConfigurator,
   type ReviewChoiceView,
 } from "@/components/integrations/review-widget-configurator";
 import { ReviewWidgetEmbedPanel } from "@/components/integrations/review-widget-embed-panel";
 import { ReviewWidgetLocationPicker } from "@/components/integrations/review-widget-location-picker";
+import { ReviewWidgetTeaser } from "@/components/integrations/review-widget-teaser";
+import { ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
 import { appOrigin } from "@/lib/env";
+import { isGoogleConnectorAvailable } from "@/integrations/registry";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
 import { ATTRIBUTION_EXPLANATION } from "@/lib/widgets/attribution";
 import { DEFAULT_MINIMUM_RATING } from "@/domain";
 import { listWidgetReviewChoices } from "@/lib/widgets/service";
+import type { MembershipRole } from "@/domain";
+import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
 
 export const metadata: Metadata = { title: "Website widgets" };
 
@@ -54,15 +61,36 @@ export default async function ReviewWidgetPage({
   const canManage = can(role, "review_widget.manage");
 
   if (locations.length === 0) {
+    const googleConnected = await isGoogleConnected(dataSource, scope);
+
     return (
       <PageBody>
         <Header />
         <Card>
           <EmptyState
+            icon={MapPin}
             title="No locations yet"
-            description="Add a location and connect its Google Business Profile before putting a review on your website."
+            description="A widget shows one location's Google reviews, so Lia needs a location connected before it has anything to put on your website."
+            action={
+              <ConnectLocationAction
+                googleConnected={googleConnected}
+                role={role}
+              />
+            }
           />
         </Card>
+
+        <Card>
+          <CardHeader
+            title="What you'll be putting on your site"
+            description="Rendered by the same code your website will get — this is the widget itself, not a picture of it."
+          />
+          <div className="mt-4">
+            <ReviewWidgetTeaser />
+          </div>
+        </Card>
+
+        <WidgetRulesCard />
       </PageBody>
     );
   }
@@ -154,31 +182,118 @@ export default async function ReviewWidgetPage({
         </div>
       </Card>
 
-      <Card>
-        <CardHeader
-          title="What this widget shows"
-          description="Stated per rule, so nothing here has to be inferred from an empty card."
-        />
-        <ul className="mt-3 space-y-1.5 text-[12.5px] text-gray-700">
-          <li>One Google review at a time, for this location only.</li>
-          <li>
-            Reviews with no written text, reviews you have dismissed, reviews
-            escalated for handling, and reviews Google no longer carries are
-            never shown.
-          </li>
-          <li>
-            &ldquo;Read on Google&rdquo; opens this location&rsquo;s Google
-            profile. Google publishes no link to an individual review, so Lia
-            does not invent one.
-          </li>
-          <li>{ATTRIBUTION_EXPLANATION}</li>
-          <li>
-            Photo and video layouts are not built yet. This version is text
-            only.
-          </li>
-        </ul>
-      </Card>
+      <WidgetRulesCard />
     </PageBody>
+  );
+}
+
+/**
+ * Whether this organization has a Google account attached at all.
+ *
+ * Only asked on the empty branch, and only to decide which button to draw:
+ * "connect Google" and "choose locations" are two different errands, and
+ * offering the wrong one sends somebody to a screen that cannot help them. The
+ * configured branch never runs this query.
+ */
+async function isGoogleConnected(
+  dataSource: LiaDataSource,
+  scope: OrganizationScope,
+): Promise<boolean> {
+  const connection = await dataSource.platformConnections.getByPlatform(
+    scope,
+    "google_business_profile",
+  );
+  return connection !== null && connection.status !== "disconnected";
+}
+
+/**
+ * The way out of the empty state.
+ *
+ * Three outcomes rather than one link, because "connect a location" means
+ * something different depending on where the organization already is, and a
+ * button that lands on a screen saying *you cannot do this here* is worse than
+ * no button:
+ *
+ * - **No Google account, and this person may connect one.** The real OAuth
+ *   form, returning to location selection — the same control the integrations
+ *   screen offers, not a link to it.
+ * - **Google connected.** Straight to location selection, which is where the
+ *   locations actually come from.
+ * - **Neither.** The integrations screen, which explains the state of every
+ *   source and is where an owner would be sent anyway. A member without the
+ *   permission is not shown a button that would fail; they are shown where to
+ *   look.
+ */
+function ConnectLocationAction({
+  googleConnected,
+  role,
+}: {
+  googleConnected: boolean;
+  role: MembershipRole;
+}) {
+  if (!googleConnected) {
+    if (can(role, "integration.connect") && isGoogleConnectorAvailable()) {
+      return <ConnectGoogleForm label="Connect a location" />;
+    }
+    return (
+      <ButtonLink href="/integrations" variant="primary">
+        Go to integrations
+      </ButtonLink>
+    );
+  }
+
+  if (can(role, "integration.manage_profiles")) {
+    return (
+      <ButtonLink
+        href="/integrations/google-business-profile/setup"
+        variant="primary"
+        icon={MapPin}
+      >
+        Choose locations
+      </ButtonLink>
+    );
+  }
+
+  return (
+    <ButtonLink href="/integrations" variant="primary">
+      Go to integrations
+    </ButtonLink>
+  );
+}
+
+/**
+ * The capability list, drawn on both branches.
+ *
+ * It belongs on the empty state as much as on the configured one — arguably
+ * more, since the teaser above it is showing somebody a card they have not
+ * earned yet, and the honest thing to put underneath is what the widget will
+ * and will not do.
+ */
+function WidgetRulesCard() {
+  return (
+    <Card>
+      <CardHeader
+        title="What this widget shows"
+        description="Stated per rule, so nothing here has to be inferred from an empty card."
+      />
+      <ul className="mt-3 space-y-1.5 text-[12.5px] text-gray-700">
+        <li>One Google review at a time, for one location only.</li>
+        <li>
+          Reviews with no written text, reviews you have dismissed, reviews
+          escalated for handling, and reviews Google no longer carries are never
+          shown.
+        </li>
+        <li>
+          &ldquo;Read on Google&rdquo; opens the location&rsquo;s Google
+          profile. Google publishes no link to an individual review, so Lia does
+          not invent one.
+        </li>
+        <li>{ATTRIBUTION_EXPLANATION}</li>
+        <li>
+          Photo and video layouts are not built yet. This version is text only.
+        </li>
+      </ul>
+    </Card>
   );
 }
 

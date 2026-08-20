@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Monitor, Smartphone } from "lucide-react";
+import { useWidgetFrameHeight } from "@/components/integrations/use-widget-frame-height";
 import { cn } from "@/lib/cn";
 
 /**
@@ -35,26 +36,7 @@ export interface ReviewWidgetPreviewProps {
 export function ReviewWidgetPreview({ src, theme }: ReviewWidgetPreviewProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [width, setWidth] = useState<WidthKey>("desktop");
-  const [height, setHeight] = useState(220);
-
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      // Same-origin here, unlike the public loader: the preview is framed from
-      // Lia's own pages, so anything claiming to be this frame from elsewhere
-      // is not it.
-      if (event.origin !== window.location.origin) return;
-
-      const data = event.data as { source?: string; type?: string; height?: number };
-      if (data?.source !== "lia-review-widget" || data.type !== "height") return;
-      if (event.source !== frameRef.current?.contentWindow) return;
-
-      const next = Number(data.height);
-      if (Number.isFinite(next) && next > 0 && next < 2000) setHeight(next);
-    }
-
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, []);
+  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef);
 
   return (
     <div className="space-y-3">
@@ -106,6 +88,7 @@ export function ReviewWidgetPreview({ src, theme }: ReviewWidgetPreviewProps) {
             key={src}
             src={src}
             title="Widget preview"
+            onLoad={onFrameLoad}
             className="block w-full border-0"
             style={{ height }}
           />

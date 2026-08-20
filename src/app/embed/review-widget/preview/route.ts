@@ -6,6 +6,7 @@ import { getOrganizationContext } from "@/lib/tenancy/organization-context";
 import { renderReviewWidgetDocument } from "@/lib/widgets/document";
 import { parsePreviewRequest, resolvePreviewRow } from "@/lib/widgets/preview";
 import { resolveRenderedWidget } from "@/lib/widgets/render";
+import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
 
 /**
  * The in-app preview frame.
@@ -35,19 +36,51 @@ import { resolveRenderedWidget } from "@/lib/widgets/render";
  * Placed at `/embed/review-widget/preview` — a literal segment that
  * `isWidgetPublicIdShaped` would reject, so it can never collide with a real
  * public id even though it shares the parent path.
+ *
+ * **`?sample=1` is the one branch that is none of the above.** It renders an
+ * invented review (`@/lib/widgets/sample`) for the teaser on the
+ * configuration screen's empty state, and it reads no tenant data at all — no
+ * location id, no mention, no profile. So it answers before the organization
+ * context is resolved, deliberately: the empty state is shown to every member
+ * of an organization with no locations yet, including the ones who will never
+ * hold `review_widget.manage`, and gating a fixed string of fiction behind a
+ * permission check on data it never touches would blank the frame for them
+ * for no gain. Everything else about the response is unchanged — same
+ * headers, same `frame-ancestors 'self'`, same `no-store`.
  */
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
   try {
+    const params = new URL(request.url).searchParams;
+
+    if (params.get("sample") === "1") {
+      const now = Date.now();
+      return document(
+        renderReviewWidgetDocument({
+          // As obviously not a public id as "preview" is, and distinct from it
+          // so a frame in a server log says which of the two it was.
+          publicId: "sample",
+          rendered: resolveRenderedWidget(
+            // Compared rather than parsed: the sample takes exactly one input
+            // and the honest answer to any other value is the light card, not
+            // a validation error inside a teaser.
+            sampleReviewWidgetRow(params.get("theme") === "dark" ? "dark" : "light", now),
+          ),
+          now,
+        }),
+        200,
+      );
+    }
+
     const context = await getOrganizationContext();
 
     if (!can(context.role, "review_widget.manage")) {
       return problem("You do not have permission to preview this widget.", 403);
     }
 
-    const parsed = parsePreviewRequest(new URL(request.url).searchParams);
+    const parsed = parsePreviewRequest(params);
     const dataSource = await getDataSource();
 
     const row = await resolvePreviewRow(

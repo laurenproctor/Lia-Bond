@@ -163,6 +163,7 @@ customer's page
 | `/embed/review-widget.js` | anonymous | Loader. Origin baked in at request time, so a preview deployment points at itself. |
 | `/embed/review-widget/[publicId]` | anonymous | The document. Always 200 with something drawable. |
 | `/embed/review-widget/preview` | signed in, `review_widget.manage` | Same renderer, unsaved configuration, `frame-ancestors 'self'`, `no-store`. |
+| `/embed/review-widget/preview?sample=1` | anyone | The empty state's teaser. An invented review, no tenant data, so it answers before the organization context is resolved. See §9. |
 
 None is a page. A page under `src/app/` inherits the root layout,
 `globals.css`, Tailwind's preflight, and the React runtime — every one of which
@@ -185,6 +186,16 @@ arrow function, or template literal.
 An iframe cannot size itself. The document measures with `ResizeObserver` and
 posts `{source: "lia-review-widget", type: "height", …}` to the parent; the
 loader listens.
+
+In-app, `useWidgetFrameHeight` is the listening half for both framed screens.
+It does one thing the public loader does not need to: it also measures the
+frame directly on `load`. A frame in server-rendered HTML starts loading with
+the page and can post its height *before* React has hydrated and attached any
+listener — `postMessage` has no replay and `ResizeObserver` never fires again,
+so the frame silently keeps its initial height and clips the review. The
+teaser lost that race every time. Measuring `contentDocument` works only
+because these two frames are same-origin, which is exactly what the public
+loader cannot assume.
 
 Two things make that channel safe:
 
@@ -357,6 +368,40 @@ only ever be *which* review appears.
 The alternative was framing the live public URL, which would be exact and would
 also mean a customer could not see a theme change until after they had
 published it.
+
+### The empty state shows the widget, not a description of it
+
+An organization with no locations cannot be shown its own review, and the
+screen that says so is the screen where somebody decides whether the feature is
+worth connecting a Google account for. So `/integrations/review-widget` draws
+both themes filled with an invented review (`src/lib/widgets/sample.ts`),
+framed through the same route the live preview uses in its `sample` mode — the
+teaser is rendered by the code that renders the real embed, and so cannot
+promise a card the product does not ship.
+
+Three things this costs, and why each is paid:
+
+- **The sample branch answers before `getOrganizationContext()`.** It reads no
+  location, no mention, no profile. The empty state is shown to every member of
+  a new organization, including the ones who will never hold
+  `review_widget.manage`, and gating a fixed string of fiction behind a
+  permission check on data it never touches would blank the frame for them for
+  nothing. Headers are unchanged: `frame-ancestors 'self'`, `no-store`,
+  `noindex`.
+- **A fabricated review exists in the codebase.** It is generic by
+  construction — no cuisine, no city, no business name — it is never served
+  under a public id, and the card underneath it says in plain text that it is
+  an example. That sentence is not small print; it is the reason the rest of
+  this feature's care about real reviews stays credible.
+- **"Read on Google" points at Google Maps itself.** The footer is part of what
+  the widget looks like, so the teaser draws it, and a fabricated `?cid=` would
+  be a link to a business that does not exist.
+
+The same screen's empty state also routes somebody onward rather than leaving
+them at a dead end: the Google OAuth form when no account is connected and they
+may connect one, location selection when an account is connected, and the
+integrations screen otherwise. A button that lands on a screen saying *you
+cannot do this here* is worse than no button.
 
 ## 10. Operational runbook
 

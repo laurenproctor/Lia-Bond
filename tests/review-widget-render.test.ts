@@ -3,6 +3,7 @@ import type { ReviewWidgetRenderRow } from "@/domain";
 import { escapeHtml, renderReviewWidgetDocument } from "@/lib/widgets/document";
 import { widgetReviewDate } from "@/lib/widgets/relative-date";
 import { resolveRenderedWidget } from "@/lib/widgets/render";
+import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
 
 /**
  * What actually reaches a stranger's screen.
@@ -292,5 +293,50 @@ describe("the date under the reviewer's name", () => {
 
   it("renders nothing rather than 'Invalid Date' for an unparseable value", () => {
     expect(widgetReviewDate("not-a-date", now)).toBe("");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* The teaser's example review                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The empty state promises "this is the widget itself, not a picture of it",
+ * and these hold that promise: the sample has to survive the real resolver, or
+ * the teaser silently degrades into an unavailable card and shows a new
+ * customer an empty rectangle at the exact moment they are deciding whether to
+ * connect an account.
+ */
+describe("the sample used by the empty-state teaser", () => {
+  it("resolves to a drawable review in both themes", () => {
+    for (const theme of ["light", "dark"] as const) {
+      const rendered = resolveRenderedWidget(sampleReviewWidgetRow(theme, NOW));
+
+      expect(rendered.state).toBe("ready");
+      expect(rendered.theme).toBe(theme);
+      if (rendered.state !== "ready") return;
+
+      expect(rendered.review.text.length).toBeGreaterThan(0);
+      expect(rendered.review.rating).toBe(5);
+      // Fiction, but a real Google destination — an invented listing id would
+      // be a link to a business that does not exist.
+      expect(rendered.review.readOnGoogleUrl).toContain("https://www.google.com/maps");
+    }
+  });
+
+  it("carries a date a widget would plausibly be showing", () => {
+    const row = sampleReviewWidgetRow("light", NOW);
+    expect(widgetReviewDate(row.reviewPublishedAt ?? "", NOW)).toBe("1 week ago");
+  });
+
+  it("shows the attribution line, like every other widget", () => {
+    const html = renderReviewWidgetDocument({
+      publicId: "sample",
+      rendered: resolveRenderedWidget(sampleReviewWidgetRow("light", NOW)),
+      now: NOW,
+    });
+
+    expect(html).toContain("Powered by");
+    expect(html).toContain("Read on Google");
   });
 });
