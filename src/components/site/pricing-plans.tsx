@@ -3,18 +3,24 @@
 import { useId, useState } from "react";
 import { PricingTier } from "@/components/site/pricing-tier";
 import type { BillingPeriod } from "@/lib/site/content/pricing";
-import { PRICING_PLANS } from "@/lib/site/content/pricing";
+import {
+  ANNUAL_DISCOUNT_LABEL,
+  ANNUAL_DISCOUNT_PERCENT,
+  ANNUAL_MONTHS_BILLED,
+  PRICING_PLANS,
+} from "@/lib/site/content/pricing";
 
 /**
- * The three cards and the switch that repriced them.
+ * The three cards and the switch that reprices them.
  *
- * Client, and the only client component on the page: the cards themselves
+ * Client, and one of two client components on the page: the cards themselves
  * stay presentational, so the state lives at the smallest node that owns both
  * the switch and the figures it changes.
  *
- * The reference design paired its switch with "save 20% on annual". This one
- * cannot say that — annual is twelve months at the same rate — so the caption
- * says what the switch actually does instead of implying a discount.
+ * The reference design paired its switch with "save 20% on annual". The badge
+ * here says what the discount actually is — two months free, so 17% — and
+ * both the badge and the caption read it off `ANNUAL_MONTHS_BILLED` rather
+ * than restating a number that could drift from the prices beside it.
  */
 export function PricingPlans() {
   const [period, setPeriod] = useState<BillingPeriod>("monthly");
@@ -23,11 +29,12 @@ export function PricingPlans() {
 
   return (
     <>
-      <div className="mb-[clamp(28px,4vw,40px)] flex flex-col items-center gap-1.5">
+      <div className="mb-[clamp(28px,4vw,40px)] flex flex-col items-center gap-2">
         <div className="flex items-center gap-3">
-          {/* `aria-hidden` on the flanking words: the switch already carries
-              the whole state in its own label, and a screen reader reading
-              "monthly annual switch, annual, on" is noise, not context. */}
+          {/* `aria-hidden` on the flanking words and the badge: the switch
+              already carries the whole state in its own label, and a screen
+              reader reading "monthly annual 2 months free switch, annual, on"
+              is noise, not context. */}
           <span
             aria-hidden="true"
             className={`text-[14px] transition-colors ${
@@ -63,20 +70,28 @@ export function PricingPlans() {
             Annual
           </span>
 
+          <span
+            aria-hidden="true"
+            className="rounded-[20px] bg-site-amber-tint px-2.5 py-1 text-[12px] font-semibold whitespace-nowrap text-site-amber-ink"
+          >
+            {ANNUAL_DISCOUNT_LABEL}
+          </span>
+
           <span id={labelId} className="sr-only">
-            Show annual prices
+            Show annual prices — {ANNUAL_DISCOUNT_LABEL},{" "}
+            {ANNUAL_DISCOUNT_PERCENT}% off
           </span>
         </div>
 
         <p
-          className="text-[13px] text-site-muted"
+          className="max-w-[420px] text-center text-[13px] text-site-muted"
           // Polite, not assertive: the prices below change at the same moment
           // and a screen reader should finish the current line first.
           aria-live="polite"
         >
           {annual
-            ? "Annual is twelve months at the same rate, billed once a year."
-            : "Billed monthly. Annual is the same rate, billed once a year."}
+            ? `Billed once a year at ${ANNUAL_MONTHS_BILLED} months' rate — ${ANNUAL_DISCOUNT_LABEL}, ${ANNUAL_DISCOUNT_PERCENT}% off.`
+            : `Billed monthly. Pay for the year up front and you are charged for ${ANNUAL_MONTHS_BILLED} months, not 12.`}
         </p>
       </div>
 
@@ -88,6 +103,7 @@ export function PricingPlans() {
             blurb={plan.blurb}
             price={plan.price(period)}
             priceNote={plan.priceNote(period)}
+            savingNote={plan.savingNote(period)}
             ctaLabel={plan.ctaLabel}
             ctaHref={plan.ctaHref}
             features={plan.features}
