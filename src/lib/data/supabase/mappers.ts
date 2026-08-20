@@ -23,9 +23,11 @@ import {
   platformProfileSchema,
   platformSyncRunSchema,
   responseDraftSchema,
+  reviewWidgetSchema,
   userSchema,
   yelpActivityOccurrenceSchema,
   yelpListingSnapshotSchema,
+  DEFAULT_MINIMUM_RATING,
   type AnalysisRun,
   type Approval,
   type AuditEvent,
@@ -50,6 +52,7 @@ import {
   type PlatformProfile,
   type PlatformSyncRun,
   type ResponseDraft,
+  type ReviewWidget,
   type User,
   type YelpActivityOccurrence,
   type YelpListingSnapshot,
@@ -930,5 +933,39 @@ export function toYelpActivityOccurrence(row: Row): YelpActivityOccurrence {
       updatedAt: iso(row.updated_at),
     },
     "yelp activity occurrence",
+  );
+}
+
+/**
+ * One `review_widgets` row.
+ *
+ * `minimum_rating` goes through `num` for the reason the Yelp snapshot mapper
+ * spells out: it is a Postgres `numeric`, PostgREST returns those as strings,
+ * and `"4.0" >= 4` is a comparison nobody wants to reason about. The fallback
+ * is the column's own default rather than zero — a widget whose floor failed
+ * to parse must not silently become "publish anything".
+ */
+export function toReviewWidget(row: Row): ReviewWidget {
+  return parseOrThrow(
+    reviewWidgetSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      locationId: row.location_id,
+      publicId: row.public_id,
+      status: row.status,
+      layout: row.layout,
+      theme: row.theme,
+      selectionMode: row.selection_mode,
+      selectedMentionId: row.selected_mention_id ?? null,
+      minimumRating: num(row.minimum_rating) ?? DEFAULT_MINIMUM_RATING,
+      allowedDomains: stringArray(row.allowed_domains),
+      attributionSuppressed: row.attribution_suppressed ?? false,
+      publicIdRotatedAt: isoOrNull(row.public_id_rotated_at),
+      createdByUserId: row.created_by_user_id ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "review widget",
   );
 }

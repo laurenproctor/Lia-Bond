@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowRight, Check, Minus } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
 import { ConnectGoogleForm } from "@/components/integrations/connect-google-form";
 import { NewsEntryCard } from "@/components/integrations/news-entry-card";
+import { ReviewWidgetEntryCard } from "@/components/integrations/review-widget-entry-card";
 import { YelpEntryCard } from "@/components/integrations/yelp-entry-card";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -71,9 +72,10 @@ export default async function IntegrationsPage({
   ]);
   const { scope, role } = context;
 
-  const [connections, profiles] = await Promise.all([
+  const [connections, profiles, reviewWidgets] = await Promise.all([
     dataSource.platformConnections.list(scope),
     dataSource.platformProfiles.list(scope),
+    dataSource.reviewWidgets.list(scope),
   ]);
 
   const profileCounts = new Map<string, number>();
@@ -256,6 +258,13 @@ export default async function IntegrationsPage({
       {/* Same arrangement as news: Yelp has no connect button of its own, so
           this card is the only route to the screen that creates the connection. */}
       {yelpConnection === null ? <YelpEntryCard available={yelpAvailable} /> : null}
+
+      {/* Unconditional, unlike the two above. The website widget has no
+          connection row whose absence this card would be standing in for —
+          it sends reviews out rather than reading them in. */}
+      <ReviewWidgetEntryCard
+        configuredCount={reviewWidgets.filter((widget) => widget.status === "active").length}
+      />
 
       <SectionPlaceholder
         title="Available integrations"

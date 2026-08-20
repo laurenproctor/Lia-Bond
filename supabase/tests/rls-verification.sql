@@ -981,4 +981,165 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- 13. The website review widget.
+--
+-- Four proofs, and the last two are the ones that matter most, because this is
+-- the only feature in the schema with an *anonymous* reader:
+--
+--   a. a member of one organization cannot see another's widget;
+--   b. writes admit exactly owner/admin/communications_lead, restated from
+--      `review_widget.manage` in src/lib/auth/permissions.ts;
+--   c. `anon` can execute `review_widget_render` — because a restaurant's
+--      website visitor has no session and never will;
+--   d. `anon` can reach nothing else. The function is the entire anonymous
+--      surface, and a direct select on review_widgets must return nothing even
+--      though the function it backs returns rows happily.
+--
+-- (d) is the check that would fail if somebody ever "fixed" the embed by
+-- adding a permissive select policy, which is the obvious wrong repair for the
+-- symptom "the widget shows nothing when signed out".
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  f record;
+  ushg_location uuid;
+  ushg_widget uuid;
+  failed boolean := false;
+begin
+  select * into f from rls_fixtures;
+  select id into ushg_location from public.locations
+   where organization_id = f.ushg_id limit 1;
+
+  perform pg_temp.become(f.ushg_comms_lead);
+
+  begin
+    insert into public.review_widgets (organization_id, location_id, public_id)
+    values (f.ushg_id, ushg_location, 'rw_rlsfixture000000000a')
+    returning id into ushg_widget;
+  exception when insufficient_privilege then
+    failed := true;
+  end;
+  perform pg_temp.check(
+    not failed and ushg_widget is not null,
+    'a communications lead (in review_widgets_insert''s role set) can create a review widget'
+  );
+
+  reset role;
+
+  -- (a) Harbor's owner must not see it.
+  perform pg_temp.become(f.harbor_owner);
+  perform pg_temp.check(
+    not exists (select 1 from public.review_widgets where id = ushg_widget),
+    'a member of another organization cannot see this widget'
+  );
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  ushg_location uuid;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+  select id into ushg_location from public.locations
+   where organization_id = f.ushg_id
+     and id not in (select location_id from public.review_widgets)
+   limit 1;
+
+  -- (b) An analyst is a member and holds none of the three roles.
+  perform pg_temp.become(f.ushg_analyst);
+  begin
+    insert into public.review_widgets (organization_id, location_id, public_id)
+    values (f.ushg_id, ushg_location, 'rw_rlsfixture000000000b');
+  exception when insufficient_privilege or check_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'an analyst cannot create a review widget (member of the org, but not owner/admin/communications_lead)'
+  );
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  rendered integer;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+
+  -- (c) and (d). `anon` is the role a restaurant's website visitor arrives as:
+  -- no JWT, so `auth.uid()` is null and no policy on the table could match.
+  set local role anon;
+
+  select count(*) into rendered
+    from public.review_widget_render('rw_rlsfixture000000000a');
+  perform pg_temp.check(
+    rendered = 1,
+    'an anonymous visitor can render a widget through review_widget_render'
+  );
+
+  -- Note the shape of this refusal, which is a third one alongside the two the
+  -- header describes. A missing *policy* yields zero rows; a missing *grant*
+  -- raises 42501 before RLS is consulted at all. `anon` has no table grant —
+  -- 20260820000300 revokes everything — so this is the stronger guarantee, and
+  -- asserting a zero count here would have quietly passed even if somebody
+  -- later granted SELECT and added a permissive policy.
+  begin
+    perform count(*) from public.review_widgets;
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'an anonymous visitor cannot select from review_widgets at all — no grant, so the function is the entire anonymous surface'
+  );
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+
+  -- "Revoke" is a public-id rotation and "switch off" is a status; both leave
+  -- the row, and therefore the record that a widget existed and what it
+  -- showed. Deleting it would erase that at exactly the moment somebody is
+  -- asking why a review disappeared from their website.
+  --
+  -- Both halves are asserted, because they are two different refusals.
+  -- 20260820000300 revokes DELETE from `authenticated` *and* declares no
+  -- delete policy, so the grant layer answers first with 42501 — checking only
+  -- for a surviving row would pass just as well if somebody restored the grant
+  -- and relied on the missing policy to match zero rows.
+  perform pg_temp.become(f.ushg_admin);
+  begin
+    delete from public.review_widgets where public_id = 'rw_rlsfixture000000000a';
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  reset role;
+
+  perform pg_temp.check(
+    refused,
+    'a session cannot delete a review widget — DELETE is revoked from authenticated outright'
+  );
+  perform pg_temp.check(
+    exists (select 1 from public.review_widgets where public_id = 'rw_rlsfixture000000000a'),
+    'and the widget record survives the attempt'
+  );
+end;
+$$;
+
+
 rollback;

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   ChevronRight,
+  Code2,
   MessagesSquare,
   Newspaper,
   PencilLine,
@@ -37,6 +38,7 @@ const ENTITY_ICONS: Record<AuditEntityType, LucideIcon> = {
   reddit_monitoring_query: MessagesSquare,
   reddit_community_posture: ShieldAlert,
   response_publication_attempt: Send,
+  review_widget: Code2,
 };
 
 const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
@@ -61,6 +63,10 @@ const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
   // reads with the same weight as an escalation rather than as configuration.
   reddit_community_posture: "amber",
   response_publication_attempt: "purple",
+  // Neutral: a widget change is configuration, not something that needs
+  // attention. The one act that does — regenerating the embed code — is
+  // guarded by a confirmation where it happens, not by a colour here.
+  review_widget: "neutral",
 };
 
 export interface RecentActivityCardProps {
