@@ -109,3 +109,45 @@ export function composeContactNotification({
     text: lines.join("\n"),
   };
 }
+
+/* -------------------------------------------------------------------------- */
+/* Delivery outcome                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What became of one of the two places a message can land.
+ *
+ * Three states, and only one of them is a failure: **skipped** (the subsystem
+ * is not configured — demo mode, not an error), **attempted and failed**, or
+ * **attempted and succeeded**.
+ */
+export interface DeliveryStep {
+  /** Was the subsystem configured enough to try at all? */
+  attempted: boolean;
+  /** Did the attempt come back an error? */
+  failed: boolean;
+  /** Did the message actually land there? */
+  succeeded: boolean;
+}
+
+/**
+ * True when the question reached neither the table nor the inbox.
+ *
+ * This is the only condition that should show a visitor an error, and it is
+ * deliberately narrower than "something went wrong". A message that was saved
+ * but not emailed is not lost — it is sitting in `contact_messages` with a
+ * null `notified_at`, waiting to be seen — and telling that visitor to send it
+ * again would produce a duplicate of a question we already have.
+ *
+ * The second clause is what keeps demo mode out of it: a fresh clone with an
+ * empty `.env` attempts neither step, so nothing succeeded and nothing failed,
+ * and the form still works.
+ */
+export function contactMessageWasLost(
+  save: DeliveryStep,
+  notify: DeliveryStep,
+): boolean {
+  const succeeded = save.succeeded || notify.succeeded;
+  const anyAttemptFailed = save.failed || notify.failed;
+  return !succeeded && anyAttemptFailed;
+}

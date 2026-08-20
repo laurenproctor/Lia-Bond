@@ -4,6 +4,8 @@ import {
   MIN_CONTACT_MESSAGE_LENGTH,
   composeContactNotification,
   contactMessageSchema,
+  contactMessageWasLost,
+  type DeliveryStep,
 } from "@/lib/site/contact-message";
 
 /**
@@ -179,5 +181,77 @@ describe("composeContactNotification", () => {
 
   it("names the sender in the subject so the inbox is scannable", () => {
     expect(compose(VALID).subject).toBe("Contact form — Sam Ortiz");
+  });
+});
+
+/**
+ * Which combinations of outcomes cost the visitor their question.
+ *
+ * This is the rule that decides whether someone is told to type their message
+ * again. Getting it wrong in one direction loses a question silently; in the
+ * other it asks for a duplicate of one already saved. Both directions are
+ * enumerated rather than trusted to a reading of the boolean expression.
+ */
+const SKIPPED: DeliveryStep = {
+  attempted: false,
+  failed: false,
+  succeeded: false,
+};
+const FAILED: DeliveryStep = {
+  attempted: true,
+  failed: true,
+  succeeded: false,
+};
+const SUCCEEDED: DeliveryStep = {
+  attempted: true,
+  failed: false,
+  succeeded: true,
+};
+/** Configured, sent without error, but deliberately not delivered (log mode). */
+const LOGGED: DeliveryStep = {
+  attempted: true,
+  failed: false,
+  succeeded: false,
+};
+
+describe("contactMessageWasLost", () => {
+  it("is false when both the table and the inbox took it", () => {
+    expect(contactMessageWasLost(SUCCEEDED, SUCCEEDED)).toBe(false);
+  });
+
+  it("is false when the message is saved but the send failed", () => {
+    // The whole point of saving first. The question is in `contact_messages`
+    // with a null `notified_at`; asking for it again would duplicate it.
+    expect(contactMessageWasLost(SUCCEEDED, FAILED)).toBe(false);
+  });
+
+  it("is false when the send worked but the row did not", () => {
+    expect(contactMessageWasLost(FAILED, SUCCEEDED)).toBe(false);
+  });
+
+  it("is true when both attempts failed", () => {
+    expect(contactMessageWasLost(FAILED, FAILED)).toBe(true);
+  });
+
+  it("is true when the only attempted step failed", () => {
+    // Email unconfigured and the insert broke: nothing holds the question, so
+    // the visitor has to hear about it even though only one step ran.
+    expect(contactMessageWasLost(FAILED, SKIPPED)).toBe(true);
+    expect(contactMessageWasLost(SKIPPED, FAILED)).toBe(true);
+  });
+
+  it("is false in demo mode, where neither step is configured", () => {
+    // A fresh clone with an empty `.env` must still show a working form.
+    expect(contactMessageWasLost(SKIPPED, SKIPPED)).toBe(false);
+  });
+
+  it("is false when mail is in log mode and the row was written", () => {
+    expect(contactMessageWasLost(SUCCEEDED, LOGGED)).toBe(false);
+  });
+
+  it("is false when nothing failed, even if nothing landed", () => {
+    // Log mode with Supabase unconfigured: a developer's machine, not an
+    // outage. Nothing failed, so nobody is asked to retype anything.
+    expect(contactMessageWasLost(SKIPPED, LOGGED)).toBe(false);
   });
 });
