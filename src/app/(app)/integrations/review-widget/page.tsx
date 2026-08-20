@@ -17,7 +17,7 @@ import { ATTRIBUTION_EXPLANATION } from "@/lib/widgets/attribution";
 import { DEFAULT_MINIMUM_RATING } from "@/domain";
 import { listWidgetReviewChoices } from "@/lib/widgets/service";
 
-export const metadata: Metadata = { title: "Website widget" };
+export const metadata: Metadata = { title: "Website widgets" };
 
 /**
  * Where a customer puts a Google review on their own website.
@@ -185,7 +185,7 @@ export default async function ReviewWidgetPage({
 function Header({ picker }: { picker?: React.ReactNode }) {
   return (
     <PageHeader
-      title="Website widget"
+      title="Website widgets"
       description="Show one recent Google review on your own website. Lia keeps it current, and stops showing it the moment it stops qualifying."
       actions={picker}
     />
