@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
+import { StaleBuildNotice } from "@/components/ui/stale-build-notice";
+import { isStaleBuildError, recoverFromStaleBuild } from "@/lib/stale-build";
 
 /**
  * Route-level error boundary for onboarding.
@@ -19,6 +21,16 @@ import { AlertTriangle } from "lucide-react";
  * database hiccup, a Google timeout during discovery — and progress is stored
  * server-side, so retrying resumes at exactly the same step rather than
  * restarting setup.
+ *
+ * One class of failure is diverted before any of that, because for it "Try
+ * again" is not merely unhelpful but incapable. The wizard is five screens
+ * joined by client-side navigation, so somebody walking it holds one document
+ * open for several minutes — long enough for a deploy to retire the build that
+ * document came from, after which the next `router.push` fetches a chunk that
+ * no longer exists. `reset()` re-renders this same tree from that same stale
+ * document and re-requests the same missing file; only replacing the document
+ * recovers. See `@/lib/stale-build` for why this is Lia's problem to solve
+ * rather than the platform's.
  */
 export default function OnboardingError({
   error,
@@ -27,9 +39,29 @@ export default function OnboardingError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  // Decided during render, not in an effect: the check is pure, and the answer
+  // chooses which screen this boundary is, which is not something to discover
+  // one commit late.
+  const stale = isStaleBuildError(error);
+
   useEffect(() => {
+    if (stale) {
+      // Logged as its own thing, at its own level. A skew failure is an
+      // operational fact about a deployment, not a defect in setup, and filing
+      // it with real onboarding errors is how it stays invisible.
+      console.warn("[onboarding] stale build, reloading", error.message);
+      recoverFromStaleBuild();
+      return;
+    }
+
     console.error("[onboarding]", error);
-  }, [error]);
+  }, [error, stale]);
+
+  // The notice, not the error panel. `recoverFromStaleBuild` has already
+  // started replacing the document in most cases, so this is usually on screen
+  // for a moment — and when the reload was suppressed as a loop guard, it is
+  // the honest description of what happened plus the button that fixes it.
+  if (stale) return <StaleBuildNotice />;
 
   return (
     <div
