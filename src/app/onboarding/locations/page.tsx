@@ -83,7 +83,7 @@ export default async function OnboardingLocationsPage() {
     const existing = await dataSource.locations.list(scope);
 
     return (
-      <OnboardingShell step="locations" state={context.state} aside={aside}>
+      <OnboardingShell organizations={context.available} activeOrganizationId={context.organization.id} step="locations" state={context.state} aside={aside}>
         <ManualLocationStep
           organizationTimezone={organization.defaultTimezone}
           existingLocations={existing.map((location) => ({

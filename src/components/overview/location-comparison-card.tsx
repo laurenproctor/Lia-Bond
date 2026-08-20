@@ -102,7 +102,7 @@ export function LocationComparisonCard({
       <CardHeader
         className="p-5 pb-3"
         title="Location comparison"
-        hint="Active locations only. Onboarding and paused locations are excluded."
+        hint="Active locations only. Locations still onboarding, and retired ones, are excluded."
         actions={
           <Link
             href="/locations"

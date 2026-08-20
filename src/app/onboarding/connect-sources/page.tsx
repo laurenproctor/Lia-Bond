@@ -103,6 +103,8 @@ export default async function OnboardingConnectSourcesPage({
 
   return (
     <OnboardingShell
+      organizations={context.available}
+      activeOrganizationId={context.organization.id}
       step="connect_sources"
       state={context.state}
       aside={

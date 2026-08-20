@@ -6,7 +6,9 @@ import {
   BRAND_VOICE_AXIS_KEYS,
   canDecideOnDraft,
   canEditDraft,
+  createAndMapLocationInputSchema,
   createLocationInputSchema,
+  updateLocationInputSchema,
   createMentionAnalysisInputSchema,
   createMentionInputSchema,
   finishAnalysisRunInputSchema,
@@ -42,7 +44,7 @@ import {
   type SyncResource,
   type UpdateBrandVoiceInput,
 } from "@/domain";
-import { conflict, DataError, invalidInput, notFound } from "@/lib/data/errors";
+import { conflict, DataError, forbidden, invalidInput, notFound } from "@/lib/data/errors";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   computeLocationMetrics,
@@ -492,6 +494,12 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
           organization_industry: input.industry ?? "Restaurant group",
           organization_timezone: input.timezone ?? "UTC",
           organization_language: input.language ?? "en-US",
+          // Both trailing and defaulted in SQL, so this call shape is
+          // backward compatible in the direction that matters for the rollout:
+          // the previously deployed application sends four arguments and still
+          // resolves. Passing null here is the same as omitting them.
+          p_request_key: input.requestKey ?? null,
+          p_source: input.source ?? "self_serve",
         });
 
         if (error) fail(error, "create that organization");
@@ -1087,6 +1095,137 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
         if (error) fail(error, "create the location");
         if (!data) throw notFound("Location");
         return toLocation(data as Row);
+      },
+
+      async update(scope, input) {
+        const value = updateLocationInputSchema.parse(input);
+
+        // Scoped lookup before the write, so a foreign id is indistinguishable
+        // from a missing one — the same pattern `updateLocationManagerAction`
+        // established and the monitoring-query cross-tenant fix adopted.
+        const existing = await this.get(scope, value.locationId);
+        if (!existing) throw notFound("Location");
+
+        // Only when the manager actually changes — mirroring
+        // `locations_manager_is_active_member`, which is a BEFORE trigger with
+        // the same guard. Postgres validates an assignment and never
+        // re-validates one that was legitimate when made, so checking here on
+        // every update would refuse an address edit the database would allow,
+        // and the demo adapter would have to be wrong in the same way to match.
+        if (value.managerUserId && value.managerUserId !== existing.managerUserId) {
+          await assertActiveMember(scope, value.managerUserId);
+        }
+
+        const { data, error } = await client
+          .from("locations")
+          .update({
+            name: value.name,
+            slug: value.slug,
+            address_line1: value.addressLine1,
+            address_line2: value.addressLine2,
+            city: value.city,
+            region: value.region,
+            postal_code: value.postalCode,
+            country_code: value.countryCode,
+            timezone: value.timezone,
+            status: value.status,
+            manager_user_id: value.managerUserId,
+          })
+          .eq("organization_id", scope.organizationId)
+          .eq("id", value.locationId)
+          .select("*")
+          .maybeSingle();
+
+        if (error) {
+          // The per-organization slug unique is the one collision a person can
+          // cause from the form, so it gets a field error rather than the
+          // generic message — matching how `organizations.update` surfaces its
+          // own slug conflict.
+          if (error.code === "23505") {
+            throw new DataError("conflict", "That address is already taken.", {
+              slug: "Another location in this organization already uses that address.",
+            });
+          }
+          fail(error, "update the location");
+        }
+        if (!data) throw notFound("Location");
+        return toLocation(data as Row);
+      },
+
+      async createAndMapFromIntegration(scope, input) {
+        const value = createAndMapLocationInputSchema.parse(input);
+
+        // Everything that makes this safe lives in the function: the
+        // organization is derived from the connection, the role check is
+        // restated there, status and manager are written literally, and the
+        // location, the binding, and three audit events commit together. This
+        // adapter's job is to call it and re-read what it produced — notably
+        // *not* to bind anything afterwards.
+        const { data, error } = await client.rpc("create_and_map_location", {
+          p_connection_id: value.platformConnectionId,
+          p_profiles: value.profiles.map((profile) => ({
+            externalProfileId: profile.externalProfileId,
+            externalProfileName: profile.externalProfileName,
+            externalAccountId: profile.externalAccountId,
+            profileUrl: profile.profileUrl,
+            verificationState: profile.verificationState,
+            providerMetadata: profile.providerMetadata,
+          })),
+          p_name: value.name,
+          p_address_line1: value.addressLine1,
+          p_address_line2: value.addressLine2,
+          p_city: value.city,
+          p_region: value.region,
+          p_postal_code: value.postalCode,
+          p_country_code: value.countryCode,
+          p_timezone: value.timezone,
+        });
+
+        if (error) {
+          // The function answers an unknown connection, a foreign one, and an
+          // unauthorized caller with one code and one message, so that it is
+          // not a probe for which connections exist. Preserve that here: a
+          // single `forbidden` for all three.
+          if (error.code === "42501") {
+            throw forbidden("That connection is not available.");
+          }
+          if (error.code === "23505") {
+            throw conflict("These profiles are already mapped to a different location.");
+          }
+          if (error.code === "55000") {
+            throw new DataError(
+              "conflict",
+              "This connection is disconnected. Reconnect it before mapping locations.",
+            );
+          }
+          fail(error, "create and map the location");
+        }
+
+        const returned = rows(data);
+        if (returned.length === 0) throw notFound("Location");
+
+        const locationId = String(returned[0]?.location_id);
+        const profileIds = returned.map((row) => String(row.profile_id));
+        const createdProfileIds = returned
+          .filter((row) => row.profile_created === true)
+          .map((row) => String(row.profile_id));
+        const replayed = returned[0]?.replayed === true;
+
+        const location = await this.get(scope, locationId);
+        if (!location) throw notFound("Location");
+
+        const { data: profileRows, error: profileError } = await from(
+          "platform_profiles",
+          scope,
+        ).in("id", profileIds);
+        if (profileError) fail(profileError, "load the mapped profiles");
+
+        return {
+          location,
+          profiles: rows(profileRows).map(toPlatformProfile),
+          createdProfileIds,
+          replayed,
+        };
       },
     },
 

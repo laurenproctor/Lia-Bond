@@ -29,6 +29,8 @@ const files = [
     .map((name) => join("supabase", "migrations", name)),
   join("supabase", "seed.sql"),
   join("supabase", "tests", "rls-verification.sql"),
+  join("supabase", "tests", "tenancy-verification.sql"),
+  join("supabase", "tests", "expanded-phase-rehearsal.sql"),
 ];
 
 let failed = false;

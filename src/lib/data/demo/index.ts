@@ -4,7 +4,9 @@ import {
   automationRuleConfigSchema,
   BRAND_VOICE_AXIS_KEYS,
   createEscalationInputSchema,
+  createAndMapLocationInputSchema,
   createLocationInputSchema,
+  updateLocationInputSchema,
   createMentionAnalysisInputSchema,
   createMentionInputSchema,
   EMPTY_ANALYSIS_COUNTS,
@@ -707,6 +709,48 @@ export function createDemoDataSource(): LiaDataSource {
     store().auditEvents.push(event);
   }
 
+  /**
+   * An audit row written by a repository method, as a user.
+   *
+   * Its counterpart in the Supabase adapter is a `security definer` function
+   * writing the row inside the transaction whose effects it describes —
+   * `raise_escalation`, `complete_generation_attempt`, and now
+   * `create_and_map_location`. Where the database does that, the demo adapter
+   * has to as well, or the two disagree about how many events a call produces.
+   *
+   * `actorType: "user"` because these describe something a person asked for,
+   * unlike `auditExecution` above, where a schedule ran a rule.
+   */
+  function pushDemoAuditEvent(
+    scope: OrganizationScope,
+    input: {
+      eventType: AuditEvent["eventType"];
+      entityType: AuditEvent["entityType"];
+      entityId: string;
+      previousState: JsonObject | null;
+      newState: JsonObject | null;
+      metadata: JsonObject;
+    },
+  ): void {
+    store().auditEvents.push(
+      auditEventSchema.parse({
+        id: seedId(
+          `audit:runtime:${scope.organizationId}:${input.entityId}:${input.eventType}:${store().auditEvents.length}`,
+        ),
+        organizationId: scope.organizationId,
+        actorUserId: scope.userId,
+        actorType: "user",
+        eventType: input.eventType,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        previousState: input.previousState,
+        newState: input.newState,
+        metadata: input.metadata,
+        occurredAt: nowIso(),
+      }),
+    );
+  }
+
   return {
     kind: "demo",
     ...createMonitoringRepositories(),
@@ -743,16 +787,65 @@ export function createDemoDataSource(): LiaDataSource {
         const name = input.name.trim();
         if (!name) throw invalidInput("An organization name is required.");
 
+        const source = input.source ?? "self_serve";
+        // Validated rather than trusted, mirroring the SQL: this reaches
+        // `audit_events.metadata`, and caller-authored free text in an audit
+        // trail is a trail somebody can write anything into.
+        if (source !== "self_serve" && source !== "in_app") {
+          throw invalidInput("Unknown provisioning source.");
+        }
+
         const user = store().users.find((row) => row.id === input.userId);
         if (!user) throw notFound("User account");
+
+        // Replay, before anything is written.
+        //
+        // The database gets this from `on conflict (provision_request_key) do
+        // nothing returning`, where the unique index is the lock; demo mode is
+        // single-threaded so a lookup is sufficient here. What must match is
+        // the *effect*: a replay returns the organization the first call
+        // created and writes nothing — no membership, no onboarding row, and
+        // exactly one `organization.created` event across both calls.
+        if (input.requestKey) {
+          const existingId = demoRuntimeStore().provisionRequestKeys.get(input.requestKey);
+          if (existingId) {
+            const existing = store().organizations.find((row) => row.id === existingId);
+            const membership = store().memberships.find(
+              (row) =>
+                row.organizationId === existingId &&
+                row.userId === input.userId &&
+                row.role === "owner",
+            );
+            // Scoped to the caller's own owner membership, matching the RPC's
+            // actor-scoped lookup: a key belonging to somebody else is refused
+            // rather than answered, and the refusal names no organization.
+            if (!existing || !membership) {
+              throw forbidden("That provisioning request could not be completed.");
+            }
+            return { organization: existing, role: "owner", status: "active" };
+          }
+        }
 
         const taken = new Set(store().organizations.map((row) => row.slug));
         const timestamp = nowIso();
 
+        // Keyed off the slug rather than the name, because the slug is the part
+        // that is actually unique.
+        //
+        // `seedId` is a deterministic hash, so `organization:${name}:${userId}`
+        // returned the *same id* both times one person created two
+        // organizations with the same name — two rows sharing a primary key,
+        // which Postgres would never produce: it uses `gen_random_uuid()` and
+        // resolves the name collision on the slug instead. Same-name creation
+        // stopped being hypothetical the moment organizations could be created
+        // from inside the product, and `uniqueSlug` has already appended a
+        // suffix by this point, so it is the honest key.
+        const slug = uniqueSlug(name, taken, "organization");
+
         const organization = {
-          id: seedId(`organization:${name}:${input.userId}`),
+          id: seedId(`organization:${slug}`),
           name,
-          slug: uniqueSlug(name, taken, "organization"),
+          slug,
           industry: input.industry?.trim() || "Restaurant group",
           websiteUrl: null,
           defaultTimezone: input.timezone?.trim() || "UTC",
@@ -794,6 +887,33 @@ export function createDemoDataSource(): LiaDataSource {
           createdAt: timestamp,
           updatedAt: timestamp,
         });
+
+        if (input.requestKey) {
+          demoRuntimeStore().provisionRequestKeys.set(input.requestKey, organization.id);
+        }
+
+        // Written here, and only by the call that actually created the
+        // organization, so a replay produces no second row.
+        //
+        // Its counterpart is the insert inside `provision_organization` itself.
+        // The action above cannot write this one: `insert` on `audit_events` is
+        // revoked from `authenticated`, and `recordAuditEvent` needs an
+        // `OrganizationScope` that does not exist until the organization does.
+        store().auditEvents.push(
+          auditEventSchema.parse({
+            id: seedId(`audit:runtime:${organization.id}:organization.created`),
+            organizationId: organization.id,
+            actorUserId: input.userId,
+            actorType: "user",
+            eventType: "organization.created",
+            entityType: "organization",
+            entityId: organization.id,
+            previousState: null,
+            newState: { name: organization.name, slug: organization.slug },
+            metadata: { source },
+            occurredAt: timestamp,
+          }),
+        );
 
         return { organization, role: "owner", status: "active" };
       },
@@ -1359,6 +1479,271 @@ export function createDemoDataSource(): LiaDataSource {
 
         store().locations.push(created);
         return created;
+      },
+
+      async update(scope, input) {
+        const value = updateLocationInputSchema.parse(input);
+
+        const existing = orgRows(store().locations, scope).find(
+          (row) => row.id === value.locationId,
+        );
+        // Scoped lookup before anything else, so another organization's id is
+        // indistinguishable from one that does not exist.
+        if (!existing) throw notFound("Location");
+
+        // Only when the manager actually changes.
+        //
+        // The condition is the whole point, and getting it wrong is a real
+        // divergence from the database rather than a nicety:
+        // `locations_manager_is_active_member` is a BEFORE trigger with the
+        // same guard, so Postgres validates an *assignment* and never
+        // re-validates one that was legitimate when it was made. Checking on
+        // every update instead would refuse to let anyone edit the address of
+        // a restaurant whose manager happens to be on leave — which the
+        // database would happily allow, so the two adapters would disagree
+        // about what the product does.
+        if (value.managerUserId && value.managerUserId !== existing.managerUserId) {
+          const membership = store().memberships.find(
+            (row) =>
+              row.organizationId === scope.organizationId &&
+              row.userId === value.managerUserId &&
+              row.status === "active",
+          );
+          // The database restates this as a composite foreign key plus that
+          // trigger; this is the friendly error, not the guarantee.
+          if (!membership) {
+            throw invalidInput("That person is not an active member of this organization.");
+          }
+        }
+
+        if (value.slug !== existing.slug) {
+          const taken = orgRows(store().locations, scope).some(
+            (row) => row.slug === value.slug && row.id !== existing.id,
+          );
+          if (taken) {
+            throw new DataError("conflict", "That address is already taken.", {
+              slug: "Another location in this organization already uses that address.",
+            });
+          }
+        }
+
+        const updated: Location = {
+          ...existing,
+          name: value.name,
+          slug: value.slug,
+          addressLine1: value.addressLine1,
+          addressLine2: value.addressLine2,
+          city: value.city,
+          region: value.region,
+          postalCode: value.postalCode,
+          countryCode: value.countryCode,
+          timezone: value.timezone,
+          status: value.status,
+          managerUserId: value.managerUserId,
+          updatedAt: nowIso(),
+        };
+
+        return replaceRow(store().locations, updated);
+      },
+
+      /**
+       * The twin of `create_and_map_location`.
+       *
+       * Deliberately a full twin rather than an approximation: it resolves the
+       * connection under the scope, checks the same three roles, requires a
+       * non-empty profile set, upserts on the same natural key, and makes the
+       * same three-way replay/conflict/create decision. Demo mode is
+       * single-threaded, so what it cannot reproduce is the row lock — the
+       * concurrency half is proven against real Postgres by
+       * `scripts/tenancy-race-test.sh`, and this covers the semantics that a
+       * test can reach without a database.
+       */
+      async createAndMapFromIntegration(scope, input) {
+        const value = createAndMapLocationInputSchema.parse(input);
+
+        const connection = orgRows(store().platformConnections, scope).find(
+          (row) => row.id === value.platformConnectionId,
+        );
+        // An unknown connection and one belonging to another organization
+        // answer identically, matching the RPC's single 42501.
+        if (!connection) throw forbidden("That connection is not available.");
+
+        if (!["owner", "admin", "communications_lead"].includes(scope.role)) {
+          throw forbidden("That connection is not available.");
+        }
+
+        if (connection.status === "disconnected") {
+          throw new DataError(
+            "conflict",
+            "This connection is disconnected. Reconnect it before mapping locations.",
+          );
+        }
+
+        const externalIds = value.profiles.map((profile) => profile.externalProfileId);
+        if (new Set(externalIds).size !== externalIds.length) {
+          throw invalidInput("Each profile must carry a distinct externalProfileId.");
+        }
+
+        // Upsert on (platformConnectionId, externalProfileId), tracking which
+        // rows this call created so the audit events match the RPC's.
+        const createdProfileIds: string[] = [];
+        const touched = value.profiles.map((profile) => {
+          const found = store().platformProfiles.find(
+            (row) =>
+              row.platformConnectionId === value.platformConnectionId &&
+              row.externalProfileId === profile.externalProfileId,
+          );
+          if (found) {
+            const refreshed = {
+              ...found,
+              externalProfileName: profile.externalProfileName,
+              profileUrl: profile.profileUrl,
+              verificationState: profile.verificationState,
+              providerMetadata: profile.providerMetadata,
+              lastConfirmedAt: nowIso(),
+            };
+            return replaceRow(store().platformProfiles, refreshed);
+          }
+          const fresh = {
+            id: seedId(
+              `platform_profile:runtime:${scope.organizationId}:${profile.externalProfileId}`,
+            ),
+            organizationId: scope.organizationId,
+            platformConnectionId: value.platformConnectionId,
+            locationId: null,
+            externalProfileId: profile.externalProfileId,
+            externalProfileName: profile.externalProfileName,
+            externalAccountId: profile.externalAccountId,
+            profileUrl: profile.profileUrl,
+            status: "pending" as const,
+            verificationState: profile.verificationState,
+            providerMetadata: profile.providerMetadata,
+            syncCursor: null,
+            lastSyncedAt: null,
+            lastConfirmedAt: nowIso(),
+            createdAt: nowIso(),
+            updatedAt: nowIso(),
+          };
+          store().platformProfiles.push(fresh);
+          createdProfileIds.push(fresh.id);
+          return fresh;
+        });
+
+        // Defence in depth, mirroring the RPC's own check. Unreachable through
+        // an ordinary call — one connection belongs to one organization — but
+        // asserted rather than assumed.
+        if (
+          touched.some(
+            (profile) =>
+              profile.organizationId !== scope.organizationId ||
+              profile.platformConnectionId !== value.platformConnectionId,
+          )
+        ) {
+          throw forbidden("That connection is not available.");
+        }
+
+        const boundLocationIds = new Set(
+          touched.flatMap((profile) => (profile.locationId ? [profile.locationId] : [])),
+        );
+
+        if (boundLocationIds.size === 1 && touched.every((p) => p.locationId !== null)) {
+          // Every requested profile is already bound to the same location: a
+          // retry of a call that succeeded. Return what it produced, write
+          // nothing.
+          const [locationId] = [...boundLocationIds];
+          const location = orgRows(store().locations, scope).find(
+            (row) => row.id === locationId,
+          );
+          if (!location) throw notFound("Location");
+          return { location, profiles: touched, createdProfileIds: [], replayed: true };
+        }
+
+        if (boundLocationIds.size > 0) {
+          // Some bound and some not, or bound to two different locations.
+          // A retry cannot resolve that and guessing would be worse.
+          throw conflict("These profiles are already mapped to a different location.");
+        }
+
+        const existingSlugs = new Set(
+          orgRows(store().locations, scope).map((row) => row.slug),
+        );
+        const slug = uniqueSlug(value.name, existingSlugs);
+
+        // `setup` and null, written here rather than accepted, exactly as the
+        // RPC writes them literally.
+        const location: Location = {
+          id: seedId(`location:mapped:${scope.organizationId}:${slug}`),
+          organizationId: scope.organizationId,
+          name: value.name,
+          slug,
+          addressLine1: value.addressLine1,
+          addressLine2: value.addressLine2,
+          city: value.city,
+          region: value.region,
+          postalCode: value.postalCode,
+          countryCode: value.countryCode,
+          timezone: value.timezone,
+          status: "setup",
+          managerUserId: null,
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        };
+        store().locations.push(location);
+
+        const bound = touched.map((profile) =>
+          replaceRow(store().platformProfiles, {
+            ...profile,
+            locationId: location.id,
+            status: "active" as const,
+            updatedAt: nowIso(),
+          }),
+        );
+
+        // The same three events the RPC writes, from the same place, for the
+        // same reason: a location created by mapping must never exist without
+        // its provenance, and the application must not write them separately.
+        pushDemoAuditEvent(scope, {
+          eventType: "location.created_from_integration",
+          entityType: "location",
+          entityId: location.id,
+          previousState: null,
+          newState: { name: location.name, slug: location.slug, status: location.status },
+          metadata: {
+            platform: connection.platform,
+            connectionId: value.platformConnectionId,
+            externalProfileIds: externalIds,
+          },
+        });
+
+        for (const profile of bound) {
+          if (createdProfileIds.includes(profile.id)) {
+            pushDemoAuditEvent(scope, {
+              eventType: "integration.profile_connected",
+              entityType: "platform_profile",
+              entityId: profile.id,
+              previousState: null,
+              newState: {
+                externalProfileId: profile.externalProfileId,
+                externalProfileName: profile.externalProfileName,
+              },
+              metadata: { platform: connection.platform },
+            });
+          }
+
+          pushDemoAuditEvent(scope, {
+            eventType: "integration.profile_mapped",
+            entityType: "platform_profile",
+            entityId: profile.id,
+            previousState: { locationId: null },
+            newState: { locationId: location.id },
+            metadata: {
+              platform: connection.platform,
+              externalProfileId: profile.externalProfileId,
+            },
+          });
+        }
+
+        return { location, profiles: bound, createdProfileIds, replayed: false };
       },
     },
 

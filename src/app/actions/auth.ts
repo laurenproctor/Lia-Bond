@@ -21,6 +21,7 @@ import {
   provisionPendingOrganization,
 } from "@/lib/onboarding/post-auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { setActiveOrganizationCookie } from "@/lib/tenancy/organization-context";
 
 /**
  * Sign in and sign out.
@@ -330,7 +331,14 @@ export async function acceptInvitationWithSignUpAction(
   }
 
   try {
-    await dataSource.invitations.accept(tokenHash, data.user?.id ?? "");
+    const joined = await dataSource.invitations.accept(tokenHash, data.user?.id ?? "");
+    // Select the organization they just joined, for the same reason
+    // `acceptInvitationAction` does: without it the active organization is
+    // whatever the cookie last said, which for a brand-new account is nothing
+    // and resolves by fallback. Correct here today by accident — a fresh
+    // account has exactly one membership — and setting it explicitly is what
+    // keeps it correct when this account later belongs to several.
+    await setActiveOrganizationCookie(joined.organizationId);
   } catch (cause) {
     console.error("[auth:invite-sign-up] accept failed", cause);
     return {

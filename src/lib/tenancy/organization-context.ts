@@ -90,6 +90,33 @@ export async function getOrganizationScope(): Promise<OrganizationScope> {
 }
 
 /**
+ * Write the active-organization selection.
+ *
+ * Four callers set this cookie — switching, creating, accepting an invitation
+ * while signed in, and accepting one during signup — and five attributes spelled
+ * out four times is four chances for one of them to drift. A missing `httpOnly`
+ * or a wrong `path` is a security regression that no test would notice, because
+ * the feature keeps working either way.
+ *
+ * It writes a *selection*, never an authorization. The caller is responsible for
+ * having verified membership first, and `getOrganizationContext` re-reads the
+ * membership row on every request regardless — so the worst a forged value can
+ * do is be discarded.
+ */
+export async function setActiveOrganizationCookie(
+  organizationId: string,
+): Promise<void> {
+  const store = await cookies();
+  store.set(ACTIVE_ORGANIZATION_COOKIE, organizationId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365,
+  });
+}
+
+/**
  * Verify a caller-supplied organization id before switching to it.
  *
  * Used by the organization switcher action. Returns the verified id, or throws

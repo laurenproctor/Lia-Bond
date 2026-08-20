@@ -12,6 +12,7 @@ import type {
   BrandVoiceProfile,
   BrandVoiceSource,
   ConnectionHealthUpdate,
+  CreateAndMapLocationInput,
   CreateEscalationInput,
   CreateLocationInput,
   CreateMentionAnalysisInput,
@@ -66,6 +67,7 @@ import type {
   SyncResource,
   Timestamp,
   UpdateBrandVoiceInput,
+  UpdateLocationInput,
   UpdateMonitoringQueryInput,
   UpsertPlatformConnectionInput,
   UpsertPlatformProfileInput,
@@ -242,6 +244,26 @@ export interface ProvisionOrganizationInput {
   industry?: string;
   timezone?: string;
   language?: string;
+  /**
+   * Idempotency key, generated once per mounted creation form.
+   *
+   * A retry after a failure reuses it; a fresh page load gets a new one. Supply
+   * it and a replay returns the organization the first call created, writing
+   * nothing — no second membership, no second onboarding row, no second
+   * `organization.created` event. Omit it and every call creates.
+   *
+   * The uniqueness is the lock, not a check performed before the insert: two
+   * clicks are routinely two serverless processes, and a read-then-insert
+   * version loses exactly the race it exists to solve.
+   */
+  requestKey?: string;
+  /**
+   * Which entry point asked. Reaches `audit_events.metadata`, and is validated
+   * against these two values in the database as well — an audit trail whose
+   * metadata is caller-authored free text is a trail somebody can write
+   * anything into.
+   */
+  source?: "self_serve" | "in_app";
 }
 
 /**
@@ -274,10 +296,15 @@ export interface OrganizationRepository {
   /**
    * Create an organization and the caller's owner membership, together.
    *
-   * Deliberately **not** scoped: the caller holds no membership yet, which is
-   * the entire point. This is the one write in the repository layer that
-   * cannot take an `OrganizationScope`, because it is what produces the first
-   * one.
+   * Deliberately **not** scoped, and the reason is worth stating precisely,
+   * because it used to be stated wrongly: it is not that the caller holds no
+   * membership. Since organizations can be created from inside the product,
+   * the caller usually holds several. It is that this method *produces* a
+   * scope, so there is none to pass in.
+   *
+   * Repeated use is supported and expected. Nothing in the function counts
+   * memberships, and the person creating their third restaurant group becomes
+   * its owner exactly as they did their first.
    *
    * Both rows must exist or neither must — an organization with no owner is
    * unreachable and uneditable by anyone. The Supabase adapter delegates to a
@@ -453,6 +480,58 @@ export interface LocationRepository {
    * de-duplicates within the organization.
    */
   create(scope: OrganizationScope, input: CreateLocationInput): Promise<Location>;
+  /**
+   * Edit a location's identity, address, timezone, status, and manager.
+   *
+   * `updateManager` stays separate rather than being folded in here, and it is
+   * not redundant: it is reached from the settings panel under
+   * `location.update_manager`, writes only `location.manager_changed`, and
+   * exists precisely because assigning a manager is a different authority from
+   * editing an address. This method is the management screen's superset, and
+   * the action above it emits the three audit events separately by field.
+   *
+   * A manager must hold an *active* membership in the same organization. Both
+   * adapters check it and return a field error; the database restates it as a
+   * composite foreign key plus a trigger, because a rule that lives only in
+   * application code protects only the paths that remember to call it.
+   */
+  update(scope: OrganizationScope, input: UpdateLocationInput): Promise<Location>;
+  /**
+   * Create a location and bind platform profiles to it, atomically, or do
+   * neither.
+   *
+   * The **only** path by which a communications lead can bring a location into
+   * existence, and it cannot produce one without a mapping: the profile set is
+   * required, and the location insert, the binding, and three audit events are
+   * one transaction. `status` and `managerUserId` are not parameters — they are
+   * written `setup` and null — and the organization is derived from the
+   * connection rather than supplied, so this cannot be aimed at another tenant.
+   *
+   * A repeat call with the same profiles returns the location the first call
+   * created (`replayed: true`) and writes nothing. A profile set already split
+   * across two locations is a conflict, not something a retry should resolve.
+   */
+  createAndMapFromIntegration(
+    scope: OrganizationScope,
+    input: CreateAndMapLocationInput,
+  ): Promise<CreateAndMapLocationResult>;
+}
+
+/**
+ * What `createAndMapFromIntegration` gives back.
+ *
+ * `profiles` carries the bound rows so the mapping service can build its result
+ * without a second read — and, more importantly, without a second *write*: the
+ * whole point of the RPC is that the application performs no separate binding
+ * step afterwards.
+ */
+export interface CreateAndMapLocationResult {
+  location: Location;
+  profiles: PlatformProfile[];
+  /** Profiles this call created, as opposed to ones it found and bound. */
+  createdProfileIds: string[];
+  /** True when an earlier identical call had already done the work. */
+  replayed: boolean;
 }
 
 export interface PlatformConnectionRepository {

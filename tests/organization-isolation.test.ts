@@ -32,6 +32,71 @@ describe("list operations never cross the tenant boundary", () => {
     expect(overlap).toEqual([]);
   });
 
+  it("refuses a foreign location id on every write path", async () => {
+    // The read side is covered above. These are the writes that take a
+    // caller-supplied location id, and each must answer a foreign one exactly
+    // as it answers a missing one — a distinct refusal would confirm the
+    // record exists.
+    const [theirs] = await data.locations.list(harbor.owner());
+    expect(theirs).toBeDefined();
+
+    await expect(data.locations.get(ushg.admin(), theirs!.id)).resolves.toBeNull();
+
+    await expect(
+      data.locations.update(ushg.admin(), {
+        locationId: theirs!.id,
+        name: theirs!.name,
+        slug: theirs!.slug,
+        addressLine1: theirs!.addressLine1,
+        addressLine2: theirs!.addressLine2,
+        city: theirs!.city,
+        region: theirs!.region,
+        postalCode: theirs!.postalCode,
+        countryCode: theirs!.countryCode,
+        timezone: theirs!.timezone,
+        status: theirs!.status,
+        managerUserId: theirs!.managerUserId,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    await expect(
+      data.locations.updateManager(ushg.admin(), theirs!.id, null),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("refuses a foreign connection id when creating and mapping a location", async () => {
+    const [theirConnection] = await data.platformConnections.list(harbor.owner());
+    expect(theirConnection).toBeDefined();
+
+    await expect(
+      data.locations.createAndMapFromIntegration(ushg.admin(), {
+        platformConnectionId: theirConnection!.id,
+        profiles: [
+          {
+            externalProfileId: "isolation-probe",
+            externalProfileName: "Isolation probe",
+            externalAccountId: "accounts/probe",
+            profileUrl: null,
+            verificationState: null,
+            providerMetadata: {},
+          },
+        ],
+        name: "Should not exist",
+        addressLine1: "1 A St",
+        addressLine2: null,
+        city: "New York",
+        region: "NY",
+        postalCode: "10001",
+        countryCode: "US",
+        timezone: "America/New_York",
+      }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+
+    // And nothing was created on either side of the boundary.
+    const mine = await data.locations.list(ushg.admin());
+    expect(mine.some((row) => row.name === "Should not exist")).toBe(false);
+  });
+
   it("scopes every other repository the same way", async () => {
     const scope = ushg.admin();
 

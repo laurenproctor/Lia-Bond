@@ -660,3 +660,36 @@ column list matches the new table's real columns.
     location added later from `/locations` gets no automatic News query —
     the pass is deliberately scoped to the wizard, and later coverage is a
     decision for the News & Media screen.
+
+## Organizations created from inside the product
+
+Setup is no longer only a sign-up flow. `/organizations/new` lets any
+authenticated user create an organization — regardless of their role in any they
+already belong to — and it enters this same wizard at step one, because a
+brand-new organization is a name and nothing else whether it arrived through
+sign-up or through the switcher.
+
+Three things follow, and all three are deliberate:
+
+- **The new organization becomes active immediately.** The creating action
+  writes the selection cookie before returning, so the wizard it hands to is the
+  new organization's own.
+- **Existing organizations are untouched.** Creating one writes nothing to any
+  other organization's onboarding row — pinned by a byte-identical snapshot in
+  `tests/organization-creation.test.ts`, because "still in progress" is a weaker
+  assertion than "unchanged", and advancing `currentStep` would be the same
+  defect in a quieter form.
+- **A double-click creates one organization, not two.** The form carries a
+  request key generated once per mount; a replay returns what the first call
+  created and writes nothing — no second membership, no second onboarding row,
+  no second audit event.
+
+`provisionPendingOrganization`'s membership guard still prevents an invitee from
+picking up a *second, empty* organization during a confirmation flow. That was
+never a standing prohibition on invitees owning an organization, and now that
+there is a deliberate way to create one, the distinction matters: somebody
+invited to their employer's workspace may also run a restaurant of their own.
+
+Adding a location outside the wizard does **not** touch onboarding. That is why
+`createLocationAction` exists separately from `createOnboardingLocationAction`,
+which also completes step 3 and seeds monitoring queries.
