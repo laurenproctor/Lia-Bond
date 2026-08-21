@@ -7,6 +7,7 @@ import { renderPressWidgetDocument } from "@/lib/widgets/press/document";
 import { resolveRenderedPressWidget } from "@/lib/widgets/press/render";
 import { samplePressWidgetRow } from "@/lib/widgets/press/sample";
 import { resolveRenderedWidget } from "@/lib/widgets/render";
+import { SAVABLE_REVIEW_WIDGET_LAYOUTS } from "@/domain";
 import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
 
 /**
@@ -41,7 +42,7 @@ const NOW = Date.parse("2026-09-01T12:00:00.000Z");
 describe("the review sample the landing page frames", () => {
   const html = renderReviewWidgetDocument({
     publicId: "sample",
-    rendered: resolveRenderedWidget(sampleReviewWidgetRow("light", NOW)),
+    rendered: resolveRenderedWidget(sampleReviewWidgetRow("light", "single_review_text", NOW)),
     now: NOW,
   });
 
@@ -64,10 +65,22 @@ describe("the review sample the landing page frames", () => {
     expect(html).toContain('href="https://www.google.com/maps"');
   });
 
+  it("is the text card — the only layout the product can actually embed", () => {
+    // `SAVABLE_REVIEW_WIDGET_LAYOUTS` is narrower than `REVIEW_WIDGET_LAYOUTS`:
+    // the photo and video arrangements render but cannot be saved, because
+    // Google returns no per-review media for them to carry. Putting one on the
+    // landing page would advertise a card no customer can publish, so the
+    // sample URL passes no `layout` and the route's own default is the text
+    // card. Pinned here because that default is one line in a route handler.
+    expect(SAVABLE_REVIEW_WIDGET_LAYOUTS).toEqual(["single_review_text"]);
+    expect(html).not.toContain('class="media"');
+    expect(html).not.toContain("<video");
+  });
+
   it("renders in the dark theme too, since the card offers the choice", () => {
     const dark = renderReviewWidgetDocument({
       publicId: "sample",
-      rendered: resolveRenderedWidget(sampleReviewWidgetRow("dark", NOW)),
+      rendered: resolveRenderedWidget(sampleReviewWidgetRow("dark", "single_review_text", NOW)),
       now: NOW,
     });
     expect(dark).toContain("color-scheme: dark");
@@ -162,6 +175,10 @@ describe("the landing page", () => {
     expect(source).toContain("/embed/review-widget/preview?sample=1");
     expect(source).toContain("/embed/press-widget/preview?sample=1");
     expect(source).not.toMatch(/\.png|\.jpg|\.webp/);
+  });
+
+  it("asks for no review layout, so it cannot show an unembeddable one", () => {
+    expect(source).not.toContain("layout=");
   });
 
   it("sends each call to action to its own configurator", () => {
