@@ -15,9 +15,13 @@ import {
   SECOND_LOCATION_MONTHLY,
   annualSavingTotal,
   annualTotal,
+  bandCostRange,
   annualTotalPaidMonthly,
   formatAnnualRate,
+  formatBandCostRange,
+  formatBandRateNote,
   formatBandSaving,
+  formatBandSize,
   formatDollars,
   formatLocationChoice,
   formatMonthlyRate,
@@ -175,14 +179,38 @@ describe("pricing plans", () => {
     return found;
   };
 
-  it("shows the first-location rate on the single-location card", () => {
+  it("leads with a per-month figure on both faces, so they compare", () => {
+    // The annual face shows what a year works out at per month — $590 beside
+    // $59 reads as ten times the price until you notice one buys a year.
     expect(plan("Single location").price("monthly")).toBe("$59");
-    expect(plan("Single location").price("annual")).toBe("$590");
+    expect(plan("Single location").price("annual")).toBe("$49.17");
+
+    expect(plan("Growth").price("monthly")).toBe("$49");
+    expect(plan("Growth").price("annual")).toBe("$40.83");
   });
 
-  it("shows the second-band rate on the growth card", () => {
-    expect(plan("Growth").price("monthly")).toBe("$49");
-    expect(plan("Growth").price("annual")).toBe("$490");
+  it("keeps the cents rather than rounding the monthly equivalent", () => {
+    // Ten twelfths of $59 is $49.166…; a rounded "$49" would understate the
+    // price by two dollars a year on every location.
+    expect(plan("Single location").price("annual")).not.toBe("$49");
+  });
+
+  it("names the actual charge under the per-month headline", () => {
+    // The headline is a comparison; this line is what leaves the bank.
+    expect(plan("Single location").billedNote("annual")).toBe(
+      "$590 per location, billed once a year",
+    );
+    expect(plan("Growth").billedNote("annual")).toBe(
+      "$490 per location, billed once a year",
+    );
+  });
+
+  it("has no separate charge line on the monthly face", () => {
+    // There the headline already is the charge, and repeating it would read
+    // as two different numbers.
+    expect(plan("Single location").billedNote("monthly")).toBeNull();
+    expect(plan("Growth").billedNote("monthly")).toBeNull();
+    expect(plan("Brand").billedNote("annual")).toBeNull();
   });
 
   it("quotes the brand card in both periods", () => {
@@ -192,18 +220,19 @@ describe("pricing plans", () => {
 
   it("names the unit each figure is quoted in", () => {
     expect(plan("Single location").priceNote("monthly")).toBe(
-      "per month · $590 a year",
+      "per location, per month",
     );
     expect(plan("Single location").priceNote("annual")).toBe(
-      "per year · $59 a month",
+      "per location, per month",
     );
+    // The floor is quoted in the same unit as the headline beside it.
     expect(plan("Growth").priceNote("monthly")).toContain("falling to $34");
-    expect(plan("Growth").priceNote("annual")).toContain("falling to $340");
+    expect(plan("Growth").priceNote("annual")).toContain("falling to $28.33");
   });
 
   it("names the annual saving on both faces of a listed card", () => {
     expect(plan("Single location").savingNote("monthly")).toBe(
-      "Save $118 a year on annual billing",
+      "Save $118 a year",
     );
     expect(plan("Single location").savingNote("annual")).toBe(
       "You save $118 a year",
@@ -321,5 +350,103 @@ describe("estimator location choices", () => {
     expect(formatLocationChoice(LISTED_LOCATION_LIMIT + 1)).toBe(
       "More than 100 locations",
     );
+  });
+});
+
+/**
+ * What the picker inside the group card shows.
+ *
+ * The range is the card's only price, so it has to be exactly the schedule's
+ * own arithmetic: the bottom of a band is a group of `from` locations and the
+ * top is a group of `to`, both priced graduated. A range that quoted the
+ * band's rate times its size instead would overcharge every band above the
+ * first, because it would forget the cheaper locations underneath.
+ */
+describe("bandCostRange", () => {
+  it("prices the ends of each band as real groups of that size", () => {
+    // 2 locations = 59 + 49; 10 = 59 + 9 × 49.
+    expect(bandCostRange(bandAt(1))).toEqual({ min: 108, max: 500 });
+    // 11 = 500 + 44; 25 = 500 + 15 × 44.
+    expect(bandCostRange(bandAt(2))).toEqual({ min: 544, max: 1160 });
+    // 26 = 1160 + 39; 50 = 1160 + 25 × 39.
+    expect(bandCostRange(bandAt(3))).toEqual({ min: 1199, max: 2135 });
+    // 51 = 2135 + 34; 100 = 2135 + 50 × 34.
+    expect(bandCostRange(bandAt(4))).toEqual({ min: 2169, max: 3835 });
+  });
+
+  it("agrees with monthlyTotal at both ends of every listed band", () => {
+    PRICING_BANDS.forEach((band) => {
+      const range = bandCostRange(band);
+      if (range === null) return;
+      expect(range.min).toBe(monthlyTotal(band.from));
+      expect(range.max).toBe(monthlyTotal(band.to as number));
+    });
+  });
+
+  it("collapses to a single figure where the band holds one group size", () => {
+    expect(bandCostRange(bandAt(0))).toEqual({ min: 59, max: 59 });
+  });
+
+  it("has no range for the quoted band, which has no top", () => {
+    expect(bandCostRange(TOP_BAND)).toBeNull();
+  });
+
+  it("never overlaps the band below it", () => {
+    // The cheapest group in a band must cost more than the dearest group in
+    // the one beneath, or the ranges would read as alternatives rather than
+    // as a ladder.
+    const listed = PRICING_BANDS.map(bandCostRange).filter(
+      (range): range is NonNullable<typeof range> => range !== null,
+    );
+
+    listed.reduce((previous, range) => {
+      expect(range.min).toBeGreaterThan(previous.max);
+      return range;
+    });
+  });
+});
+
+describe("formatBandCostRange", () => {
+  it("renders a span for a band covering several group sizes", () => {
+    expect(formatBandCostRange(bandAt(1), "monthly")).toBe("$108 – $500");
+  });
+
+  it("renders one figure where both ends are the same group", () => {
+    // "$59 – $59" would read as a price that moves when it does not.
+    expect(formatBandCostRange(bandAt(0), "monthly")).toBe("$59");
+  });
+
+  it("scales the whole range to the annual charge", () => {
+    // Ten months billed, so both ends are ten times the monthly figure.
+    expect(formatBandCostRange(bandAt(1), "annual")).toBe("$1,080 – $5,000");
+    expect(formatBandCostRange(bandAt(0), "annual")).toBe("$590");
+  });
+
+  it("quotes rather than invents a range above the listed limit", () => {
+    expect(formatBandCostRange(TOP_BAND, "monthly")).toBe("Custom");
+    expect(formatBandCostRange(TOP_BAND, "annual")).toBe("Custom");
+  });
+});
+
+describe("formatBandSize and formatBandRateNote", () => {
+  it("describes the size a band covers", () => {
+    expect(formatBandSize(bandAt(0))).toBe("one location");
+    expect(formatBandSize(bandAt(1))).toBe("2–10 locations");
+    expect(formatBandSize(TOP_BAND)).toBe(
+      `more than ${LISTED_LOCATION_LIMIT} locations`,
+    );
+  });
+
+  it("names the rate the range is built from", () => {
+    expect(formatBandRateNote(bandAt(1), "monthly")).toBe(
+      "$49 per month for each location in this band.",
+    );
+    expect(formatBandRateNote(bandAt(1), "annual")).toBe(
+      "$490 per year for each location in this band.",
+    );
+  });
+
+  it("says the quoted band is quoted rather than naming a rate", () => {
+    expect(formatBandRateNote(TOP_BAND, "monthly")).toContain("Quoted");
   });
 });
