@@ -767,14 +767,51 @@ export type ReviewWidgetTheme = z.infer<typeof reviewWidgetThemeSchema>;
 /**
  * Which arrangement the widget draws.
  *
- * One value today. The photo- and video-led layouts in the product brief are
- * deliberately not built, and this vocabulary is the seam they arrive through
- * — named `single_review_text` rather than `default` so the second entry does
- * not have to explain what the first one silently assumed.
+ * Three arrangements of the same single review: the words alone, the words
+ * with photographs, the words with a video. They are variations on one card
+ * rather than three cards — the Google wordmark, the stars, the attribution
+ * and the footer are identical in all three, because those are what make it a
+ * review widget rather than a media embed.
+ *
+ * **This is the vocabulary the renderer accepts, not the one a customer may
+ * save.** See `SAVABLE_REVIEW_WIDGET_LAYOUTS` below for why those are two
+ * lists today and what has to be true before they become one.
  */
-export const REVIEW_WIDGET_LAYOUTS = ["single_review_text"] as const;
+export const REVIEW_WIDGET_LAYOUTS = [
+  "single_review_text",
+  "single_review_photo",
+  "single_review_video",
+] as const;
 export const reviewWidgetLayoutSchema = vocabulary(REVIEW_WIDGET_LAYOUTS).schema;
 export type ReviewWidgetLayout = z.infer<typeof reviewWidgetLayoutSchema>;
+
+/**
+ * Which of those a customer may actually store against their widget.
+ *
+ * One, and the gap is deliberate rather than unfinished. **Google's review API
+ * returns no photographs and no video** — the payload Lia parses is the
+ * reviewer, the rating, the comment, the timestamps and the owner's reply, and
+ * nothing else (`googleReviewSchema` in
+ * `@/integrations/google-business-profile/schemas`). There is no per-review
+ * media of any kind to put in a media-led layout, so the two are rendered from
+ * sample content in Lia's own preview surfaces and cannot be pointed at a real
+ * website until media has a real source — a customer's own upload being the
+ * obvious candidate, and a decision nobody has made yet.
+ *
+ * The narrow list is what makes that structural. It mirrors the check
+ * constraint on `review_widgets.layout` exactly, so the schema rejects a
+ * layout the column would reject anyway, at the edge of the application rather
+ * than as a database error under a save button. When media ships, this list
+ * and that constraint widen together — and the type checker will point at
+ * every place that has to change, because nothing else narrows.
+ */
+export const SAVABLE_REVIEW_WIDGET_LAYOUTS = ["single_review_text"] as const;
+export const savableReviewWidgetLayoutSchema = vocabulary(
+  SAVABLE_REVIEW_WIDGET_LAYOUTS,
+).schema;
+export type SavableReviewWidgetLayout = z.infer<
+  typeof savableReviewWidgetLayoutSchema
+>;
 
 /** Whether the widget follows the feed or is pinned to one review. */
 export const REVIEW_WIDGET_SELECTION_MODES = ["most_recent", "specific"] as const;

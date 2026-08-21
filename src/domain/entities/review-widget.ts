@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { reviewWidgetLayoutSchema, reviewWidgetSelectionModeSchema, reviewWidgetStatusSchema, reviewWidgetThemeSchema } from "@/domain/enums";
+import { reviewWidgetLayoutSchema, reviewWidgetSelectionModeSchema, reviewWidgetStatusSchema, reviewWidgetThemeSchema, savableReviewWidgetLayoutSchema } from "@/domain/enums";
 import {
   organizationOwnedSchema,
   timestampSchema,
@@ -28,11 +28,13 @@ import {
  *    offered because a customer who wants an old embed to stop working has no
  *    other lever. See `src/lib/widgets/public-id.ts`.
  *
- * 3. **`layout` exists at one value.** Photo- and video-led layouts are named
- *    in the product brief and deliberately not built. A column that can only
- *    ever hold one value is the seam that lets the second one arrive without a
- *    migration to the widget's identity, and `single_review_text` says what
- *    this version actually is rather than pretending to be generic.
+ * 3. **`layout` renders at three values and stores at one.** The photo- and
+ *    video-led layouts are built — `renderReviewWidgetDocument` draws all
+ *    three — but Google's review API returns no photographs and no video, so
+ *    there is nothing to fill them with on a real website. Until media has a
+ *    source, `saveReviewWidgetInput` accepts only `single_review_text`, which
+ *    is exactly what the column's check constraint accepts. See
+ *    `SAVABLE_REVIEW_WIDGET_LAYOUTS`.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -146,7 +148,17 @@ export const saveReviewWidgetInputSchema = z
   .object({
     locationId: uuidSchema,
     theme: reviewWidgetThemeSchema,
-    layout: reviewWidgetLayoutSchema.default("single_review_text"),
+    /**
+     * Narrower than the renderer's vocabulary, on purpose.
+     *
+     * `savableReviewWidgetLayoutSchema` mirrors the check constraint on
+     * `review_widgets.layout`, so a photo or video layout is refused here —
+     * with a field error under the control that sent it — rather than by
+     * Postgres under a save button. The renderer accepts all three because the
+     * preview surfaces draw all three from sample content; the database
+     * accepts one because only one can be filled with a customer's own data.
+     */
+    layout: savableReviewWidgetLayoutSchema.default("single_review_text"),
     selectionMode: reviewWidgetSelectionModeSchema,
     selectedMentionId: uuidSchema.nullable().default(null),
     minimumRating: minimumRatingSchema.default(DEFAULT_MINIMUM_RATING),
@@ -233,6 +245,75 @@ export type ReviewWidgetUnavailableReason = z.infer<
 >;
 
 /**
+ * One image the widget draws, and what a screen reader is told about it.
+ *
+ * `alt` is required rather than optional because there is no such thing as a
+ * decorative photograph in this card — the whole argument for a photo layout
+ * is that the picture carries meaning the words do not. A caller with nothing
+ * useful to say has to write an empty string and mean it.
+ *
+ * `src` is deliberately just a string. It is a data URI for the sample cards
+ * and would be a Lia-hosted URL for a customer's own upload; what it must
+ * never be is a third-party origin, and that is enforced where it matters — by
+ * the `img-src` directive on the embed response, not by a type.
+ */
+export const widgetImageSchema = z.object({
+  src: z.string().min(1),
+  alt: z.string(),
+});
+
+export type WidgetImage = z.infer<typeof widgetImageSchema>;
+
+/** At most this many photographs in a photo-led card. */
+export const MAX_WIDGET_PHOTOS = 3;
+
+/**
+ * What a media-led layout draws, or null on the text layout.
+ *
+ * A discriminated union rather than two nullable fields, because "a photo card
+ * with a video in it" and "a video card with three photographs and no poster"
+ * are states that should not be expressible. The renderer switches on `kind`
+ * and the type checker guarantees the arm it lands in has what it needs.
+ *
+ * **Nothing populates this from Google.** Both arms exist to be filled by
+ * `@/lib/widgets/sample` today and by a customer's own upload if that ships;
+ * `resolveRenderedWidget` treats absent media as "draw the text layout"
+ * rather than as an error, so no widget can ever render an empty picture
+ * frame on somebody's homepage.
+ */
+export const reviewWidgetMediaSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("photo"),
+    photos: z.array(widgetImageSchema).min(1).max(MAX_WIDGET_PHOTOS),
+  }),
+  z.object({
+    kind: z.literal("video"),
+    /**
+     * The still the card shows before anything plays.
+     *
+     * Required, and the video source is not. A poster with no video is a
+     * legible card; a video with no poster is a black rectangle until the
+     * first frame decodes, on a page the customer does not control.
+     */
+    poster: widgetImageSchema,
+    /**
+     * The video itself, or null for a poster-only card.
+     *
+     * Null is what the sample uses: a self-contained document cannot carry a
+     * video the way it carries an inline SVG, and shipping a fabricated clip
+     * to make a preview look complete is the same mistake as shipping a
+     * fabricated review. The play badge renders either way; with null it is
+     * drawn as the still it is, and the surface around it says so.
+     */
+    src: z.string().min(1).nullable(),
+    /** How long the clip runs, spoken as "1:12". Null when unknown. */
+    durationLabel: z.string().min(1).max(12).nullable(),
+  }),
+]);
+
+export type ReviewWidgetMedia = z.infer<typeof reviewWidgetMediaSchema>;
+
+/**
  * The review, reduced to what the widget puts on a stranger's screen.
  *
  * Deliberately not a `Mention`. A mention carries sentiment, risk level,
@@ -258,6 +339,14 @@ export const reviewWidgetReviewSchema = z.object({
    * disappears rather than degrading.
    */
   readOnGoogleUrl: z.url().nullable(),
+  /**
+   * Photographs or a video to draw alongside the words, or null.
+   *
+   * Null on the text layout, and also on a media layout that resolved no media
+   * — `resolveRenderedWidget` degrades the layout to match rather than leaving
+   * a card describing a picture it does not have.
+   */
+  media: reviewWidgetMediaSchema.nullable(),
 });
 
 export type ReviewWidgetReview = z.infer<typeof reviewWidgetReviewSchema>;
@@ -304,4 +393,14 @@ export interface ReviewWidgetRenderRow {
   reviewPublishedAt: string | null;
   /** The location's Google profile URL, untrusted until validated. */
   profileUrl: string | null;
+  /**
+   * Media for a photo- or video-led layout, or null.
+   *
+   * Not a column, and not from Google. Both Supabase and the demo adapter
+   * return null here, because neither has anywhere to read it from: the
+   * Business Profile API carries no per-review media. `@/lib/widgets/sample`
+   * is the only producer today, which is why the two media layouts appear in
+   * Lia's own preview surfaces and nowhere else.
+   */
+  media: ReviewWidgetMedia | null;
 }

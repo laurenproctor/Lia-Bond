@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ReviewWidgetRenderRow } from "@/domain";
-import { escapeHtml, renderReviewWidgetDocument } from "@/lib/widgets/document";
+import type { ReviewWidgetMedia, ReviewWidgetRenderRow } from "@/domain";
+import { escapeHtml, renderReviewWidgetDocument, safeMediaUrl } from "@/lib/widgets/document";
 import { widgetReviewDate } from "@/lib/widgets/relative-date";
 import { resolveRenderedWidget } from "@/lib/widgets/render";
 import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
@@ -29,6 +29,7 @@ function row(overrides: Partial<ReviewWidgetRenderRow> = {}): ReviewWidgetRender
     reviewAuthorName: "Alicia Moreno",
     reviewPublishedAt: "2026-08-17T12:00:00.000Z",
     profileUrl: "https://maps.google.com/?cid=1001",
+    media: null,
     ...overrides,
   };
 }
@@ -297,6 +298,144 @@ describe("the date under the reviewer's name", () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Media layouts                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The two layouts nobody can fill from Google.
+ *
+ * Their real risk is not that they look wrong — it is that they draw a frame
+ * around nothing, on a page Lia does not control, because the media a layout
+ * assumed was never there. So most of what follows is about the absence.
+ */
+describe("photo and video layouts", () => {
+  const photos: ReviewWidgetMedia = {
+    kind: "photo",
+    photos: [{ src: "data:image/svg+xml,%3Csvg%3E%3C/svg%3E", alt: "A plate" }],
+  };
+
+  const video: Extract<ReviewWidgetMedia, { kind: "video" }> = {
+    kind: "video",
+    poster: { src: "data:image/svg+xml,%3Csvg%3E%3C/svg%3E", alt: "The room" },
+    src: null,
+    durationLabel: "0:24",
+  };
+
+  it("draws the photographs it was given", () => {
+    const html = render({ layout: "single_review_photo", media: photos });
+
+    expect(html).toContain('class="shots one"');
+    expect(html).toContain('alt="A plate"');
+    // The words are still the point. A media layout is the same card with a
+    // band in it, not a gallery that happens to quote somebody.
+    expect(html).toContain("<blockquote>");
+    expect(html).toContain("Powered by");
+  });
+
+  it("falls back to the text card when a media layout resolved no media", () => {
+    const rendered = resolveRenderedWidget(
+      row({ layout: "single_review_photo", media: null }),
+    );
+
+    // Not an unavailable state: there is a review, and it is shown. Only the
+    // arrangement degrades.
+    expect(rendered.state).toBe("ready");
+    expect(rendered.layout).toBe("single_review_text");
+    if (rendered.state !== "ready") return;
+    expect(rendered.review.media).toBeNull();
+    expect(rendered.review.text.length).toBeGreaterThan(0);
+  });
+
+  it("falls back when the media is the wrong kind for the layout", () => {
+    const rendered = resolveRenderedWidget(
+      row({ layout: "single_review_video", media: photos }),
+    );
+
+    expect(rendered.layout).toBe("single_review_text");
+    if (rendered.state !== "ready") return;
+    expect(rendered.review.media).toBeNull();
+  });
+
+  it("draws a poster-only video as a still, with no video element", () => {
+    const html = render({ layout: "single_review_video", media: video });
+
+    expect(html).toContain('class="player still"');
+    expect(html).toContain("0:24");
+    // Nothing to play, so nothing claiming to be playable — and the badge is
+    // hidden from assistive technology rather than offered as a control.
+    expect(html).not.toContain("<video");
+    expect(html).toContain('class="play" aria-hidden="true"');
+  });
+
+  it("hands a real clip to the browser's own controls", () => {
+    const html = render({
+      layout: "single_review_video",
+      media: { ...video, src: "/media/widget/abc.mp4" },
+    });
+
+    expect(html).toContain("<video");
+    expect(html).toContain('controls preload="none"');
+    expect(html).toContain('src="/media/widget/abc.mp4"');
+  });
+
+  it("reserves the space before the picture arrives", () => {
+    // The parent page sizes the frame from a height this document measures. A
+    // picture with no declared ratio makes the card grow a beat after it
+    // settled, on somebody else's homepage.
+    const html = render({ layout: "single_review_photo", media: photos });
+    expect(html).toContain("aspect-ratio");
+  });
+});
+
+/**
+ * A `src` is a destination, and escaping is about parsing.
+ *
+ * `escapeHtml` keeps a URL inside its attribute; it has no opinion about where
+ * the attribute points. These are the other half.
+ */
+describe("media URLs", () => {
+  it("accepts inline data, Lia's own paths, and https", () => {
+    expect(safeMediaUrl("data:image/svg+xml,%3Csvg%3E")).not.toBeNull();
+    expect(safeMediaUrl("data:video/mp4;base64,AAAA")).not.toBeNull();
+    expect(safeMediaUrl("/media/widget/abc.png")).not.toBeNull();
+    expect(safeMediaUrl("https://cdn.lia.example/a.png")).not.toBeNull();
+  });
+
+  it("refuses everything else", () => {
+    for (const hostile of [
+      "javascript:alert(1)",
+      "  javascript:alert(1)",
+      "http://insecure.example/a.png",
+      // Reads almost exactly like a path and is somebody else's server.
+      "//evil.example/a.png",
+      "blob:https://evil.example/abc",
+      // A data URI with no media type.
+      "data:,hello",
+      "data:text/html,<script>",
+      "",
+      "   ",
+    ]) {
+      expect(safeMediaUrl(hostile)).toBeNull();
+    }
+  });
+
+  it("drops a bad picture rather than the review", () => {
+    const html = render({
+      layout: "single_review_photo",
+      media: {
+        kind: "photo",
+        photos: [{ src: "javascript:alert(1)", alt: "Nope" }],
+      },
+    });
+
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain('class="shots');
+    // The card is still a card.
+    expect(html).toContain("<blockquote>");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
 /* The teaser's example review                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -310,7 +449,7 @@ describe("the date under the reviewer's name", () => {
 describe("the sample used by the empty-state teaser", () => {
   it("resolves to a drawable review in both themes", () => {
     for (const theme of ["light", "dark"] as const) {
-      const rendered = resolveRenderedWidget(sampleReviewWidgetRow(theme, NOW));
+      const rendered = resolveRenderedWidget(sampleReviewWidgetRow(theme, "single_review_text", NOW));
 
       expect(rendered.state).toBe("ready");
       expect(rendered.theme).toBe(theme);
@@ -324,15 +463,79 @@ describe("the sample used by the empty-state teaser", () => {
     }
   });
 
+  it("fills every layout, and only the media ones carry media", () => {
+    const text = resolveRenderedWidget(
+      sampleReviewWidgetRow("light", "single_review_text", NOW),
+    );
+    const photo = resolveRenderedWidget(
+      sampleReviewWidgetRow("light", "single_review_photo", NOW),
+    );
+    const video = resolveRenderedWidget(
+      sampleReviewWidgetRow("dark", "single_review_video", NOW),
+    );
+
+    // Each one has to survive the real resolver rather than degrading — a
+    // sample that fell back to the text card would make the carousel show the
+    // same slide three times and nobody would notice for a month.
+    for (const rendered of [text, photo, video]) {
+      expect(rendered.state).toBe("ready");
+    }
+
+    expect(text.layout).toBe("single_review_text");
+    expect(photo.layout).toBe("single_review_photo");
+    expect(video.layout).toBe("single_review_video");
+
+    if (photo.state !== "ready" || video.state !== "ready" || text.state !== "ready") return;
+
+    expect(text.review.media).toBeNull();
+    expect(photo.review.media?.kind).toBe("photo");
+    expect(video.review.media?.kind).toBe("video");
+  });
+
+  it("carries no fabricated video, only a still", () => {
+    const rendered = resolveRenderedWidget(
+      sampleReviewWidgetRow("light", "single_review_video", NOW),
+    );
+    if (rendered.state !== "ready") throw new Error("expected a drawable sample");
+    const media = rendered.review.media;
+    if (media?.kind !== "video") throw new Error("expected video media");
+
+    // Inventing twenty seconds of somebody's birthday to make a preview feel
+    // finished is the same error as inventing the review.
+    expect(media.src).toBeNull();
+  });
+
+  it("makes no network request, in any layout", () => {
+    for (const layout of [
+      "single_review_text",
+      "single_review_photo",
+      "single_review_video",
+    ] as const) {
+      const html = renderReviewWidgetDocument({
+        publicId: "sample",
+        rendered: resolveRenderedWidget(sampleReviewWidgetRow("light", layout, NOW)),
+        now: NOW,
+      });
+
+      // Every picture is inline. A preview that fetched two images would
+      // settle its height twice and would not behave like the thing it
+      // previews.
+      for (const attribute of html.matchAll(/src="([^"]*)"/g)) {
+        const value = attribute[1] ?? "";
+        expect(value.startsWith("data:")).toBe(true);
+      }
+    }
+  });
+
   it("carries a date a widget would plausibly be showing", () => {
-    const row = sampleReviewWidgetRow("light", NOW);
+    const row = sampleReviewWidgetRow("light", "single_review_text", NOW);
     expect(widgetReviewDate(row.reviewPublishedAt ?? "", NOW)).toBe("1 week ago");
   });
 
   it("shows the attribution line, like every other widget", () => {
     const html = renderReviewWidgetDocument({
       publicId: "sample",
-      rendered: resolveRenderedWidget(sampleReviewWidgetRow("light", NOW)),
+      rendered: resolveRenderedWidget(sampleReviewWidgetRow("light", "single_review_text", NOW)),
       now: NOW,
     });
 

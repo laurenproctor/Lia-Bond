@@ -124,6 +124,7 @@ describe("the star rating does not depend on colour alone", () => {
         reviewAuthorName: "Dana R.",
         reviewPublishedAt: "2026-08-17T12:00:00.000Z",
         profileUrl: null,
+        media: null,
       }),
       now: Date.parse("2026-08-20T12:00:00.000Z"),
     });

@@ -1,7 +1,9 @@
 import type {
   RenderedReviewWidget,
+  ReviewWidgetMedia,
   ReviewWidgetTheme,
   ReviewWidgetUnavailableReason,
+  WidgetImage,
 } from "@/domain";
 import { widgetReviewDate } from "@/lib/widgets/relative-date";
 
@@ -25,8 +27,19 @@ import { widgetReviewDate } from "@/lib/widgets/relative-date";
  * The visual language follows the reference designs: a quiet card, a serif
  * quotation, gold stars, an initials disc where a photograph would go, and a
  * footer that separates the customer's link to Google from Lia's own line.
- * Photographs and video are deliberately absent in this layout — see
- * `REVIEW_WIDGET_LAYOUTS`.
+ *
+ * **Three layouts, one card.** `single_review_text` is the card described
+ * above; `single_review_photo` and `single_review_video` add a media band
+ * between the quotation and the reviewer's name and change nothing else. The
+ * wordmark, the stars, the footer and the attribution are identical in all
+ * three deliberately — a media layout is a review widget with a picture in it,
+ * not a different product, and a visitor should recognise it as the same card.
+ *
+ * The reviewer's own avatar is still never a photograph, in any of the three:
+ * Google returns `profilePhotoUrl` and rendering it would put a
+ * `googleusercontent.com` request on the customer's page. Media in the band
+ * below is Lia's own or the customer's own, and `img-src` on the response is
+ * what holds that line.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -89,6 +102,17 @@ export interface Palette {
    */
   starEmpty: string;
   quoteMark: string;
+  /**
+   * What sits behind a picture before it paints, and inside a video frame.
+   *
+   * Its own token rather than reusing `rule`: a media well has to read as a
+   * deliberate empty slot at both themes while an image decodes, and the
+   * hairline that separates rows of text is too faint to do that on a card
+   * this size.
+   */
+  well: string;
+  /** The pill behind a duration, over an arbitrary still. Always dark. */
+  scrim: string;
 }
 
 /**
@@ -121,6 +145,8 @@ export const WIDGET_PALETTES: Record<ReviewWidgetTheme, Palette> = {
     // 3.10:1 on white.
     starEmpty: "#8b939f",
     quoteMark: "#123a6b",
+    well: "#f1f3f6",
+    scrim: "rgba(9,12,18,0.62)",
   },
   dark: {
     surface: "#12130f",
@@ -138,6 +164,8 @@ export const WIDGET_PALETTES: Record<ReviewWidgetTheme, Palette> = {
     // 4.09:1 on the dark surface.
     starEmpty: "#75776a",
     quoteMark: "#c8a96a",
+    well: "#1d1f18",
+    scrim: "rgba(0,0,0,0.62)",
   },
 };
 
@@ -189,6 +217,134 @@ function starRow(rating: number, palette: Palette): string {
 /** "5" not "5.0"; "4.5" stays "4.5". Google publishes whole and half stars. */
 function formatRating(rating: number): string {
   return Number.isInteger(rating) ? String(rating) : rating.toFixed(1);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Media                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The only way a media URL reaches an attribute in this document.
+ *
+ * `escapeHtml` stops a `src` from breaking out of its attribute; it does not
+ * stop the attribute from pointing somewhere it should not. Both are needed,
+ * and they answer different questions — one is about parsing, this one is
+ * about destination.
+ *
+ * Three shapes are allowed and everything else is dropped:
+ *
+ * - **`data:image/…` and `data:video/…`,** which is how the sample cards carry
+ *   their pictures with no network request at all.
+ * - **A root-relative path,** which resolves against Lia's own origin — where
+ *   a customer's uploaded media would live if uploading ships.
+ * - **An absolute `https:` URL,** for the same origin served under its
+ *   canonical host.
+ *
+ * `http:`, `javascript:`, `blob:`, protocol-relative `//host` and a bare
+ * `data:` with no media type are all refused. An `<img>` cannot execute a
+ * `javascript:` URL in any browser that matters, so this is defence in depth
+ * rather than the only guard — the one that actually enforces it is `img-src`
+ * on the response, and this exists so a bad URL is dropped quietly here
+ * instead of becoming a broken picture and a console error on a restaurant's
+ * homepage.
+ *
+ * Returning null rather than throwing keeps the renderer total: the card loses
+ * a photograph, not the review.
+ */
+export function safeMediaUrl(value: string): string | null {
+  const url = value.trim();
+  if (url.length === 0) return null;
+
+  if (/^data:(image|video)\/[a-z0-9.+-]+[;,]/i.test(url)) return url;
+  // A single leading slash. `//evil.example` is a protocol-relative URL to
+  // somebody else's server and reads almost identically.
+  if (/^\/(?!\/)/.test(url)) return url;
+  if (/^https:\/\/[^\s]+$/i.test(url)) return url;
+
+  return null;
+}
+
+/** A play triangle in a disc. Inline, like every other mark in this document. */
+const PLAY_MARK = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path fill="#ffffff" d="M9 6.8v10.4c0 .6.7 1 1.2.6l8-5.2c.5-.3.5-1 0-1.3l-8-5.2c-.5-.3-1.2 0-1.2.7z"/></svg>`;
+
+/**
+ * The band between the quotation and the reviewer's name.
+ *
+ * Returns an empty string when nothing survives URL validation, and the card
+ * then draws exactly as the text layout does. That is the same reasoning as
+ * `effectiveLayout` in `@/lib/widgets/render`, applied one level further down
+ * where the individual URLs are finally known: a review with no picture is a
+ * review, and an empty frame is a bug report.
+ */
+function mediaMarkup(media: ReviewWidgetMedia): string {
+  if (media.kind === "photo") {
+    const shots = media.photos
+      .map((photo) => shotMarkup(photo))
+      .filter((markup) => markup.length > 0);
+
+    if (shots.length === 0) return "";
+
+    // One photograph gets a wider frame than three do. A 4:3 thumbnail scaled
+    // to the full width of the card is a banner with a person's lunch stranded
+    // in the middle of it.
+    if (shots.length === 1) {
+      return `<div class="media"><div class="shots one">${shots[0] ?? ""}</div></div>`;
+    }
+
+    // Focusable, because in a narrow column this is a horizontal scroller and
+    // a scroller nobody can reach with a keyboard is content nobody can reach
+    // with a keyboard. Recent Chrome and Firefox make scroll containers
+    // focusable on their own; this is what covers the browsers that do not,
+    // and it is why the group carries a name rather than being an unlabelled
+    // tab stop on a stranger's page.
+    return `<div class="media"><div class="shots many" tabindex="0" role="group" aria-label="Photographs shown with this review">${shots.join(
+      "",
+    )}</div></div>`;
+  }
+
+  const poster = safeMediaUrl(media.poster.src);
+  if (poster === null) return "";
+
+  const source = media.src === null ? null : safeMediaUrl(media.src);
+
+  const duration =
+    media.durationLabel === null
+      ? ""
+      : `<span class="dur">${escapeHtml(media.durationLabel)}</span>`;
+
+  if (source !== null) {
+    // A real clip gets the browser's own controls. A hand-built play button
+    // would have to reimplement keyboard access, captions and the scrubber,
+    // and would do all three worse inside an iframe on somebody else's page.
+    // `preload="none"` means an embedded video costs a poster image until a
+    // visitor asks for it.
+    return `<div class="media"><div class="player"><video class="clip" controls preload="none" playsinline poster="${escapeHtml(
+      poster,
+    )}" src="${escapeHtml(source)}"${
+      // `aria-label` rather than `title`: a title attribute is a tooltip that
+      // happens to be read as a name, and a video with no name at all is
+      // announced as "video" and nothing else. The duration chip is dropped
+      // here because the browser's own controls already show it.
+      media.poster.alt ? ` aria-label="${escapeHtml(media.poster.alt)}"` : ""
+    }></video></div></div>`;
+  }
+
+  // Poster only. The badge is drawn but is not a control and is not focusable,
+  // because there is nothing behind it to play — a button that does nothing is
+  // worse than a still that looks like one.
+  return `<div class="media"><div class="player still"><img src="${escapeHtml(
+    poster,
+  )}" alt="${escapeHtml(media.poster.alt)}" loading="lazy" decoding="async">` +
+    `<span class="play" aria-hidden="true">${PLAY_MARK}</span>${duration}</div></div>`;
+}
+
+function shotMarkup(photo: WidgetImage): string {
+  const src = safeMediaUrl(photo.src);
+  if (src === null) return "";
+
+  return `<figure class="shot"><img src="${escapeHtml(src)}" alt="${escapeHtml(
+    photo.alt,
+  )}" loading="lazy" decoding="async"></figure>`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -292,6 +448,56 @@ blockquote::before {
 .empty { font-size: 14px; color: ${palette.muted}; line-height: 1.5; margin: 0; }
 .empty .headline { display: block; color: ${palette.quote}; font-weight: 600; margin-bottom: 3px; }
 
+/*
+ * The media band.
+ *
+ * Every frame declares an aspect ratio, and that is load-bearing rather than
+ * tidy: the parent page sizes this iframe from a height this document
+ * measures and posts, so a picture that arrives with no reserved box makes the
+ * card jump — reflowing somebody else's homepage a beat after it settled. With
+ * a ratio the height is right before the first byte of the image lands.
+ */
+.media { margin-top: 17px; }
+.shots { display: grid; gap: 8px; }
+.shots.one { grid-template-columns: minmax(0, 1fr); }
+/* Two or three, evenly, without the count reaching the stylesheet. */
+.shots.many { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+.shot {
+  margin: 0; overflow: hidden; border-radius: 12px;
+  background: ${palette.well}; border: 1px solid ${palette.border};
+}
+.shots.one .shot { aspect-ratio: 16 / 10; }
+.shots.many .shot { aspect-ratio: 1 / 1; }
+.shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.shots.many:focus-visible {
+  outline: 2px solid ${palette.link}; outline-offset: 3px; border-radius: 12px;
+}
+.player {
+  position: relative; overflow: hidden; border-radius: 14px;
+  aspect-ratio: 16 / 9; background: ${palette.well};
+  border: 1px solid ${palette.border};
+}
+.player img, .player .clip {
+  display: block; width: 100%; height: 100%; object-fit: cover;
+}
+/*
+ * Drawn over an image nobody has seen, so the disc carries its own contrast
+ * rather than trusting the still underneath it to be dark enough.
+ */
+.play {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 54px; height: 54px; border-radius: 50%;
+  background: ${palette.scrim};
+  display: flex; align-items: center; justify-content: center;
+  padding-left: 3px;
+}
+.dur {
+  position: absolute; right: 10px; bottom: 10px;
+  background: ${palette.scrim}; color: #ffffff;
+  font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+  padding: 2px 7px; border-radius: 999px;
+}
+
 @container (max-width: 460px) {
   .card { padding: 18px 18px 13px; }
   .top { flex-direction: column; gap: 14px; }
@@ -303,6 +509,28 @@ blockquote::before {
   }
   blockquote { font-size: 18px; }
   .foot { flex-wrap: wrap; row-gap: 8px; }
+  /*
+   * Photographs scroll rather than shrink or stack.
+   *
+   * Three 1:1 thumbnails in a 300px column are 90px each, which is a contact
+   * sheet rather than a picture of anybody's dinner. Stacking them full width
+   * is legible and turns a review card into a thousand pixels of somebody
+   * else's homepage — which is the version a restaurant owner would ask us to
+   * take down. So they become a strip, sized so the next one is always partly
+   * visible: that overhang is the only affordance saying there is more, and it
+   * is the interaction anybody who has scrolled photographs on a phone already
+   * has.
+   */
+  .shots.many {
+    display: flex; overflow-x: auto; gap: 8px;
+    scroll-snap-type: x mandatory;
+    /* Room for the focus ring on a keyboard-scrolled strip. */
+    padding-bottom: 2px;
+  }
+  .shots.many .shot {
+    flex: 0 0 68%; aspect-ratio: 4 / 3; scroll-snap-align: start;
+  }
+  .play { width: 46px; height: 46px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -461,6 +689,7 @@ ${starRow(review.rating, palette)}
 </div>
 <div class="body">
 <blockquote>${escapeHtml(review.text)}</blockquote>
+${review.media === null ? "" : mediaMarkup(review.media)}
 <div class="who">
 <span class="disc" aria-hidden="true">${escapeHtml(review.authorInitials)}</span>
 <span>
