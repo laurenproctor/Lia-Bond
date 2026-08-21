@@ -25,6 +25,19 @@ export interface NavItem {
   badgeKey?: "mentions" | "escalations";
   /** Highlight the item for any route beneath this prefix. */
   matchPrefix?: string;
+  /**
+   * Further prefixes this item claims, for routes that are siblings in the URL
+   * but children in the product.
+   *
+   * `Website widgets` lives at `/integrations/website-widgets` and owns
+   * `/integrations/review-widget` and `/integrations/press-widget`, neither of
+   * which is beneath it. The alternative was moving the two configurators
+   * under the landing route — which would have broken every saved link to
+   * `/integrations/review-widget`, a URL that has been in the product's
+   * navigation and in customers' browser history since the review widget
+   * shipped.
+   */
+  alsoMatches?: string[];
 }
 
 export interface NavSection {
@@ -91,10 +104,18 @@ export const NAV_SECTIONS: NavSection[] = [
       // because `CLAUDE.md` fixes the top-level route list. That nesting is
       // exactly why `isNavItemActive` prefers the most specific match — see
       // the note there.
+      //
+      // `matchPrefix` is `/integrations/website-widgets` and the href points
+      // at it, but the item must also light up on the two configurators
+      // beneath it — which are siblings in the URL, not children. That is what
+      // `alsoMatches` is for. Without it, opening the press configurator would
+      // highlight `Integrations` instead, and the sidebar would be telling
+      // somebody they are somewhere they are not.
       {
         label: "Website widgets",
-        href: "/integrations/review-widget",
+        href: "/integrations/website-widgets",
         icon: Code2,
+        alsoMatches: ["/integrations/review-widget", "/integrations/press-widget"],
       },
       { label: "Settings", href: "/settings", icon: Settings },
     ],
@@ -108,14 +129,14 @@ export const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
-/** The prefix an item claims: its explicit `matchPrefix`, or its own href. */
-function navPrefix(item: NavItem): string {
-  return item.matchPrefix ?? item.href;
+/** Every prefix an item claims: its `matchPrefix` or href, plus `alsoMatches`. */
+function navPrefixes(item: NavItem): string[] {
+  return [item.matchPrefix ?? item.href, ...(item.alsoMatches ?? [])];
 }
 
 /** Every prefix in the sidebar, longest first. */
 const NAV_PREFIXES: string[] = NAV_SECTIONS.flatMap((section) =>
-  section.items.map(navPrefix),
+  section.items.flatMap(navPrefixes),
 ).sort((left, right) => right.length - left.length);
 
 function matchesPrefix(pathname: string, prefix: string): boolean {
@@ -128,23 +149,28 @@ function matchesPrefix(pathname: string, prefix: string): boolean {
  * True when `pathname` should light up `item` in the sidebar.
  *
  * **The most specific matching item wins, and only that one.** Before the
- * website widget there was no nested entry, so a plain prefix test was
+ * website widgets there was no nested entry, so a plain prefix test was
  * sufficient — every item's prefix matched a disjoint set of routes. It is not
- * sufficient now: `Website widgets` lives at `/integrations/review-widget`,
- * which is beneath `Integrations`, and a plain test lights up both. Two
- * highlighted items is not a cosmetic problem — the sidebar is the only thing
- * telling somebody where they are, and it would be saying two contradictory
- * things.
+ * sufficient now: `Website widgets` lives beneath `Integrations`, and a plain
+ * test lights up both. Two highlighted items is not a cosmetic problem — the
+ * sidebar is the only thing telling somebody where they are, and it would be
+ * saying two contradictory things.
+ *
+ * An item may claim several prefixes (`alsoMatches`), because the two widget
+ * configurators are siblings of the landing route rather than children of it.
+ * The longest-first sort still decides the winner; the item then asks whether
+ * the winner is one of *its* claims rather than whether it equals its own
+ * href.
  *
  * Resolved here rather than by giving the widget a top-level route, because
  * `CLAUDE.md` fixes that list; and here rather than in the sidebar component,
  * so anything else that asks "is this item current" gets the same answer.
  */
 export function isNavItemActive(item: NavItem, pathname: string): boolean {
-  const prefix = navPrefix(item);
-  if (!matchesPrefix(pathname, prefix)) return false;
+  const claimed = navPrefixes(item);
+  if (!claimed.some((prefix) => matchesPrefix(pathname, prefix))) return false;
 
   // Sorted longest-first, so the first match is the most specific one.
   const winner = NAV_PREFIXES.find((candidate) => matchesPrefix(pathname, candidate));
-  return winner === prefix;
+  return winner !== undefined && claimed.includes(winner);
 }

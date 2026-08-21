@@ -1,7 +1,9 @@
+import { WIDGET_KINDS, type WidgetKind } from "@/lib/widgets/kinds";
 import { isWidgetPublicIdShaped } from "@/lib/widgets/public-id";
 
 /**
- * The loader script served at `/embed/review-widget.js`.
+ * The loader script served at `/embed/review-widget.js` and
+ * `/embed/press-widget.js`.
  *
  * Written as a string rather than as a source file that a bundler emits, and
  * that is a deliberate trade. A bundled entry point would be idiomatic Next.js
@@ -17,9 +19,15 @@ import { isWidgetPublicIdShaped } from "@/lib/widgets/public-id";
  * thing that will ever load this" is the correct design target for a public
  * embed and IE11 is a legible proxy for it.
  *
+ * **One function builds both loaders.** They differ in five strings — the
+ * attribute, the frame path, the id prefix, the message source, and the frame
+ * title — and in nothing else. Two files would mean two copies of the origin
+ * check, which is the one line in here that is security-relevant, and a fix
+ * applied to one of them.
+ *
  * What it does, in order:
  *
- * 1. finds every `[data-lia-review-widget]` element;
+ * 1. finds every mount element for *its own* widget;
  * 2. mounts one iframe per element, exactly once, keyed by a marker attribute
  *    so a double-included script cannot double-mount;
  * 3. listens for height messages from Lia's origin **only**, and sizes the
@@ -32,22 +40,34 @@ import { isWidgetPublicIdShaped } from "@/lib/widgets/public-id";
  * the whole file: without it, any frame on the page could resize Lia's frame,
  * which is a small thing that becomes a large one when the resized frame is
  * pushed over the page's own controls.
+ *
+ * A page carrying both widgets runs both loaders. Each scans only its own
+ * attribute, each keeps its own `frames` list, and each ignores a message
+ * whose `source` field is the other's — so the two are independent programs
+ * that happen to share an origin.
  */
 
-export function buildLoaderScript(origin: string): string {
+export function buildLoaderScript(origin: string, kind: WidgetKind): string {
   const trimmed = origin.replace(/\/+$/, "");
+  const config = WIDGET_KINDS[kind];
 
-  return `/* Lia review widget loader. https://lia.bond */
+  // Interpolated into an ES5 regular expression literal below. The prefix is
+  // a compile-time constant from `WIDGET_KINDS`, never a request value.
+  const idPattern = `/^${config.publicIdPrefix}[A-Za-z0-9_-]{20}$/`;
+
+  return `/* Lia website widget loader (${kind}). https://lia.bond */
 (function () {
   "use strict";
 
   var ORIGIN = ${JSON.stringify(trimmed)};
-  var ATTR = "data-lia-review-widget";
+  var ATTR = ${JSON.stringify(config.attribute)};
   var MOUNTED = "data-lia-mounted";
+  var FRAME_PATH = ${JSON.stringify(config.framePath)};
+  var MESSAGE_SOURCE = ${JSON.stringify(config.messageSource)};
   var frames = [];
 
   function isValidId(value) {
-    return typeof value === "string" && /^rw_[A-Za-z0-9_-]{20}$/.test(value);
+    return typeof value === "string" && ${idPattern}.test(value);
   }
 
   function mount(host) {
@@ -59,12 +79,12 @@ export function buildLoaderScript(origin: string): string {
     host.setAttribute(MOUNTED, "1");
 
     var frame = document.createElement("iframe");
-    frame.src = ORIGIN + "/embed/review-widget/" + encodeURIComponent(id);
-    frame.title = "Customer review";
+    frame.src = ORIGIN + FRAME_PATH + "/" + encodeURIComponent(id);
+    frame.title = ${JSON.stringify(config.frameTitle)};
     frame.loading = "lazy";
     // The narrow sandbox that still lets the widget do its two jobs: run its
-    // height script, and open the one "Read on Google" link. Everything else —
-    // forms, top-level navigation, downloads, pointer lock, modals — is denied.
+    // height script, and open the links it draws. Everything else — forms,
+    // top-level navigation, downloads, pointer lock, modals — is denied.
     //
     // "allow-same-origin" alongside "allow-scripts" is the pairing that is
     // usually a warning sign, and it is correct here. The danger is a frame
@@ -86,7 +106,7 @@ export function buildLoaderScript(origin: string): string {
     frame.style.overflow = "hidden";
     // A first height that is close enough that the card does not visibly jump
     // when the real measurement arrives a frame later.
-    frame.style.height = "220px";
+    frame.style.height = "${config.initialFrameHeight}px";
     frame.style.colorScheme = "normal";
 
     host.appendChild(frame);
@@ -102,7 +122,7 @@ export function buildLoaderScript(origin: string): string {
     if (event.origin !== ORIGIN) return;
 
     var data = event.data;
-    if (!data || data.source !== "lia-review-widget" || data.type !== "height") return;
+    if (!data || data.source !== MESSAGE_SOURCE || data.type !== "height") return;
 
     var height = parseInt(data.height, 10);
     if (!(height > 0) || height > 4000) return;
@@ -141,10 +161,10 @@ export function buildLoaderScript(origin: string): string {
 /**
  * The pattern the loader tests ids against, restated in TypeScript.
  *
- * Exported so `tests/review-widget-embed.test.ts` can assert the two agree:
- * the loader's copy is inside a template literal and cannot import anything,
- * which is precisely the kind of duplication that drifts silently.
+ * Exported so the embed tests can assert the two agree: the loader's copy is
+ * inside a template literal and cannot import anything, which is precisely the
+ * kind of duplication that drifts silently.
  */
-export function loaderAcceptsPublicId(value: string): boolean {
-  return isWidgetPublicIdShaped(value);
+export function loaderAcceptsPublicId(value: string, kind: WidgetKind): boolean {
+  return isWidgetPublicIdShaped(value, kind);
 }

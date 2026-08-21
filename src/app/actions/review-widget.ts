@@ -16,7 +16,7 @@ import {
 /**
  * Website review widget server actions.
  *
- * Every one goes through `authorize("review_widget.manage")` before touching
+ * Every one goes through `authorize("website_widget.manage")` before touching
  * the data source, and none of them is the only check: the repositories are
  * organization-scoped by type, and the policies in
  * `20260820000300_review_widget_rls.sql` restate the same three roles
@@ -42,7 +42,7 @@ export async function saveReviewWidgetAction(
   input: unknown,
 ): Promise<ActionResult<SaveWidgetResult>> {
   return runAction("review_widget.save", async () => {
-    const context = await authorize("review_widget.manage");
+    const context = await authorize("website_widget.manage");
 
     const result = await saveReviewWidget(
       {
@@ -68,7 +68,7 @@ export async function setReviewWidgetStatusAction(
 ): Promise<ActionResult<ReviewWidget>> {
   return runAction("review_widget.set_status", async () => {
     const parsed = statusInputSchema.parse(input);
-    const context = await authorize("review_widget.manage");
+    const context = await authorize("website_widget.manage");
 
     const widget = await setReviewWidgetStatus(
       {
@@ -99,7 +99,7 @@ export async function rotateReviewWidgetEmbedIdAction(
 ): Promise<ActionResult<RotateResult>> {
   return runAction("review_widget.rotate", async () => {
     const parsed = rotateInputSchema.parse(input);
-    const context = await authorize("review_widget.manage");
+    const context = await authorize("website_widget.manage");
 
     const result = await rotateReviewWidgetEmbedId(
       {

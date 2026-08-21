@@ -22,7 +22,7 @@ import { buildLoaderScript } from "@/lib/widgets/loader";
 export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<Response> {
-  return new Response(buildLoaderScript(appOrigin()), {
+  return new Response(buildLoaderScript(appOrigin(), "review"), {
     headers: {
       "content-type": "application/javascript; charset=utf-8",
       // Read by browsers on origins Lia does not control. `*` is correct and

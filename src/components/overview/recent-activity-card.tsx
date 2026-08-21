@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   ChevronRight,
   Code2,
+  Megaphone,
   MessagesSquare,
   Newspaper,
   PencilLine,
@@ -39,6 +40,7 @@ const ENTITY_ICONS: Record<AuditEntityType, LucideIcon> = {
   reddit_community_posture: ShieldAlert,
   response_publication_attempt: Send,
   review_widget: Code2,
+  press_widget: Megaphone,
 };
 
 const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
@@ -67,6 +69,7 @@ const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
   // attention. The one act that does — regenerating the embed code — is
   // guarded by a confirmation where it happens, not by a colour here.
   review_widget: "neutral",
+  press_widget: "neutral",
 };
 
 export interface RecentActivityCardProps {

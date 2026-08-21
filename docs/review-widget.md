@@ -9,16 +9,27 @@ snippet.
 ```
 
 Configured at `/integrations/review-widget`, reached from **Website widgets**
-in the sidebar.
+in the sidebar — which now opens `/integrations/website-widgets`, the page that
+explains the choice between this widget and the press one. **This route is
+unchanged**, and deliberately so: it has been in the sidebar and in customers'
+browser history since this feature shipped.
+
+**There are two website widgets now.** The press widget —
+`docs/press-widget.md` — shows one to three news stories for the organization,
+and it is a separate product with a separate table, separate eligibility, and a
+separate renderer. What the two share is the *envelope*; §14 lists exactly
+which modules that is. Nothing about this widget's behaviour changed when it
+arrived.
 
 ---
 
 ## 0. Why this feature is different from every other one in Lia
 
 Everything else in this codebase describes something Lia **read** from
-somewhere else — a review, a thread, an article. This is the first thing Lia
+somewhere else — a review, a thread, an article. This was the first thing Lia
 **publishes**, on a domain it does not own, in front of people deciding whether
-to book a table.
+to book a table. (The press widget is the second, and inherited every
+conclusion below.)
 
 That inversion is the reason behind most of the decisions below, and it is
 worth stating once at the top because it explains why some of them look
@@ -202,9 +213,9 @@ customer's page
 
 | Route | Audience | Notes |
 | --- | --- | --- |
-| `/embed/review-widget.js` | anonymous | Loader. Origin baked in at request time, so a preview deployment points at itself. |
+| `/embed/review-widget.js` | anonymous | Loader. Origin baked in at request time, so a preview deployment points at itself. Built by `buildLoaderScript(origin, "review")`, which also builds the press loader. |
 | `/embed/review-widget/[publicId]` | anonymous | The document. Always 200 with something drawable. |
-| `/embed/review-widget/preview` | signed in, `review_widget.manage` | Same renderer, unsaved configuration, `frame-ancestors 'self'`, `no-store`. |
+| `/embed/review-widget/preview` | signed in, `website_widget.manage` | Same renderer, unsaved configuration, `frame-ancestors 'self'`, `no-store`. |
 | `/embed/review-widget/preview?sample=1` | anyone | The empty state's teaser. An invented review, no tenant data, so it answers before the organization context is resolved. See §9. |
 
 None is a page. A page under `src/app/` inherits the root layout,
@@ -339,22 +350,31 @@ invites clicking and implies the capability is one permission away.
 signed-in path                       anonymous path
 ──────────────                       ──────────────
 server action                        route handler
- └─ authorize("review_widget.manage")  └─ (no session at all)
+ └─ authorize("website_widget.manage") └─ (no session at all)
      └─ OrganizationScope                  └─ review_widget_render(public_id)
          └─ RLS policies                       └─ SECURITY DEFINER, 11 columns
 ```
 
 ### Permissions
 
-`review_widget.manage` — owner, admin, communications_lead. The same three
-roles as `brand_voice.update` and `automation_rule.manage`, and it belongs with
-them rather than with the integration permissions: all three decide what the
-product says without a person in the loop. There is no external account here,
-nothing to authorise, nothing to disconnect.
+`website_widget.manage` — owner, admin, communications_lead. **Renamed from
+`review_widget.manage` when the press widget arrived**, because one permission
+now gates both. Two names with identical role lists would not have been a finer
+control; they would have been a place for two lists to drift apart. The rename
+was atomic and left no alias: nothing in SQL names the permission — the
+policies restate the *roles* with `has_organization_role`, which is what
+Postgres can express — so it touched the permission table, four call sites, and
+the tests that pin the role list, and needed no policy migration.
+
+The same three roles as `brand_voice.update` and `automation_rule.manage`, and
+it belongs with them rather than with the integration permissions: all three
+decide what the product says without a person in the loop. There is no external
+account here, nothing to authorise, nothing to disconnect.
 
 **Location managers are absent**, and this is the one place their absence needs
-an argument, because a widget carries a location and `canForLocation` could
-scope them to it. Two reasons: `has_organization_role` — which the RLS policies
+an argument, because a *review* widget carries a location and `canForLocation`
+could scope them to it. (A press widget carries none at all, so the same
+question does not arise there.) Two reasons: `has_organization_role` — which the RLS policies
 use to restate this list — cannot express "and only for their own locations",
 so the scoping would live in application code alone, and for a surface the
 public can see that is not the last line; and a group's marketing site is one
@@ -466,7 +486,7 @@ Three things this costs, and why each is paid:
 - **The sample branch answers before `getOrganizationContext()`.** It reads no
   location, no mention, no profile. The empty state is shown to every member of
   a new organization, including the ones who will never hold
-  `review_widget.manage`, and gating a fixed string of fiction behind a
+  `website_widget.manage`, and gating a fixed string of fiction behind a
   permission check on data it never touches would blank the frame for them for
   nothing. Headers are unchanged: `frame-ancestors 'self'`, `no-store`,
   `noindex`.
@@ -589,4 +609,35 @@ tell the customers first.
   nameless second row would create.
 - Impressions, clicks, or any analytics. An empty events table is how a product
   acquires a metric nobody asked for and a retention obligation nobody scoped.
-- Any source but Google. The eligibility rule `source` is one line.
+- Any source but Google **in this widget**. The eligibility rule `source` is
+  one line — but "a news story is not a review" turned out to be a product
+  boundary rather than a filter, and press shipped as its own widget rather
+  than as a second value here. See `docs/press-widget.md` §0 for why.
+
+## 14. What the two widgets share
+
+Listed rather than left to be discovered, because the boundary is the thing a
+future change is most likely to get wrong in one direction or the other.
+
+**Shared, and shared verbatim:**
+
+| Module | What it holds |
+| --- | --- |
+| `src/lib/widgets/kinds.ts` | the five strings that differ per widget — prefix, attribute, script path, frame path, message source |
+| `src/lib/widgets/html.ts` | `escapeHtml` and `safeHttpUrl`. One escaper in this feature, and one URL check |
+| `src/lib/widgets/csp.ts` | the content policy and the response headers. `img-src` and `media-src` are the only parameters — this widget takes both, the press widget takes only `img-src` |
+| `src/lib/widgets/domains.ts` | approved-domain normalisation and the `frame-ancestors` directive |
+| `src/lib/widgets/public-id.ts` | id generation and shape-checking, keyed by widget |
+| `src/lib/widgets/snippet.ts` | the two lines a customer pastes |
+| `src/lib/widgets/loader.ts` | one function, two loader scripts. The origin check exists once |
+| `src/lib/widgets/attribution.ts` | the plan seam. Both widgets get the same answer |
+| `src/components/integrations/use-widget-frame-height.ts` | the listening half of the height channel, per widget kind |
+
+**Not shared, deliberately:** eligibility, the render boundary, the document
+and its palettes, the sample, the preview resolver, the service, the
+repositories, and the configurators. A shared renderer over a row full of
+nullable review-or-press fields is how both of them end up half-wrong.
+
+The rule for the next change: if it decides **what appears**, it belongs to one
+widget. If it decides **how the thing travels** — an id, a header, a frame, an
+escape — it belongs to both.

@@ -123,7 +123,7 @@ function PreviewFrame({
   width: WidthKey;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef);
+  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef, { kind: "review" });
 
   return (
     // The backdrop is part of the preview, not decoration. A dark card on a

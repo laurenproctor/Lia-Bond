@@ -989,7 +989,7 @@ $$;
 --
 --   a. a member of one organization cannot see another's widget;
 --   b. writes admit exactly owner/admin/communications_lead, restated from
---      `review_widget.manage` in src/lib/auth/permissions.ts;
+--      `website_widget.manage` in src/lib/auth/permissions.ts;
 --   c. `anon` can execute `review_widget_render` — because a restaurant's
 --      website visitor has no session and never will;
 --   d. `anon` can reach nothing else. The function is the entire anonymous
@@ -1141,5 +1141,213 @@ begin
 end;
 $$;
 
+
+
+-- ---------------------------------------------------------------------------
+-- 14. The website press widget.
+--
+-- The same four proofs section 13 makes for the review widget, plus one this
+-- table needs and that one does not: a press widget names a monitoring query,
+-- and a query names an organization, so there is a second way for a row to
+-- reach across the tenant boundary.
+--
+--   a. a member of one organization cannot see another's press widget;
+--   b. writes admit exactly owner/admin/communications_lead, restated from
+--      `website_widget.manage` in src/lib/auth/permissions.ts;
+--   c. `anon` can execute `press_widget_render` — because a restaurant's
+--      website visitor has no session and never will;
+--   d. `anon` can reach nothing else, including monitoring_queries, whose
+--      keywords are the customer's own competitive information;
+--   e. no session, however privileged, can attach another organization's
+--      monitoring query — `press_widgets_query_same_org` makes it
+--      unrepresentable rather than merely refused.
+--
+-- (d) is the check that would fail if somebody ever "fixed" the embed by
+-- adding a permissive select policy, which is the obvious wrong repair for the
+-- symptom "the widget shows nothing when signed out".
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  f record;
+  ushg_widget uuid;
+  failed boolean := false;
+begin
+  select * into f from rls_fixtures;
+
+  perform pg_temp.become(f.ushg_comms_lead);
+
+  begin
+    insert into public.press_widgets (organization_id, public_id)
+    values (f.ushg_id, 'pw_rlsfixture000000000a')
+    returning id into ushg_widget;
+  exception when insufficient_privilege then
+    failed := true;
+  end;
+  perform pg_temp.check(
+    not failed and ushg_widget is not null,
+    'a communications lead (in press_widgets_insert''s role set) can create a press widget'
+  );
+
+  reset role;
+
+  -- (a) Harbor's owner must not see it.
+  perform pg_temp.become(f.harbor_owner);
+  perform pg_temp.check(
+    not exists (select 1 from public.press_widgets where id = ushg_widget),
+    'a member of another organization cannot see this press widget'
+  );
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+
+  -- (b) An analyst is a member and holds none of the three roles.
+  perform pg_temp.become(f.ushg_analyst);
+  begin
+    insert into public.press_widgets (organization_id, public_id)
+    values (f.ushg_id, 'pw_rlsfixture000000000b');
+  exception when insufficient_privilege or check_violation or unique_violation then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'an analyst cannot create a press widget (member of the org, but not owner/admin/communications_lead)'
+  );
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  f record;
+  harbor_query uuid;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+
+  select id into harbor_query from public.monitoring_queries
+   where organization_id = f.harbor_id limit 1;
+
+  -- (e) The composite foreign key, exercised through a session rather than as
+  -- superuser. A widget in one tenant pointed at another tenant's watch is not
+  -- refused by a policy — it is refused by the key, which is what makes it
+  -- true even if every policy above were dropped.
+  if harbor_query is not null then
+    perform pg_temp.become(f.ushg_admin);
+    begin
+      update public.press_widgets
+         set monitoring_query_id = harbor_query
+       where public_id = 'pw_rlsfixture000000000a';
+    exception when foreign_key_violation then
+      refused := true;
+    end;
+    reset role;
+
+    perform pg_temp.check(
+      refused,
+      'an admin cannot attach another organization''s monitoring query to their press widget'
+    );
+  end if;
+end;
+$$;
+
+do $$
+declare
+  rendered integer;
+  refused boolean := false;
+begin
+  -- (c) and (d). `anon` is the role a restaurant's website visitor arrives as:
+  -- no JWT, so `auth.uid()` is null and no policy on the table could match.
+  set local role anon;
+
+  -- One row per story, not one per widget — a press widget draws up to three.
+  -- A widget with nothing to show still returns a single row carrying the
+  -- theme its "no coverage yet" card is drawn with, which is why this is
+  -- `>= 1` rather than an exact count.
+  select count(*) into rendered
+    from public.press_widget_render('pw_rlsfixture000000000a');
+  perform pg_temp.check(
+    rendered >= 1,
+    'an anonymous visitor can render a press widget through press_widget_render'
+  );
+
+  select count(*) into rendered
+    from public.press_widget_render('pw_nosuchwidget000000');
+  perform pg_temp.check(
+    rendered = 0,
+    'and gets nothing at all for an id nobody issued'
+  );
+
+  -- Note the shape of this refusal. A missing *policy* yields zero rows; a
+  -- missing *grant* raises 42501 before RLS is consulted at all. `anon` has no
+  -- table grant — 20260821000200 revokes everything — so this is the stronger
+  -- guarantee, and asserting a zero count here would have quietly passed even
+  -- if somebody later granted SELECT and added a permissive policy.
+  begin
+    perform count(*) from public.press_widgets;
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  perform pg_temp.check(
+    refused,
+    'an anonymous visitor cannot select from press_widgets at all — no grant, so the function is the entire anonymous surface'
+  );
+
+  reset role;
+end;
+$$;
+
+do $$
+declare
+  visible integer;
+begin
+  set local role anon;
+  select count(*) into visible from public.monitoring_queries;
+  reset role;
+
+  perform pg_temp.check(
+    visible = 0,
+    'an anonymous visitor reads no monitoring query — a customer''s watch terms never cross the public boundary'
+  );
+end;
+$$;
+
+do $$
+declare
+  f record;
+  refused boolean := false;
+begin
+  select * into f from rls_fixtures;
+
+  -- "Revoke" is a public-id rotation and "switch off" is a status; both leave
+  -- the row, and therefore the record that a widget existed and what it
+  -- showed. Both halves are asserted, because they are two different
+  -- refusals: 20260821000200 revokes DELETE from `authenticated` *and*
+  -- declares no delete policy.
+  perform pg_temp.become(f.ushg_admin);
+  begin
+    delete from public.press_widgets where public_id = 'pw_rlsfixture000000000a';
+  exception when insufficient_privilege then
+    refused := true;
+  end;
+  reset role;
+
+  perform pg_temp.check(
+    refused,
+    'a session cannot delete a press widget — DELETE is revoked from authenticated outright'
+  );
+  perform pg_temp.check(
+    exists (select 1 from public.press_widgets where public_id = 'pw_rlsfixture000000000a'),
+    'and the press widget record survives the attempt'
+  );
+end;
+$$;
 
 rollback;

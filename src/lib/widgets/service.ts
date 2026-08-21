@@ -141,7 +141,7 @@ export async function saveReviewWidget(
     allowedDomains: domains,
     // Issued on a create, carried forward on an update. The one place a public
     // id is chosen, other than `rotateReviewWidgetEmbedId`.
-    publicId: existing?.publicId ?? generateWidgetPublicId(),
+    publicId: existing?.publicId ?? generateWidgetPublicId("review"),
     createdByUserId: existing?.createdByUserId ?? context.actorUserId,
   });
 
@@ -305,7 +305,7 @@ export async function rotateReviewWidgetEmbedId(
   const widget = await dataSource.reviewWidgets.rotatePublicId(
     scope,
     existing.id,
-    generateWidgetPublicId(),
+    generateWidgetPublicId("review"),
     input.now,
   );
 

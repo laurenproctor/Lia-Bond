@@ -8,6 +8,7 @@ import type {
   NewsRejectedCandidate,
   OAuthState,
   PlatformSyncRun,
+  PressWidget,
   ReviewWidget,
   YelpActivityOccurrence,
   YelpListingSnapshot,
@@ -168,6 +169,14 @@ interface RuntimeStore {
    * but is just as much a published artefact.
    */
   reviewWidgets: ReviewWidget[];
+  /**
+   * Website press widgets.
+   *
+   * Runtime-only for the same reason `reviewWidgets` is: a seeded widget would
+   * be a live public embed id shipped in the repository, resolving to real
+   * coverage for anybody who pasted it into a page.
+   */
+  pressWidgets: PressWidget[];
 }
 
 function freshRuntimeStore(): RuntimeStore {
@@ -195,6 +204,7 @@ function freshRuntimeStore(): RuntimeStore {
     yelpActivityOccurrences: [],
     yelpActivityOccurrenceSequence: 0,
     reviewWidgets: [],
+    pressWidgets: [],
   };
 }
 

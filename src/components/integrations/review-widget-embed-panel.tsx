@@ -48,7 +48,7 @@ export function ReviewWidgetEmbedPanel({
   const [confirmingRotate, setConfirmingRotate] = useState(false);
   const [retiredId, setRetiredId] = useState<string | null>(null);
 
-  const snippet = buildEmbedSnippet(origin, publicId);
+  const snippet = buildEmbedSnippet(origin, publicId, "review");
 
   async function copy() {
     setError(null);

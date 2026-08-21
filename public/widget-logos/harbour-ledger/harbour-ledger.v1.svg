@@ -1,0 +1,13 @@
+<!--
+  The Harbour Ledger — invented publication, original artwork drawn for this repository.
+  Not a real outlet and not a real trademark. See public/widget-logos/README.md.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 24" width="168" height="24" role="img" aria-label="The Harbour Ledger">
+  <title>The Harbour Ledger</title>
+  <g fill="#1a1d24">
+    <path d="M10 4.6a5.4 5.4 0 1 0 0 10.8 5.4 5.4 0 0 0 0-10.8zm0 2a3.4 3.4 0 1 1 0 6.8 3.4 3.4 0 0 1 0-6.8z"/>
+    <rect x="9.1" y="14.2" width="1.8" height="5.2" rx="0.9"/>
+    <rect x="4.6" y="18.4" width="10.8" height="1.8" rx="0.9"/>
+    <text x="26" y="17" font-family="Georgia, 'Times New Roman', serif" font-size="13.5" font-weight="600" letter-spacing="0.06em" textLength="136" lengthAdjust="spacingAndGlyphs">THE HARBOUR LEDGER</text>
+  </g>
+</svg>

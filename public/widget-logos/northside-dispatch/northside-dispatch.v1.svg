@@ -1,0 +1,11 @@
+<!--
+  Northside Dispatch — invented publication, original artwork drawn for this repository.
+  Not a real outlet and not a real trademark. See public/widget-logos/README.md.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 186 24" width="186" height="24" role="img" aria-label="Northside Dispatch">
+  <title>Northside Dispatch</title>
+  <g fill="#1a1d24">
+    <path d="M10 2.6 18 21 10 16.4 2 21z"/>
+    <text x="26" y="17" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" font-weight="600" letter-spacing="0.09em" textLength="154" lengthAdjust="spacingAndGlyphs">NORTHSIDE DISPATCH</text>
+  </g>
+</svg>
