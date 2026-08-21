@@ -52,7 +52,7 @@ const FAQS = [
   {
     question: "How long does setup take?",
     answer:
-      "Most teams are live in an afternoon. We connect your profiles, teach Lia how your brand sounds, and tune the escalation rules with you — not a project plan, a working session.",
+      "Most teams are live in minutes. We connect your profiles, teach Lia how your brand sounds, and tune the escalation rules with you — not a project plan, a working session.",
   },
   {
     question: "What does annual billing save?",
