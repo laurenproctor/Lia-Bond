@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   ChevronRight,
   Code2,
+  Megaphone,
   CreditCard,
   MessagesSquare,
   Newspaper,
@@ -40,6 +41,7 @@ const ENTITY_ICONS: Record<AuditEntityType, LucideIcon> = {
   reddit_community_posture: ShieldAlert,
   response_publication_attempt: Send,
   review_widget: Code2,
+  press_widget: Megaphone,
   organization_billing: CreditCard,
 };
 
@@ -69,6 +71,7 @@ const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
   // attention. The one act that does — regenerating the embed code — is
   // guarded by a confirmation where it happens, not by a colour here.
   review_widget: "neutral",
+  press_widget: "neutral",
   // Neutral by default, and deliberately so even for a failed payment. This
   // card is a history of what happened, not the place a billing problem gets
   // raised — that is the shell banner and the billing page, both of which say

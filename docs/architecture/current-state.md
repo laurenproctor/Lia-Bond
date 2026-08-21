@@ -47,7 +47,8 @@ recorded under "Decisions made integrating the branches".
 | `src/yelp/` | Yelp Places provider boundary (`YelpPlacesProvider`). All Yelp Fusion behaviour lives behind it, plus the deterministic mock. Deliberately not a `PlatformConnector` — the same judgement D78 made for news. |
 | `src/lib/monitoring/` | News orchestration: the relevance gate, the poll service, budget enforcement, implicit connection creation, query CRUD. |
 | `src/lib/yelp/` | Yelp Assisted orchestration: listing matching, connect/disconnect, the activity check, the scheduled sweep, manual capture and its deduplication contract, the assisted-posting destination resolver. |
-| `src/lib/widgets/` | The website review widget: eligibility, approved domains, the public id, the plan seam for attribution, the embedded document, and the loader script. The one part of the product that renders for an audience with no session. |
+| `src/lib/widgets/` | The two website widgets. The shared envelope sits at the top level — widget kinds, escaping and URL validation, the content policy, approved domains, the public id, the snippet, the loader, the plan seam for attribution — and the review widget's own eligibility, renderer, and service sit beside it. The one part of the product that renders for an audience with no session. |
+| `src/lib/widgets/press/` | The press widget's own half: eligibility, the render boundary, the document and its palettes, the publisher-logo registry, the sample, the preview resolver, and the service. Deliberately separate from the review widget's — the two share how a widget *travels*, never what it *shows*. |
 | `src/lib/integrations/` | OAuth state, credential handling, discovery, mapping, health. |
 | `src/lib/crypto/` | AES-256-GCM credential vault. Server-only. |
 | `src/lib/auth/` | Session resolution and the central permission matrix. |
@@ -94,10 +95,15 @@ nothing with it but the root layout's font.
 | `/integrations/yelp` | Yelp Assisted: capability table, connected listings, detected activity, manual capture, disconnect | repositories + Yelp Places API |
 | `/integrations/yelp/connect` | Listing search and confirmation for one location | repositories + Yelp Places API |
 | `/api/cron/yelp-listing-check` | Scheduled listing-check sweep across every tenant. **Built but not scheduled** — the Hobby plan's cron-job cap is already reached, so checks run from the interactive control until the account moves to Pro (`docs/integrations/yelp-assisted.md` §10) | repositories + Yelp Places API |
-| `/integrations/review-widget` | Website review widget: theme, review selection, approved domains, live preview, embed code, switch off, regenerate. Sidebar entry **Website widgets**, nested under `/integrations` — the only nav item beneath another, which is why `isNavItemActive` resolves the most specific match rather than any matching prefix | repositories |
+| `/integrations/website-widgets` | Choosing between the two widgets. Reads **no tenant data at all**: two live samples drawn by the two real renderers, two calls to action, and the capabilities both share. Sidebar entry **Website widgets** | — |
+| `/integrations/review-widget` | Website review widget: theme, review selection, approved domains, live preview, embed code, switch off, regenerate. Unchanged URL — the sidebar item claims it through `NavItem.alsoMatches` rather than moving it beneath the landing route | repositories |
+| `/integrations/press-widget` | Website press widget: theme, story count, all press or one monitoring query, approved domains, live preview, embed code, switch off, regenerate | repositories |
 | `/embed/review-widget.js` | The loader script every embed snippet points at. **Public, no session** — ES5, ~2 KB, origin baked in per deployment | — |
 | `/embed/review-widget/[publicId]` | The widget document a customer's website frames. **Public, no session** — one `SECURITY DEFINER` function is the entire anonymous surface (see Tenancy) | `review_widget_render` |
-| `/embed/review-widget/preview` | The same document against unsaved configuration. Session-gated on `review_widget.manage`; `frame-ancestors 'self'`, `no-store` | repositories |
+| `/embed/review-widget/preview` | The same document against unsaved configuration. Session-gated on `website_widget.manage`; `frame-ancestors 'self'`, `no-store` | repositories |
+| `/embed/press-widget.js` | The press loader. **Public, no session** — built by the same `buildLoaderScript` as the review one, so the origin check exists once | — |
+| `/embed/press-widget/[publicId]` | The press document a customer's website frames. **Public, no session** — one `SECURITY DEFINER` function is the entire anonymous surface. The only widget document that loads images, and `img-src` is `'self' data:` and never wider | `press_widget_render` |
+| `/embed/press-widget/preview` | The same document against unsaved configuration; `?sample=1` draws invented coverage with bundled logos and reads nothing | repositories |
 | `/sign-in` | Email and password sign-in. **Outside the app shell** — see D46. | Supabase Auth |
 | `/sign-up` | Creates an account **and** the organization it owns. Outside the app shell. | Supabase Auth + `provision_organization` |
 | `/invite/[token]` | Accept an invitation. Public — the invitee has no account yet. | `invitation_preview` / `accept_invitation` |
@@ -200,22 +206,27 @@ Five attributes spelled out four times is four chances for one of them to drift,
 and a missing `httpOnly` is a regression no test notices because the feature
 keeps working.
 
-The website review widget added a **third** deliberate exception, and it is a
-different shape from the two above: `ReviewWidgetRepository.render(publicId)` takes no
+The website widgets added the **third and fourth** deliberate exceptions, and
+they are a different shape from the two above:
+`ReviewWidgetRepository.render(publicId)` and
+`PressWidgetRepository.render(publicId)` take no
 scope at all. Its caller is a stranger's browser on a restaurant's website —
 there is no membership from which a scope could be constructed, and no session
 for `getOrganizationContext()` to read. `InvitationRepository.preview` is the
 existing precedent and carries the same exemption for the same reason.
 
 What replaces the scope is the **return type**. `ReviewWidgetRenderRow` holds
-widget configuration and six review fields, and nothing else: no status, no
+widget configuration and six review fields; `PressWidgetRenderRow` holds
+configuration and, per story, six story fields. Nothing else: no status, no
 sentiment, no risk level, no raw payload, no organization id. A caller cannot
 widen it, so the anonymous surface is bounded by the type rather than by care
 at the call site. Under Supabase the method is one `SECURITY DEFINER` function
-(`public.review_widget_render`) which `anon` may execute and which is the only
+(`public.review_widget_render` and `public.press_widget_render`) which `anon`
+may execute and which are the only
 thing `anon` may reach — the table itself grants `anon` nothing, and section 13
 of `supabase/tests/rls-verification.sql` proves a direct select returns zero
-rows while the function returns one. Full detail in `docs/review-widget.md`.
+rows while the function returns one. Full detail in `docs/review-widget.md`
+and `docs/press-widget.md`.
 
 The active organization is stored in the `lia_active_organization` cookie
 (`httpOnly`, `sameSite=lax`). The organization slug is deliberately **not** in the
@@ -563,6 +574,43 @@ could clear would not have been an implementation of the requirement.
 Full detail, including the eligibility table, the runbook, and what the feature
 deliberately does not build, is in `docs/review-widget.md`.
 
+### Website press widget
+
+The second outbound surface: one to three news stories for the organization,
+on its own website, from the same shape of snippet. Everything above holds
+identically — a string rather than a page, eligibility mirrored in SQL because
+the anonymous path cannot run TypeScript, `frame-ancestors` as the domain
+control, "Powered by Lia" always shown.
+
+Three things are its own.
+
+**It is organization-level, and a monitoring query is the only filter.** A
+review arrives bound to a location; a news article arrives bound to a
+*monitoring query* (`mentions.monitoring_query_id`, set once on first sight).
+A query may be organization-wide or location-scoped, and choosing a
+location-scoped one is how a per-restaurant press widget is expressed. There is
+no `location_id` column, because a second location filter would silently
+disagree with the first.
+
+**Its eligibility rules include two the review widget has no equivalent for.**
+`not_syndicated` — one wire story printed by four outlets is not four
+publications covering you, and in a three-item strip that difference is
+visible. `query_enabled` — a customer who switches a watch off has said "stop
+watching this", not "stop fetching". And it deliberately does **not** treat
+`responded`, `monitoring`, or `no_action_recommended` as evidence an article is
+gone: internal workflow state and public existence are different facts.
+
+**It loads images, and that is the whole of its extra security surface.**
+Publisher logos are bundled, versioned files Lia serves; the resolver returns a
+normalised domain rather than a path; a typed registry does the mapping; and
+`img-src 'self' data:` is the enforcement. No real publication has a bundled
+mark today, so production coverage renders the publisher's name as text — a
+complete rendering, and a story is never dropped for want of a picture.
+
+Tenancy is enforced by a composite foreign key on `(monitoring_query_id,
+organization_id)`, so another tenant's watch is unrepresentable rather than
+merely refused. Full detail in `docs/press-widget.md`.
+
 ## Technical constraints
 
 - Billing is a **projection**, never a source of truth. Every Stripe-derived
@@ -607,12 +655,19 @@ deliberately does not build, is in `docs/review-widget.md`.
 - OAuth tokens never reach a client component, a repository DTO, an audit event,
   a log line, or a redirect URL. `src/lib/integrations/credentials.ts` is the
   only module that decrypts one.
-- Nothing but widget configuration and six named review fields may cross into
-  the anonymous embed path. `ReviewWidgetRenderRow` is the boundary and the
-  guarantee is structural: a caller cannot widen the type, so no status,
-  sentiment, risk level, or raw payload can reach a public page whatever the
-  renderer does. `anon` holds no table grant — one `SECURITY DEFINER` function
-  is the whole surface.
+- Nothing but widget configuration and six named content fields may cross into
+  either anonymous embed path. `ReviewWidgetRenderRow` and
+  `PressWidgetRenderRow` are the boundaries and the guarantee is structural: a
+  caller cannot widen the type, so no status, sentiment, risk level, relevance
+  score, monitoring keyword, or raw payload can reach a public page whatever
+  the renderer does. `anon` holds no table grant on either — one
+  `SECURITY DEFINER` function per widget is the whole surface.
+- A publisher logo on a customer's page is always a file Lia serves. The
+  anonymous press resolver returns a normalised publisher *domain*, never a
+  URL and never markup; a typed registry maps that domain to a bundled asset;
+  and `img-src 'self' data:` means even a bug in the registry cannot become a
+  request to a publisher's server. No favicon service, no logo API, no
+  server-side fetch of a publisher-controlled URL, and no stored SVG markup.
 - No model provider message reaches a user, a log, or a stored row. Stricter
   than the provider rule for Google, and for a specific reason: a model error
   can echo the prompt, and the prompt contains a review and a reviewer's name.

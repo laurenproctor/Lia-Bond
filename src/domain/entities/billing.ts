@@ -70,7 +70,7 @@ export type OrganizationBilling = z.infer<typeof organizationBillingSchema>;
  * One Stripe event, and how far Lia got processing it.
  *
  * Carries no request body and no provider message by design — see the column
- * comments in `20260821000100_billing.sql`.
+ * comments in `20260821000400_billing.sql`.
  */
 export const stripeWebhookEventSchema = z.object({
   stripeEventId: z.string().min(1).max(255),

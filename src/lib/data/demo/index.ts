@@ -88,6 +88,7 @@ import {
   type DemoGenerationAttempt,
 } from "@/lib/data/demo/store";
 import { createMonitoringRepositories } from "@/lib/data/demo/monitoring";
+import { createPressWidgetRepository } from "@/lib/data/demo/press-widgets";
 import {
   createDemoBillingRepository,
   createDemoStripeWebhookEventRepository,
@@ -761,6 +762,7 @@ export function createDemoDataSource(): LiaDataSource {
     ...createMonitoringRepositories(),
     ...createYelpRepositories(),
     reviewWidgets: createReviewWidgetRepository(),
+    pressWidgets: createPressWidgetRepository(),
     billing: createDemoBillingRepository(),
     stripeWebhookEvents: createDemoStripeWebhookEventRepository(),
 
@@ -2341,6 +2343,12 @@ export function createDemoDataSource(): LiaDataSource {
         let rows = mentionsIn(scope).filter((mention) => {
           if (filter.locationId && mention.locationId !== filter.locationId) return false;
           if (filter.sourceTypes && !filter.sourceTypes.includes(mention.sourceType)) return false;
+          if (
+            filter.monitoringQueryId &&
+            mention.monitoringQueryId !== filter.monitoringQueryId
+          ) {
+            return false;
+          }
           if (filter.statuses && !filter.statuses.includes(mention.status)) return false;
           if (filter.sentiments && !filter.sentiments.includes(mention.sentiment)) return false;
           if (filter.riskLevels && !filter.riskLevels.includes(mention.riskLevel)) return false;

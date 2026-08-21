@@ -157,7 +157,7 @@ pay.
 
 ## 4. The schema
 
-Two tables. `20260821000100_billing.sql`, `…000200_billing_rls.sql`,
+Two tables. `20260821000400_billing.sql`, `…000200_billing_rls.sql`,
 `…000300_billing_functions.sql`, `…000400_billing_audit_vocabulary.sql`.
 
 ### `organization_billing`

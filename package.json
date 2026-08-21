@@ -27,9 +27,11 @@
     "db:verify-tenancy-expanded": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/expanded-phase-rehearsal.sql -f supabase/tests/tenancy-verification.sql",
     "db:preflight-tenancy": "node --experimental-strip-types --no-warnings --env-file=.env --import ./scripts/tsconfig-paths-hook.mjs scripts/tenancy-preflight.ts",
     "db:verify-review-widget": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/review-widget-verification.sql",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "db:verify-press-widget": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/press-widget-verification.sql",
+    "db:verify-website-widgets": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/review-widget-verification.sql -f supabase/tests/press-widget-verification.sql",
+    "db:verify-billing": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/billing-verification.sql",
     "stripe:catalog": "node --experimental-strip-types --no-warnings --env-file=.env --import ./scripts/tsconfig-paths-hook.mjs scripts/stripe-catalog.ts",
-    "db:verify-billing": "supabase db reset && psql \"$SUPABASE_DB_URL\" -v ON_ERROR_STOP=1 -f supabase/tests/rls-verification.sql -f supabase/tests/billing-verification.sql"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

@@ -22,7 +22,7 @@ import type { QuantityChangePreview } from "@/lib/billing/gateway";
  * the only check: the service re-derives the organization from the verified
  * scope, resolves the Stripe customer from the billing row rather than from
  * anything a caller sent, and the repositories are organization-scoped by
- * type. Underneath all of that, `20260821000200` grants no session any write
+ * type. Underneath all of that, `20260821000500` grants no session any write
  * on `organization_billing` at all.
  *
  * `billing.manage` is marked as **not** requiring paid access, so these four

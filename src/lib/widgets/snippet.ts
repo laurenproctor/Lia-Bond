@@ -1,8 +1,12 @@
+import { WIDGET_KINDS, type WidgetKind } from "@/lib/widgets/kinds";
+
 /**
  * The embed snippet, and the script it loads.
  *
  * Both are built from one origin so a self-hosted or preview deployment
- * generates a snippet that points at itself rather than at production.
+ * generates a snippet that points at itself rather than at production, and
+ * both are built from `WIDGET_KINDS` so the review widget and the press widget
+ * cannot drift into two differently shaped snippets.
  *
  * The snippet's shape is fixed by where it has to survive: Squarespace,
  * Wix, WordPress, Shopify, and whatever a restaurant's cousin built in 2014.
@@ -19,15 +23,17 @@
  *   time, and it re-scans on mutation for exactly this reason.
  */
 
-const SCRIPT_PATH = "/embed/review-widget.js";
-
 /** Where one widget's frame lives. Also the URL the in-app preview frames. */
-export function widgetFrameUrl(origin: string, publicId: string): string {
-  return `${trimOrigin(origin)}/embed/review-widget/${encodeURIComponent(publicId)}`;
+export function widgetFrameUrl(
+  origin: string,
+  publicId: string,
+  kind: WidgetKind,
+): string {
+  return `${trimOrigin(origin)}${WIDGET_KINDS[kind].framePath}/${encodeURIComponent(publicId)}`;
 }
 
-export function widgetScriptUrl(origin: string): string {
-  return `${trimOrigin(origin)}${SCRIPT_PATH}`;
+export function widgetScriptUrl(origin: string, kind: WidgetKind): string {
+  return `${trimOrigin(origin)}${WIDGET_KINDS[kind].scriptPath}`;
 }
 
 /**
@@ -37,11 +43,21 @@ export function widgetScriptUrl(origin: string): string {
  * into a page's source and read by whoever maintains that site next; a wall of
  * explanatory comments is noise there, and the explanation belongs on the
  * screen the customer copies it from.
+ *
+ * A page may carry both widgets. The two snippets share nothing but their
+ * shape — different attribute, different script, different id prefix — so
+ * pasting one under the other works, and each loader ignores the other's
+ * mount points.
  */
-export function buildEmbedSnippet(origin: string, publicId: string): string {
+export function buildEmbedSnippet(
+  origin: string,
+  publicId: string,
+  kind: WidgetKind,
+): string {
+  const config = WIDGET_KINDS[kind];
   return [
-    `<div data-lia-review-widget="${publicId}"></div>`,
-    `<script async src="${widgetScriptUrl(origin)}"></script>`,
+    `<div ${config.attribute}="${publicId}"></div>`,
+    `<script async src="${widgetScriptUrl(origin, kind)}"></script>`,
   ].join("\n");
 }
 

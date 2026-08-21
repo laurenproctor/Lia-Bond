@@ -40,7 +40,7 @@ export const PERMISSIONS = [
   "integration.disconnect",
   "monitoring.manage_queries",
   "monitoring.poll_now",
-  "review_widget.manage",
+  "website_widget.manage",
   "billing.manage",
 ] as const;
 
@@ -259,29 +259,46 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   "monitoring.manage_queries": ["owner", "admin", "communications_lead"],
   "monitoring.poll_now": ["owner", "admin", "communications_lead"],
   // Configuring what Lia publishes on the customer's own website: the theme,
-  // which review is shown, the approved domains, and whether the embed
-  // resolves at all.
+  // which review or which coverage is shown, the approved domains, and whether
+  // either embed resolves at all.
+  //
+  // **One permission for both website widgets**, and renamed from
+  // `review_widget.manage` when the press widget arrived. The alternative —
+  // `review_widget.manage` plus `press_widget.manage` — would have been two
+  // names for one authority: the same three roles, the same screens, the same
+  // approved-domain list, and the same underlying question, which is whether
+  // this person may decide what the company publishes on its own site. Two
+  // permissions with identical role lists are not a finer-grained control;
+  // they are a place for the two lists to drift apart.
+  //
+  // The rename was made atomically rather than left as an alias. Nothing in
+  // SQL names it — the RLS policies restate the *roles* with
+  // `has_organization_role`, which is what Postgres can express — so the
+  // change is confined to this table, four call sites, and the tests that pin
+  // the role list. An alias would have left `review_widget.manage` gating the
+  // press widget, which reads as a copy-paste error to the next person and
+  // would be one.
   //
   // The same three roles as `brand_voice.update` and `automation_rule.manage`,
-  // and it belongs with them rather than with the integration permissions:
-  // all three decide what the product says without a person in the loop. An
+  // and it belongs with them rather than with the integration permissions: all
+  // three decide what the product says without a person in the loop. An
   // integration permission would have been the wrong shelf — there is no
   // external account here, nothing to authorise, and nothing to disconnect.
   //
-  // Location managers are absent, and this is the one row in this table where
-  // that needs an argument, because a widget carries a location and
-  // `canForLocation` could scope them to it. Two reasons it does not. The
-  // policies in 20260820000300 restate this list with
-  // `has_organization_role`, which cannot express "and only for their own
-  // locations" — the scoping would live in application code alone, and for a
-  // surface the public can see this table's posture is that application code
-  // is not the last line. And a group's marketing site is one artefact even
-  // when the review on it is one restaurant's. If that becomes wrong, the fix
-  // is a policy joining `locations` on `manager_user_id`, not a wider list
-  // here.
+  // Location managers are absent. For the review widget that needs an
+  // argument, because a widget carries a location and `canForLocation` could
+  // scope them to it; two reasons it does not. The policies in 20260820000300
+  // and 20260821000200 restate this list with `has_organization_role`, which
+  // cannot express "and only for their own locations" — the scoping would live
+  // in application code alone, and for a surface the public can see this
+  // table's posture is that application code is not the last line. And a
+  // group's marketing site is one artefact even when the review on it is one
+  // restaurant's. For the press widget the argument is easier still: it
+  // carries no location at all, only a monitoring query, so there is nothing
+  // to scope them to even in principle.
   //
   // Analysts and viewers are absent for the ordinary reason: they read.
-  "review_widget.manage": ["owner", "admin", "communications_lead"],
+  "website_widget.manage": ["owner", "admin", "communications_lead"],
   // Starting Checkout, opening Stripe's hosted portal, and changing purchased
   // location capacity.
   //
@@ -311,7 +328,7 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   //
   // Not restated in row-level security, and that is deliberate rather than an
   // omission: `organization_billing` grants no session any write at all
-  // (20260821000200), so there is no policy for this list to narrow. The
+  // (20260821000500), so there is no policy for this list to narrow. The
   // database is stricter than this row, not looser.
   "billing.manage": ["owner", "admin"],
 };
@@ -375,7 +392,6 @@ export function explainDenial(
   }
   return "You can only act on records for the locations you manage.";
 }
-
 /* -------------------------------------------------------------------------- */
 /* Billing entitlement                                                         */
 /* -------------------------------------------------------------------------- */
@@ -444,7 +460,7 @@ export const REQUIRES_PAID_ACCESS: Record<Permission, boolean> = {
   "integration.disconnect": false,
   "monitoring.manage_queries": true,
   "monitoring.poll_now": true,
-  "review_widget.manage": true,
+  "website_widget.manage": true,
   // **False**, self-evidently: an organization that cannot reach its own
   // billing cannot fix the thing that is blocking it. `resolveEntitlement`
   // states the same guarantee structurally with `billingRoutesAvailable`.

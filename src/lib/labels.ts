@@ -344,11 +344,20 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   // Website widget. "Embed code" rather than "public id" throughout: the
   // customer's word for the thing they pasted into their site is the code, and
   // the trail is read by them at least as often as by us.
-  "review_widget.created": "Website widget created",
-  "review_widget.updated": "Website widget updated",
-  "review_widget.disabled": "Website widget switched off",
-  "review_widget.enabled": "Website widget switched on",
-  "review_widget.embed_id_rotated": "Website widget embed code regenerated",
+  // Named per widget rather than "Website widget", now that there are two of
+  // them. An activity feed saying "Website widget switched off" when a group
+  // runs both is the one line somebody would have to open the entity to
+  // understand.
+  "review_widget.created": "Review widget created",
+  "review_widget.updated": "Review widget updated",
+  "review_widget.disabled": "Review widget switched off",
+  "review_widget.enabled": "Review widget switched on",
+  "review_widget.embed_id_rotated": "Review widget embed code regenerated",
+  "press_widget.created": "Press widget created",
+  "press_widget.updated": "Press widget updated",
+  "press_widget.disabled": "Press widget switched off",
+  "press_widget.enabled": "Press widget switched on",
+  "press_widget.embed_id_rotated": "Press widget embed code regenerated",
   "billing.checkout_started": "Checkout started",
   "billing.trial_started": "Trial started",
   "billing.trial_canceled": "Trial cancelled",

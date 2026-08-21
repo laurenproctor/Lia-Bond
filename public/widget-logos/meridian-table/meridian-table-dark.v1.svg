@@ -1,0 +1,12 @@
+<!--
+  Meridian Table — invented publication, original artwork drawn for this repository.
+  Not a real outlet and not a real trademark. See public/widget-logos/README.md.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 148 24" width="148" height="24" role="img" aria-label="Meridian Table">
+  <title>Meridian Table</title>
+  <g fill="#e9ebef">
+    <path d="M10 3.4a8.6 8.6 0 1 0 0 17.2 8.6 8.6 0 0 0 0-17.2zm0 1.8a6.8 6.8 0 0 1 0 13.6 6.8 6.8 0 0 1 0-13.6z"/>
+    <path d="M10 5.2c1.6 1.9 2.5 4.3 2.5 6.8s-.9 4.9-2.5 6.8c-1.6-1.9-2.5-4.3-2.5-6.8s.9-4.9 2.5-6.8zm0 3.1c-.5 1.1-.8 2.4-.8 3.7s.3 2.6.8 3.7c.5-1.1.8-2.4.8-3.7s-.3-2.6-.8-3.7z"/>
+    <text x="26" y="17" font-family="Georgia, 'Times New Roman', serif" font-size="13.5" font-weight="600" letter-spacing="0.07em" textLength="116" lengthAdjust="spacingAndGlyphs">MERIDIAN TABLE</text>
+  </g>
+</svg>

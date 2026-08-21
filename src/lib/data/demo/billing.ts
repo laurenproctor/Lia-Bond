@@ -35,7 +35,7 @@ import { REFERENCE_NOW } from "@/lib/seed/clock";
  * adapter has no Postgres to lean on, and a fake that permitted what the real
  * one refuses would make every test passing against it worthless. Capacity is
  * the one exception, and it needs none: with nothing purchased, the trigger in
- * `20260821000300` fails open too.
+ * `20260821000600` fails open too.
  */
 
 function nowIso(): string {

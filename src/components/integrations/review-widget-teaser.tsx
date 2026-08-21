@@ -81,7 +81,10 @@ function TeaserFrame({
   label: string;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef, 260);
+  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef, {
+    kind: "review",
+    initialHeight: 260,
+  });
 
   return (
     <figure className="m-0">

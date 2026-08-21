@@ -24,12 +24,14 @@ import {
   platformConnectionSchema,
   platformProfileSchema,
   platformSyncRunSchema,
+  pressWidgetSchema,
   responseDraftSchema,
   reviewWidgetSchema,
   userSchema,
   yelpActivityOccurrenceSchema,
   yelpListingSnapshotSchema,
   DEFAULT_MINIMUM_RATING,
+  DEFAULT_PRESS_WIDGET_ITEMS,
   type AnalysisRun,
   type Approval,
   type AuditEvent,
@@ -53,6 +55,7 @@ import {
   type PlatformConnection,
   type PlatformProfile,
   type PlatformSyncRun,
+  type PressWidget,
   type ResponseDraft,
   type ReviewWidget,
   type User,
@@ -969,6 +972,37 @@ export function toReviewWidget(row: Row): ReviewWidget {
       updatedAt: iso(row.updated_at),
     },
     "review widget",
+  );
+}
+
+/**
+ * One press widget row.
+ *
+ * `item_limit` is a plain `integer`, so unlike `minimum_rating` it needs no
+ * `numeric`-as-string handling — noted because the review widget's mapper two
+ * functions up does need it, and the asymmetry looks like an omission until
+ * you check the column type.
+ */
+export function toPressWidget(row: Row): PressWidget {
+  return parseOrThrow(
+    pressWidgetSchema,
+    {
+      id: row.id,
+      organizationId: row.organization_id,
+      publicId: row.public_id,
+      status: row.status,
+      layout: row.layout,
+      theme: row.theme,
+      monitoringQueryId: row.monitoring_query_id ?? null,
+      itemLimit: Number(row.item_limit ?? DEFAULT_PRESS_WIDGET_ITEMS),
+      allowedDomains: stringArray(row.allowed_domains),
+      attributionSuppressed: row.attribution_suppressed ?? false,
+      publicIdRotatedAt: isoOrNull(row.public_id_rotated_at),
+      createdByUserId: row.created_by_user_id ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "press widget",
   );
 }
 

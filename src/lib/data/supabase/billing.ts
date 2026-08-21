@@ -24,10 +24,10 @@ import type {
  * The Supabase adapter for billing.
  *
  * Almost every method here is an RPC rather than a table write, and that is
- * the design rather than a quirk. `20260821000200` revokes every write grant
+ * the design rather than a quirk. `20260821000500` revokes every write grant
  * on both tables, so a session cannot write them at all and this adapter has
  * nothing to write with. What it calls instead are the `SECURITY DEFINER`
- * functions in `20260821000300`, each of which does the whole job — projection,
+ * functions in `20260821000600`, each of which does the whole job — projection,
  * audit, and the originating event's terminal status — in one transaction.
  *
  * The Supabase client cannot express a multi-statement transaction, and a

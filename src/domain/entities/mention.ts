@@ -588,6 +588,20 @@ export const mentionFilterSchema = z.object({
   locationId: uuidSchema.optional(),
   platform: platformSchema.optional(),
   sourceTypes: z.array(mentionSourceTypeSchema).optional(),
+  /**
+   * The monitoring query that first found the mention.
+   *
+   * Added for the press widget's preview, which has to answer "what would this
+   * widget show if it were filtered to this watch" against unsaved
+   * configuration. Filtering in TypeScript after an unfiltered fetch would
+   * make the preview disagree with the live widget whenever the chosen query's
+   * coverage sat outside the fetched page — which is precisely the drift a
+   * preview exists to rule out.
+   *
+   * Only `news_article` mentions carry one, so this is in practice always
+   * paired with `sourceTypes`.
+   */
+  monitoringQueryId: uuidSchema.optional(),
   statuses: z.array(mentionStatusSchema).optional(),
   sentiments: z.array(sentimentSchema).optional(),
   riskLevels: z.array(riskLevelSchema).optional(),

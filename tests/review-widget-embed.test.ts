@@ -25,15 +25,15 @@ import { buildEmbedSnippet, widgetFrameUrl } from "@/lib/widgets/snippet";
 
 describe("public ids", () => {
   it("issues a shaped, prefixed id", () => {
-    const id = generateWidgetPublicId();
+    const id = generateWidgetPublicId("review");
     expect(id.startsWith("rw_")).toBe(true);
-    expect(isWidgetPublicIdShaped(id)).toBe(true);
+    expect(isWidgetPublicIdShaped(id, "review")).toBe(true);
   });
 
   it("does not repeat", () => {
     // Not a statistical claim — 120 bits makes that pointless to assert — but
     // it does catch a generator accidentally wired to a constant.
-    const ids = new Set(Array.from({ length: 200 }, () => generateWidgetPublicId()));
+    const ids = new Set(Array.from({ length: 200 }, () => generateWidgetPublicId("review")));
     expect(ids.size).toBe(200);
   });
 
@@ -47,7 +47,7 @@ describe("public ids", () => {
       "rw_" + "a".repeat(21),
       "RW_aaaaaaaaaaaaaaaaaaaa",
     ]) {
-      expect(isWidgetPublicIdShaped(value), value).toBe(false);
+      expect(isWidgetPublicIdShaped(value, "review"), value).toBe(false);
     }
   });
 
@@ -56,11 +56,11 @@ describe("public ids", () => {
     // cannot import anything, which is exactly the kind of duplication that
     // drifts silently. A mismatch would mean ids Lia issues that the script on
     // the customer's page refuses to mount.
-    const script = buildLoaderScript("https://lia.bond");
+    const script = buildLoaderScript("https://lia.bond", "review");
     const inScript = /\/\^rw_\[A-Za-z0-9_-\]\{20\}\$\//.test(script);
 
     expect(inScript).toBe(true);
-    expect(loaderAcceptsPublicId(generateWidgetPublicId())).toBe(true);
+    expect(loaderAcceptsPublicId(generateWidgetPublicId("review"), "review")).toBe(true);
   });
 });
 
@@ -70,7 +70,7 @@ describe("public ids", () => {
 
 describe("the embed snippet", () => {
   it("is a mount point followed by an async script", () => {
-    const snippet = buildEmbedSnippet("https://lia.bond", "rw_abcdefghijklmnopqrst");
+    const snippet = buildEmbedSnippet("https://lia.bond", "rw_abcdefghijklmnopqrst", "review");
 
     expect(snippet).toBe(
       '<div data-lia-review-widget="rw_abcdefghijklmnopqrst"></div>\n' +
@@ -81,12 +81,12 @@ describe("the embed snippet", () => {
   it("points at the deployment it was generated on", () => {
     // A preview deployment must not hand somebody a snippet that loads
     // production's script.
-    const preview = buildEmbedSnippet("https://lia-git-branch.vercel.app", "rw_a".padEnd(23, "b"));
+    const preview = buildEmbedSnippet("https://lia-git-branch.vercel.app", "rw_a".padEnd(23, "b"), "review");
     expect(preview).toContain("https://lia-git-branch.vercel.app/embed/review-widget.js");
   });
 
   it("tolerates a trailing slash on the configured origin", () => {
-    expect(widgetFrameUrl("https://lia.bond/", "rw_abcdefghijklmnopqrst")).toBe(
+    expect(widgetFrameUrl("https://lia.bond/", "rw_abcdefghijklmnopqrst", "review")).toBe(
       "https://lia.bond/embed/review-widget/rw_abcdefghijklmnopqrst",
     );
   });
@@ -199,7 +199,7 @@ describe("the frame-ancestors directive", () => {
 /* -------------------------------------------------------------------------- */
 
 describe("the loader script", () => {
-  const script = buildLoaderScript("https://lia.bond");
+  const script = buildLoaderScript("https://lia.bond", "review");
 
   it("checks the origin of every message it receives", () => {
     // The security-relevant line in the file: without it, any frame on the
@@ -233,7 +233,7 @@ describe("the loader script", () => {
   });
 
   it("bakes in the origin it was generated for", () => {
-    expect(buildLoaderScript("https://preview.example.com/")).toContain(
+    expect(buildLoaderScript("https://preview.example.com/", "review")).toContain(
       '"https://preview.example.com"',
     );
   });
