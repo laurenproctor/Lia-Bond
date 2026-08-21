@@ -253,7 +253,7 @@ export function ContactSection() {
       <div className="relative mx-auto w-full max-w-[1200px] px-[clamp(24px,6vw,106px)] py-[clamp(64px,8vw,110px)]">
         <div className="pointer-events-none absolute -top-7 left-[clamp(8px,4vw,54px)] z-10 hidden lg:block">
           <SpeechBubble
-            quote="Live in an afternoon."
+            quote="Live in minutes."
             attribution="New customer"
             tone="amber"
             className="w-[186px] -rotate-[5deg]"
