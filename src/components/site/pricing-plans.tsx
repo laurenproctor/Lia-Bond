@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import { PricingBandPicker } from "@/components/site/pricing-band-picker";
 import { PricingTier } from "@/components/site/pricing-tier";
 import type { BillingPeriod } from "@/lib/site/content/pricing";
 import {
@@ -90,8 +91,8 @@ export function PricingPlans() {
           aria-live="polite"
         >
           {annual
-            ? `Billed once a year at ${ANNUAL_MONTHS_BILLED} months' rate — ${ANNUAL_DISCOUNT_LABEL}, ${ANNUAL_DISCOUNT_PERCENT}% off.`
-            : `Billed monthly. Pay for the year up front and you are charged for ${ANNUAL_MONTHS_BILLED} months, not 12.`}
+            ? `Prices below are what a year works out at per month. You are charged for ${ANNUAL_MONTHS_BILLED} months, once — ${ANNUAL_DISCOUNT_LABEL}, ${ANNUAL_DISCOUNT_PERCENT}% off.`
+            : `Billed monthly, cancel any time. Pay for the year up front instead and you are charged for ${ANNUAL_MONTHS_BILLED} months, not 12.`}
         </p>
       </div>
 
@@ -104,8 +105,21 @@ export function PricingPlans() {
             price={plan.price(period)}
             priceNote={plan.priceNote(period)}
             savingNote={plan.savingNote(period)}
+            billedNote={plan.billedNote(period)}
+            // Only on the monthly face: on the annual one the saving is
+            // already taken, and a control that switches to where you are is
+            // a dead end wearing a button's clothes.
+            onSavingNoteClick={annual ? undefined : () => setPeriod("annual")}
             ctaLabel={plan.ctaLabel}
             ctaHref={plan.ctaHref}
+            // The group card prices itself: a per-location rate cannot answer
+            // "what would this cost us", so that card swaps its fixed headline
+            // for a band picker and shows the range for the size chosen.
+            priceSlot={
+              plan.bandPicker ? (
+                <PricingBandPicker period={period} featured={plan.featured} />
+              ) : null
+            }
             features={plan.features}
             featured={plan.featured}
           />

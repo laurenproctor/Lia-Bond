@@ -229,6 +229,127 @@ export function formatLocationChoice(locations: number): string {
   return locations === 1 ? "1 location" : `${locations} locations`;
 }
 
+/* -------------------------------------------------------------------------- */
+/* What annual billing works out at per month                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A year's annual charge, divided back over the twelve months it covers.
+ *
+ * This is the figure the annual card leads with, and it is the honest way to
+ * compare the two: $590 looks like more than $59 until you notice one buys a
+ * month and the other buys a year. Dividing puts them in the same unit.
+ *
+ * Rarely a whole number — ten twelfths of $59 is $49.17 — so `formatMoney`
+ * keeps the cents rather than rounding. A rounded $49 would understate the
+ * price by two dollars a year per location, which is exactly the kind of
+ * small dishonesty a pricing page cannot afford.
+ */
+export function effectiveMonthly(monthly: number): number {
+  return (monthly * ANNUAL_MONTHS_BILLED) / MONTHS_IN_YEAR;
+}
+
+/** `$59`, or `$49.17` — cents only where the arithmetic leaves them. */
+export function formatMoney(amount: number): string {
+  const exact = Number.isInteger(amount);
+  return `$${amount.toLocaleString("en-US", {
+    minimumFractionDigits: exact ? 0 : 2,
+    maximumFractionDigits: exact ? 0 : 2,
+  })}`;
+}
+
+/** What a location costs a month on this period — annual, spread back out. */
+export function formatPerLocationMonthly(
+  monthly: number,
+  period: BillingPeriod,
+): string {
+  return period === "annual"
+    ? formatMoney(effectiveMonthly(monthly))
+    : formatMoney(monthly);
+}
+
+/* -------------------------------------------------------------------------- */
+/* What a band costs                                                           */
+/* -------------------------------------------------------------------------- */
+
+/** The cheapest and dearest bill a group sitting in this band can have. */
+export interface BandCostRange {
+  /** A group of exactly `band.from` locations. */
+  min: number;
+  /** A group of exactly `band.to` locations. */
+  max: number;
+}
+
+/**
+ * What a group whose size falls in this band pays each month.
+ *
+ * A range rather than a figure, and that is a property of graduated pricing
+ * rather than vagueness: everyone in "locations 11–25" pays $44 for each
+ * location in that band, but an eleven-location group and a twenty-five
+ * location group are buying very different numbers of them. Quoting either end
+ * alone would be wrong for everybody at the other.
+ *
+ * `null` for the quoted band, which has no top and therefore no maximum.
+ */
+export function bandCostRange(band: PricingBand): BandCostRange | null {
+  if (band.monthly === null || band.to === null) return null;
+
+  const min = monthlyTotal(band.from);
+  const max = monthlyTotal(band.to);
+  if (min === null || max === null) return null;
+
+  return { min, max };
+}
+
+/**
+ * `$108 – $500`, or `$59` where a band holds exactly one group size.
+ *
+ * The single-location band is a range of one, and rendering it as "$59 – $59"
+ * would read as a price that moves when it does not.
+ */
+export function formatBandCostRange(
+  band: PricingBand,
+  period: BillingPeriod,
+): string {
+  const range = bandCostRange(band);
+  if (range === null) return "Custom";
+
+  const months = MONTHS_CHARGED[period];
+  const min = formatDollars(range.min * months);
+  if (range.min === range.max) return min;
+
+  // An en dash with hair spaces, not a hyphen: these are two figures with a
+  // span between them, and a hyphen between "$108" and "$500" reads as one
+  // hyphenated token at small sizes.
+  return `${min} – ${formatDollars(range.max * months)}`;
+}
+
+/** How many locations a band covers, for the line under the range. */
+export function formatBandSize(band: PricingBand): string {
+  if (band.to === null) return `more than ${LISTED_LOCATION_LIMIT} locations`;
+  if (band.from === band.to) {
+    return band.from === 1 ? "one location" : `${band.from} locations`;
+  }
+  return `${band.from}–${band.to} locations`;
+}
+
+/**
+ * The rate every location inside the band is charged at, spelled out.
+ *
+ * This is the number the range is built from, and showing it beside the range
+ * is what keeps the range from looking arbitrary.
+ */
+export function formatBandRateNote(
+  band: PricingBand,
+  period: BillingPeriod,
+): string {
+  if (band.monthly === null) {
+    return `Quoted to your portfolio above ${LISTED_LOCATION_LIMIT} locations.`;
+  }
+
+  return `${formatRate(band.monthly, period)} per ${PERIOD_UNIT[period]} for each location in this band.`;
+}
+
 /**
  * The three cards above the rate table.
  *
@@ -244,11 +365,24 @@ export interface PricingPlan {
   price: (period: BillingPeriod) => string;
   /** The line under it, naming the unit the figure is quoted in. */
   priceNote: (period: BillingPeriod) => string;
+  /**
+   * What is actually charged, and when — the annual total on the annual face,
+   * `null` on the monthly one where the headline figure already is the charge.
+   * The headline is a per-month figure on both faces so the two are
+   * comparable, which makes this line the one that says what leaves the bank.
+   */
+  billedNote: (period: BillingPeriod) => string | null;
   /** The annual discount in dollars, or `null` where the price is quoted. */
   savingNote: (period: BillingPeriod) => string | null;
   ctaLabel: string;
   ctaHref: string;
   featured?: boolean;
+  /**
+   * Whether this card offers the band picker. One card does — the group card,
+   * where "how much would this actually cost us" is the question the reader
+   * arrives with and the flat per-location rate above cannot answer.
+   */
+  bandPicker?: boolean;
   features: readonly string[];
 }
 
@@ -261,22 +395,25 @@ export interface PricingPlan {
 function savingNoteFor(monthly: number) {
   return (period: BillingPeriod): string => {
     const saved = formatDollars(annualSaving(monthly));
+    // The monthly phrasing is the label on a button that takes the offer, so
+    // it stops at the offer itself: the button's own accessible name supplies
+    // the verb, and "on annual billing" there would say annual twice.
     return period === "annual"
       ? `You save ${saved} a year`
-      : `Save ${saved} a year on annual billing`;
+      : `Save ${saved} a year`;
   };
 }
 
 export const PRICING_PLANS: readonly PricingPlan[] = [
   {
     name: "Single location",
-    blurb: "For independent hotels, restaurants, and clinics.",
-    price: (period) => formatRate(FIRST_LOCATION_MONTHLY, period),
-    priceNote: (period) =>
-      `per ${PERIOD_UNIT[period]} · ${formatRate(
-        FIRST_LOCATION_MONTHLY,
-        otherPeriod(period),
-      )} a ${PERIOD_UNIT[otherPeriod(period)]}`,
+    blurb: "For one hotel, restaurant, or clinic where every review counts.",
+    price: (period) => formatPerLocationMonthly(FIRST_LOCATION_MONTHLY, period),
+    priceNote: () => "per location, per month",
+    billedNote: (period) =>
+      period === "annual"
+        ? `${formatRate(FIRST_LOCATION_MONTHLY, "annual")} per location, billed once a year`
+        : null,
     savingNote: savingNoteFor(FIRST_LOCATION_MONTHLY),
     ctaLabel: "Get started",
     ctaHref: "/sign-up",
@@ -289,19 +426,25 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
   },
   {
     name: "Growth",
-    blurb: "For multi-location brands and groups.",
-    price: (period) => formatRate(SECOND_LOCATION_MONTHLY, period),
+    blurb: "For groups where every location has its own rating to defend.",
+    price: (period) =>
+      formatPerLocationMonthly(SECOND_LOCATION_MONTHLY, period),
     priceNote: (period) =>
-      `per ${PERIOD_UNIT[period]} for each location after the first, falling to ${formatRate(
+      `per location, per month, falling to ${formatPerLocationMonthly(
         LOWEST_LISTED_MONTHLY,
         period,
       )}`,
+    billedNote: (period) =>
+      period === "annual"
+        ? `${formatRate(SECOND_LOCATION_MONTHLY, "annual")} per location, billed once a year`
+        : null,
     // Per location, like the price above it: the group's own saving depends on
     // how many locations it has, and the estimator below answers that.
     savingNote: savingNoteFor(SECOND_LOCATION_MONTHLY),
     ctaLabel: "Get started",
     ctaHref: "/sign-up",
     featured: true,
+    bandPicker: true,
     features: [
       "Everything in single location",
       "All review platforms connected",
@@ -312,11 +455,13 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
   },
   {
     name: "Brand",
-    blurb: "For agencies and large multi-brand groups.",
+    blurb: "For agencies and portfolios that need it shaped around them.",
     // Quoted either way, so the toggle has nothing to switch here.
     price: () => "Custom",
     priceNote: () =>
       `beyond ${LISTED_LOCATION_LIMIT} locations, quoted to your portfolio`,
+    // Nothing is charged on a schedule that has not been agreed yet.
+    billedNote: () => null,
     // No listed rate to take two months off, so no dollar figure is invented.
     savingNote: () => null,
     ctaLabel: "Talk to us",

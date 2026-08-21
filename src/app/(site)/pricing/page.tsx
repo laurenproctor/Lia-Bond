@@ -20,7 +20,7 @@ import {
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Per location, and the rate falls with every band you cross. From $59 for one location down to $34 each at scale — pay annually and two months are free.",
+    "One price per location, and it falls as the group grows — $59 for your first, $34 each at scale. Pay for the year up front and two months are free.",
 };
 
 /**
@@ -37,12 +37,12 @@ const FAQS = [
   {
     question: "How does per-location pricing work?",
     answer:
-      "Each location is priced at the band it falls into, the way tax brackets work. Adding an eleventh location does not reprice the first ten — it is charged at the lower band, and so is every location after it.",
+      "Each location is priced at the band it falls into, the way tax brackets work. Your eleventh location does not reprice the first ten — it is charged at the lower band, and so is every location after it. Growing never costs you the rate you already have.",
   },
   {
     question: "Does Lia post replies automatically?",
     answer:
-      "No. Lia drafts responses, but nothing goes public until a person approves it. Sensitive reviews are always held for review first.",
+      "No, and that is deliberate. Lia writes the draft and does the waiting; a person on your team decides what goes public. Anything sensitive is held back and routed to a named person rather than queued with the rest.",
   },
   {
     question: "Which platforms do you support?",
@@ -52,16 +52,16 @@ const FAQS = [
   {
     question: "How long does setup take?",
     answer:
-      "Most teams are live in an afternoon. We connect your profiles, import your brand voice, and tune escalation rules with you.",
+      "Most teams are live in an afternoon. We connect your profiles, teach Lia how your brand sounds, and tune the escalation rules with you — not a project plan, a working session.",
   },
   {
     question: "What does annual billing save?",
-    answer: `Paying for the year up front is charged at ${ANNUAL_MONTHS_BILLED} months rather than 12 — ${ANNUAL_DISCOUNT_LABEL}, about ${ANNUAL_DISCOUNT_PERCENT}% off, at every band. The saving applies to every location you run, so it grows with the group.`,
+    answer: `A year costs ${ANNUAL_MONTHS_BILLED} months rather than 12 — ${ANNUAL_DISCOUNT_LABEL}, about ${ANNUAL_DISCOUNT_PERCENT}% off, at every band. It applies to every location you run, so the bigger the group the more it comes to: a single site keeps two figures a year, a twelve-location group keeps four.`,
   },
   {
     question: "Is there a contract?",
     answer:
-      "No long commitment. Choose monthly billing and cancel any time without penalty; choose annual and you are committing to the year you have paid for, which is where the discount comes from.",
+      "Monthly billing has no commitment at all — cancel any time, no penalty and no exit conversation. Annual asks for the year you have paid for, which is exactly where the two free months come from.",
   },
 ] as const;
 
@@ -88,32 +88,34 @@ export default function PricingPage() {
 
         <Eyebrow>Pricing</Eyebrow>
         <PageHeading className="mb-6 max-w-[560px]">
-          Pricing that fits how you run.
+          The more locations you run, the less each one costs.
         </PageHeading>
         <Lede className="max-w-[560px]">
-          Per location, monthly or annual, no long contracts. The rate falls
-          with every band you cross, you only pay the lower rate on the
-          locations that reach it, and paying for the year up front is{" "}
-          {ANNUAL_DISCOUNT_LABEL}.
+          Your first location is $59 a month. Every one after it costs less than
+          the last, you keep the lower rate the moment you reach it, and paying
+          for the year up front is {ANNUAL_DISCOUNT_LABEL}. No long contract
+          either way.
         </Lede>
       </header>
 
       <div className="mx-auto w-full max-w-[1200px] px-[clamp(24px,6vw,106px)] pt-[clamp(20px,3vw,32px)] pb-[clamp(40px,5vw,56px)]">
         <PricingPlans />
         <p className="mt-6.5 text-center text-[13.5px] text-site-muted">
-          Launch pricing, locked in for your first year. Cancel anytime.
+          Launch pricing, locked in for your first year. Every plan includes
+          every platform — nothing here is an add-on. Cancel anytime.
         </p>
       </div>
 
       <Section tinted>
         <SectionHeading className="mb-3 text-center">
-          What each location costs.
+          Every rate, in one table.
         </SectionHeading>
         <p className="mx-auto mb-[clamp(28px,4vw,44px)] max-w-[620px] text-center text-[15px] leading-[1.6] text-site-body">
-          Locations are priced in bands. Every location is charged at the rate
-          of the band it lands in, so the price per location drops as the group
-          grows — and the annual rate is {ANNUAL_MONTHS_BILLED} months of it,
-          not 12.
+          Locations are priced in bands, the way tax brackets work. Each one is
+          charged at the rate of the band it lands in — so your eleventh
+          location costs less than your first, and it never reprices the ten
+          below it. Annual billing charges {ANNUAL_MONTHS_BILLED} months of
+          that, not 12.
         </p>
         <div className="mx-auto max-w-[760px]">
           <PricingBands />
