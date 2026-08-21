@@ -375,3 +375,83 @@ export function explainDenial(
   }
   return "You can only act on records for the locations you manage.";
 }
+
+/* -------------------------------------------------------------------------- */
+/* Billing entitlement                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which permissions require an organization to be paying.
+ *
+ * A second table rather than a flag threaded through `authorize()`, and for
+ * the reason the first table exists: there are sixty-odd call sites, and a
+ * decision spread across sixty call sites is sixty chances to get it wrong and
+ * nowhere to read the answer. Here it is one column you can scan.
+ *
+ * `Record<Permission, boolean>` is exhaustive, so a new permission does not
+ * compile until somebody has decided. That is deliberate — the failure worth
+ * engineering against is a new mutation shipping without anyone thinking about
+ * whether an unpaid organization should reach it, and a default would hide
+ * exactly that.
+ *
+ * **`false` does not mean "unimportant".** Every one of the five below is
+ * something a person must be able to do while their card is declined, and
+ * three of them are things they must be able to do *especially* then.
+ */
+export const REQUIRES_PAID_ACCESS: Record<Permission, boolean> = {
+  "mention.update_status": true,
+  "mention.analyze": true,
+  "response.assign": true,
+  "response.decide": true,
+  "response.edit": true,
+  "response.generate": true,
+  "response.confirm_publication": true,
+  "mention.capture_manual": true,
+  "response.publish": true,
+  // **False.** Retraction is the emergency stop: it takes a published reply
+  // off a platform where the public can read it. A billing problem must never
+  // be the reason a defamatory or mistaken reply stays up, and the table
+  // already records that minutes matter more than authority here. The same
+  // judgement, applied to money instead of to roles.
+  "response.retract": false,
+  "escalation.assign": true,
+  "escalation.update_status": true,
+  "automation_rule.toggle": true,
+  "automation_rule.manage": true,
+  "brand_voice.update": true,
+  "location.update_manager": true,
+  "location.create": true,
+  "location.update": true,
+  // **False.** Removing somebody's access is a security act, not a product
+  // feature. An employee who leaves on the same day a card is declined must
+  // still lose their access that day, and an organization locked out of its
+  // own roster because of an invoice is a worse outcome than an unpaid one.
+  "organization.manage_members": false,
+  "organization.update": true,
+  // **False.** First-run setup happens before Checkout — the activation gate
+  // sits after the Workspace Ready screen, so an organization that could not
+  // finish onboarding without paying could never reach the screen that asks
+  // it to pay. Gating this would be a deadlock, not a policy.
+  "onboarding.manage": false,
+  "integration.connect": true,
+  "integration.reauthorize": true,
+  "integration.manage_profiles": true,
+  "integration.test_connection": true,
+  "integration.sync_reviews": true,
+  // **False.** An OAuth grant hands Lia standing authority over a customer's
+  // Google listings. Withdrawing that is consent being revoked, and consent
+  // that can only be revoked by paying first is not consent.
+  "integration.disconnect": false,
+  "monitoring.manage_queries": true,
+  "monitoring.poll_now": true,
+  "review_widget.manage": true,
+  // **False**, self-evidently: an organization that cannot reach its own
+  // billing cannot fix the thing that is blocking it. `resolveEntitlement`
+  // states the same guarantee structurally with `billingRoutesAvailable`.
+  "billing.manage": false,
+};
+
+/** Whether this action is one an unpaid organization may still perform. */
+export function requiresPaidAccess(permission: Permission): boolean {
+  return REQUIRES_PAID_ACCESS[permission];
+}

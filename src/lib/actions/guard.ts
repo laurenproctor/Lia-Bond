@@ -1,6 +1,13 @@
 import "server-only";
 
-import { can, canForLocation, explainDenial, type Permission } from "@/lib/auth/permissions";
+import {
+  can,
+  canForLocation,
+  explainDenial,
+  requiresPaidAccess,
+  type Permission,
+} from "@/lib/auth/permissions";
+import { getEntitlement } from "@/lib/billing/context";
 import { getDataSource } from "@/lib/data";
 import { DataError } from "@/lib/data/errors";
 import type { LiaDataSource } from "@/lib/data/types";
@@ -75,9 +82,42 @@ export async function assertPermissionForLocation(
   }
 }
 
-/** Convenience for actions with no location dimension. */
+/**
+ * Billing check. Throws when an organization has lost paid access.
+ *
+ * Deliberately separate from `assertPermission` rather than folded into it,
+ * because they answer different questions and a refusal has to say which. "Your
+ * role cannot do that" and "your subscription has lapsed" send a person to two
+ * different places, and collapsing them would send half of them to the wrong
+ * one.
+ *
+ * Which permissions this applies to is `REQUIRES_PAID_ACCESS` in
+ * `@/lib/auth/permissions` — one table, exhaustively typed, so a new permission
+ * does not compile until somebody decides. Whether it bites at all is the
+ * enforcement mode, which is `off` until the rollout says otherwise.
+ */
+export async function assertEntitled(permission: Permission): Promise<void> {
+  if (!requiresPaidAccess(permission)) return;
+
+  const entitlement = await getEntitlement();
+  if (entitlement.access !== "read_only") return;
+
+  throw new DataError(
+    "forbidden",
+    "This organization's subscription is not active. Visit billing to restore access.",
+  );
+}
+
+/**
+ * Convenience for actions with no location dimension.
+ *
+ * Both gates, in the order a person experiences them: a viewer is told their
+ * role cannot do this whatever the subscription says, and only somebody who
+ * *could* have done it is told the subscription is the problem.
+ */
 export async function authorize(permission: Permission): Promise<MutationContext> {
   const context = await mutationContext();
   assertPermission(context, permission);
+  await assertEntitled(permission);
   return context;
 }
