@@ -6,25 +6,26 @@ import {
   ANNUAL_DISCOUNT_LABEL,
   LISTED_LOCATION_LIMIT,
   PRICING_BANDS,
-  formatBandCostRange,
   formatBandSize,
+  formatBandTotalNote,
   formatPerLocationMonthly,
 } from "@/lib/site/content/pricing";
 
 /**
  * The band picker that sits inside the group card.
  *
- * The card's headline used to be `$49`, a per-location rate — true, and not an
- * answer to the question a multi-location reader actually has, which is what
- * their group costs. They had to scroll past the rate table to the estimator to
- * find out. This puts the answer in the box where the question is asked.
+ * The card leads with the **per-location rate** for the band chosen, because
+ * that is the figure the three cards are compared on — $59 beside $49 beside
+ * custom — and a total in the headline would put this card in a different unit
+ * from its neighbours.
  *
- * It shows a **range**, because the pricing is graduated: everyone in
- * "locations 11–25" pays the same rate per location in that band, but an
- * eleven-site group and a twenty-five-site group buy very different numbers of
- * them. The rate underneath is what the range is built from, so the span reads
- * as arithmetic rather than as hedging. The estimator further down the page is
- * still where an exact figure for an exact count lives.
+ * Under it sits what a group in that band actually pays, as a **range**,
+ * because the pricing is graduated: everyone in "locations 11–25" pays the
+ * same rate for each location in that band, but an eleven-site group and a
+ * twenty-five-site group buy very different numbers of them. The estimator
+ * further down the page is still where an exact figure for an exact count
+ * lives; this is the order-of-magnitude answer, in the box where the question
+ * is asked.
  *
  * State is local rather than lifted: nothing outside this card reacts to the
  * band, and the billing period it needs already arrives as a prop from the
@@ -51,35 +52,27 @@ export function PricingBandPicker({
   const annual = period === "annual";
 
   /**
-   * The two faces show different kinds of number on purpose.
-   *
-   * Monthly leads with what the whole group pays, because that is the question
-   * a group card is asked. Annual leads with what one location works out at
-   * per month, because $5,440 beside $544 reads as ten times the price until
-   * you notice one buys a year — and the yearly charge is right underneath so
-   * nothing is hidden by the comparison.
+   * The headline is a per-location, per-month figure on both faces. On the
+   * annual one that is the year spread back over the twelve months it covers,
+   * so the toggle changes the number without changing what it measures — and
+   * the yearly charge is right underneath, so nothing is hidden by it.
    */
-  const groupRange = formatBandCostRange(selected, period);
-  const perLocation = annual && !quoted;
+  const headline = quoted
+    ? "Custom"
+    : formatPerLocationMonthly(selected.monthly ?? 0, period);
 
-  const headline =
-    perLocation && selected.monthly !== null
-      ? formatPerLocationMonthly(selected.monthly, "annual")
-      : groupRange;
-
-  const charge =
-    perLocation && !quoted
-      ? `${groupRange} a year for ${formatBandSize(selected)}`
-      : null;
+  const total = quoted ? null : formatBandTotalNote(selected, period);
 
   const detail = quoted
     ? `Quoted to your portfolio above ${LISTED_LOCATION_LIMIT} locations.`
     : annual
-      ? `Billed once a year — ${ANNUAL_DISCOUNT_LABEL} on every location.`
-      : `For ${formatBandSize(selected)}, at ${formatPerLocationMonthly(
-          selected.monthly ?? 0,
-          "monthly",
-        )} for each location in this band.`;
+      ? `For ${formatBandSize(selected)}, billed once a year — ${ANNUAL_DISCOUNT_LABEL} on every location.`
+      : selected.from > 1
+        ? // Why the total is a span and not a multiple of the rate above it:
+          // the locations below this band are still charged at their own,
+          // higher rate, and that is what the bottom of the range is made of.
+          `For ${formatBandSize(selected)}. Locations below this band keep their own rate.`
+        : `For ${formatBandSize(selected)}, billed monthly.`;
 
   return (
     <div className="mb-5">
@@ -121,14 +114,12 @@ export function PricingBandPicker({
           just used the select, so the browser has already announced the
           option — what it has not said is what that costs. */}
       <div aria-live="polite" className="mt-4">
-        {/* `flex-wrap` with the figure held on one line: a range is roughly
-            twice the width of the single price this replaced, and it does not
-            fit a card column at the old 42px. The figure shrinks and the unit
-            drops below it rather than the number itself breaking across two
-            lines. */}
+        {/* The figure matches the 42px headline on the cards either side, and
+            `flex-wrap` lets the unit drop below it rather than the number
+            itself breaking across two lines on a narrow column. */}
         <p className="flex flex-wrap items-baseline gap-x-2">
           <span
-            className={`text-[clamp(22px,2.2vw,28px)] leading-[1.15] font-bold tracking-[-0.02em] whitespace-nowrap tabular-nums ${
+            className={`text-[clamp(32px,3.2vw,42px)] leading-[1.1] font-bold tracking-[-0.02em] whitespace-nowrap tabular-nums ${
               featured ? "text-white" : "text-site-ink"
             }`}
           >
@@ -140,20 +131,20 @@ export function PricingBandPicker({
                 featured ? "text-site-muted-dark" : "text-site-muted"
               }`}
             >
-              {perLocation ? "per location, per month" : "per month"}
+              per location, per month
             </span>
           )}
         </p>
 
-        {/* What actually leaves the bank, on the face where the headline is a
-            per-month figure and the charge is not. */}
-        {charge ? (
+        {/* What the whole group pays — the figure the headline rate multiplies
+            out to, graduated across the bands below this one. */}
+        {total ? (
           <p
-            className={`mt-1.5 text-[13px] font-semibold ${
+            className={`mt-1.5 text-[13px] font-semibold tabular-nums ${
               featured ? "text-white" : "text-site-ink"
             }`}
           >
-            {charge}
+            {total}
           </p>
         ) : null}
 
