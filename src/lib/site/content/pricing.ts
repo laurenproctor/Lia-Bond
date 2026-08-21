@@ -1,133 +1,61 @@
 /**
- * The published per-location price schedule.
+ * The rate card, as the marketing site renders it.
  *
- * Pricing is graduated, not flat: a location is charged at the rate of the
- * band it falls in, the way tax brackets work. An eleventh location does not
- * reprice the first ten. `monthlyTotal` is the only implementation of that
- * rule, so the page's worked example cannot drift from the table above it.
+ * The schedule itself — the bands, the annual discount, and the graduated
+ * arithmetic — moved to `@/lib/pricing/schedule` when billing arrived, because
+ * Stripe's catalog has to be built from the same numbers this page quotes. A
+ * price on a page and a price on a card that come from two declarations will
+ * eventually be two different numbers.
  *
- * Annual figures are never stored either — they are the monthly rate times
- * `ANNUAL_MONTHS_BILLED`, computed at render. The annual discount is that one
- * constant and nothing else: every annual price, every saving, the badge on
- * the toggle, and the percentage in the copy are derived from it, so there is
- * no second figure that can disagree with the first.
- */
-
-export interface PricingBand {
-  /** Sentence-case row label, e.g. "Locations 2–10". */
-  label: string;
-  /** First location covered, 1-indexed and inclusive. */
-  from: number;
-  /** Last location covered, inclusive. `null` is the open-ended top band. */
-  to: number | null;
-  /** Whole dollars per location per month. `null` means quoted, not listed. */
-  monthly: number | null;
-}
-
-/**
- * `as const satisfies` rather than a plain annotation: the tuple type is what
- * lets callers index the schedule under `noUncheckedIndexedAccess` without a
- * non-null assertion, while `satisfies` still checks every row against
- * `PricingBand`.
- */
-export const PRICING_BANDS = [
-  { label: "Location 1", from: 1, to: 1, monthly: 59 },
-  { label: "Locations 2–10", from: 2, to: 10, monthly: 49 },
-  { label: "Locations 11–25", from: 11, to: 25, monthly: 44 },
-  { label: "Locations 26–50", from: 26, to: 50, monthly: 39 },
-  { label: "Locations 51–100", from: 51, to: 100, monthly: 34 },
-  { label: "101+", from: 101, to: null, monthly: null },
-] as const satisfies readonly PricingBand[];
-
-/** The rate a single location is charged at, before any volume above it. */
-export const FIRST_LOCATION_MONTHLY = 59;
-
-/** The rate the second location — the first discounted one — is charged at. */
-export const SECOND_LOCATION_MONTHLY = 49;
-
-/** The lowest listed rate, reached at 51 locations. */
-export const LOWEST_LISTED_MONTHLY = 34;
-
-/** Locations above this are quoted rather than listed. */
-export const LISTED_LOCATION_LIMIT = 100;
-
-/** Months in a year, named because the annual arithmetic reads on both. */
-const MONTHS_IN_YEAR = 12;
-
-/**
- * The annual discount, expressed the way it is actually charged: a year costs
- * ten months at the monthly rate. Everything else about the discount — the
- * saving in dollars, the percentage, the badge copy — is derived from this,
- * so moving the discount is a one-line change and cannot leave a stale figure
- * behind somewhere on the page.
- */
-export const ANNUAL_MONTHS_BILLED = 10;
-
-/** The two months a year that annual billing does not charge for. */
-export const ANNUAL_MONTHS_FREE = MONTHS_IN_YEAR - ANNUAL_MONTHS_BILLED;
-
-/**
- * The discount as a whole percentage, for the copy that quotes one.
+ * What stays here is everything about *presentation*: how a figure is
+ * written, what the cards say, and which counts the estimator offers. Those
+ * have exactly one consumer, and Stripe has no opinion about any of them.
  *
- * Rounded, so it is a headline figure rather than an exact one. The exact
- * claim is `ANNUAL_DISCOUNT_LABEL` — two months free is true to the cent.
+ * The schedule is re-exported rather than hidden, so the many components and
+ * tests that import from this module keep working unchanged.
  */
-export const ANNUAL_DISCOUNT_PERCENT = Math.round(
-  (ANNUAL_MONTHS_FREE / MONTHS_IN_YEAR) * 100,
-);
 
-/** The badge beside the toggle, and the exact form of the claim. */
-export const ANNUAL_DISCOUNT_LABEL = `${ANNUAL_MONTHS_FREE} months free`;
+import {
+  FIRST_LOCATION_MONTHLY,
+  LISTED_LOCATION_LIMIT,
+  LOWEST_LISTED_MONTHLY,
+  MONTHS_CHARGED,
+  SECOND_LOCATION_MONTHLY,
+  annualSaving,
+  bandCostRange,
+  effectiveMonthly,
+  type BillingPeriod,
+  type PricingBand,
+} from "@/lib/pricing/schedule";
 
-/**
- * The blended monthly bill for `locations` locations, in whole dollars.
- *
- * Returns `null` above the listed range, where the price is quoted — a number
- * there would be an invented figure, and the caller has to say "custom"
- * either way.
- */
-export function monthlyTotal(locations: number): number | null {
-  if (locations < 1 || !Number.isInteger(locations)) return null;
-  if (locations > LISTED_LOCATION_LIMIT) return null;
+export {
+  ANNUAL_DISCOUNT_LABEL,
+  DEFAULT_ESTIMATE_LOCATIONS,
+  LOCATION_CHOICES,
+  formatLocationChoice,
+  ANNUAL_DISCOUNT_PERCENT,
+  ANNUAL_MONTHS_BILLED,
+  ANNUAL_MONTHS_FREE,
+  FIRST_LOCATION_MONTHLY,
+  LISTED_LOCATION_LIMIT,
+  LOWEST_LISTED_MONTHLY,
+  MONTHS_CHARGED,
+  PRICING_BANDS,
+  SECOND_LOCATION_MONTHLY,
+  annualSaving,
+  annualSavingTotal,
+  annualTotal,
+  annualTotalPaidMonthly,
+  bandCostRange,
+  effectiveMonthly,
+  monthlyTotal,
+} from "@/lib/pricing/schedule";
 
-  return PRICING_BANDS.reduce((total, band) => {
-    if (band.monthly === null || locations < band.from) return total;
-    const last = band.to === null ? locations : Math.min(locations, band.to);
-    return total + (last - band.from + 1) * band.monthly;
-  }, 0);
-}
-
-/** A year of that group's bill, paid annually. `null` where it is quoted. */
-export function annualTotal(locations: number): number | null {
-  const monthly = monthlyTotal(locations);
-  return monthly === null ? null : monthly * ANNUAL_MONTHS_BILLED;
-}
-
-/** A year of that group's bill, paid a month at a time — the comparison. */
-export function annualTotalPaidMonthly(locations: number): number | null {
-  const monthly = monthlyTotal(locations);
-  return monthly === null ? null : monthly * MONTHS_IN_YEAR;
-}
-
-/** What the group keeps by paying for the year up front. */
-export function annualSavingTotal(locations: number): number | null {
-  const monthly = monthlyTotal(locations);
-  return monthly === null ? null : monthly * ANNUAL_MONTHS_FREE;
-}
-
-/** A year of one location's rate saved — the per-location table column. */
-export function annualSaving(monthly: number): number {
-  return monthly * ANNUAL_MONTHS_FREE;
-}
-
-/** Which figure the cards are showing. */
-export type BillingPeriod = "monthly" | "annual";
-
-/** The number of months a period is charged for in one go. */
-const MONTHS_CHARGED: Record<BillingPeriod, number> = {
-  monthly: 1,
-  annual: ANNUAL_MONTHS_BILLED,
-};
+export type {
+  BandCostRange,
+  BillingPeriod,
+  PricingBand,
+} from "@/lib/pricing/schedule";
 
 /** The unit a rate is quoted in, for the line under a headline figure. */
 export const PERIOD_UNIT: Record<BillingPeriod, string> = {
@@ -188,66 +116,9 @@ export function formatBandSaving(band: PricingBand): string | null {
     : formatDollars(annualSaving(band.monthly));
 }
 
-/**
- * The location counts the estimator offers.
- *
- * Every count through a dozen, then the round numbers, then one past the
- * listed range so the quoted case is reachable from the same control rather
- * than being a dead end the reader has to guess at.
- */
-export const LOCATION_CHOICES = [
-  1,
-  2,
-  3,
-  4,
-  5,
-  6,
-  7,
-  8,
-  9,
-  10,
-  12,
-  15,
-  20,
-  25,
-  30,
-  40,
-  50,
-  75,
-  100,
-  LISTED_LOCATION_LIMIT + 1,
-] as const;
-
-/** The estimator opens on a group, not a single site — the discount is bigger there. */
-export const DEFAULT_ESTIMATE_LOCATIONS = 12;
-
-/** `12 locations`, and `More than 100` for the quoted option. */
-export function formatLocationChoice(locations: number): string {
-  if (locations > LISTED_LOCATION_LIMIT) {
-    return `More than ${LISTED_LOCATION_LIMIT} locations`;
-  }
-  return locations === 1 ? "1 location" : `${locations} locations`;
-}
-
 /* -------------------------------------------------------------------------- */
 /* What annual billing works out at per month                                  */
 /* -------------------------------------------------------------------------- */
-
-/**
- * A year's annual charge, divided back over the twelve months it covers.
- *
- * This is the figure the annual card leads with, and it is the honest way to
- * compare the two: $590 looks like more than $59 until you notice one buys a
- * month and the other buys a year. Dividing puts them in the same unit.
- *
- * Rarely a whole number — ten twelfths of $59 is $49.17 — so `formatMoney`
- * keeps the cents rather than rounding. A rounded $49 would understate the
- * price by two dollars a year per location, which is exactly the kind of
- * small dishonesty a pricing page cannot afford.
- */
-export function effectiveMonthly(monthly: number): number {
-  return (monthly * ANNUAL_MONTHS_BILLED) / MONTHS_IN_YEAR;
-}
 
 /** `$59`, or `$49.17` — cents only where the arithmetic leaves them. */
 export function formatMoney(amount: number): string {
@@ -271,35 +142,6 @@ export function formatPerLocationMonthly(
 /* -------------------------------------------------------------------------- */
 /* What a band costs                                                           */
 /* -------------------------------------------------------------------------- */
-
-/** The cheapest and dearest bill a group sitting in this band can have. */
-export interface BandCostRange {
-  /** A group of exactly `band.from` locations. */
-  min: number;
-  /** A group of exactly `band.to` locations. */
-  max: number;
-}
-
-/**
- * What a group whose size falls in this band pays each month.
- *
- * A range rather than a figure, and that is a property of graduated pricing
- * rather than vagueness: everyone in "locations 11–25" pays $44 for each
- * location in that band, but an eleven-location group and a twenty-five
- * location group are buying very different numbers of them. Quoting either end
- * alone would be wrong for everybody at the other.
- *
- * `null` for the quoted band, which has no top and therefore no maximum.
- */
-export function bandCostRange(band: PricingBand): BandCostRange | null {
-  if (band.monthly === null || band.to === null) return null;
-
-  const min = monthlyTotal(band.from);
-  const max = monthlyTotal(band.to);
-  if (min === null || max === null) return null;
-
-  return { min, max };
-}
 
 /**
  * `$108 – $500`, or `$59` where a band holds exactly one group size.
@@ -379,8 +221,8 @@ export function formatBandRateNote(
  *
  * `price`, `priceNote`, and `savingNote` are functions of the billing period
  * because the toggle switches them in place. They read their figures from the
- * constants above rather than restating them, so the cards cannot contradict
- * the table.
+ * schedule rather than restating them, so the cards cannot contradict the
+ * table.
  */
 export interface PricingPlan {
   name: string;

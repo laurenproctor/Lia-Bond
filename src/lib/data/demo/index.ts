@@ -89,6 +89,10 @@ import {
 } from "@/lib/data/demo/store";
 import { createMonitoringRepositories } from "@/lib/data/demo/monitoring";
 import { createPressWidgetRepository } from "@/lib/data/demo/press-widgets";
+import {
+  createDemoBillingRepository,
+  createDemoStripeWebhookEventRepository,
+} from "@/lib/data/demo/billing";
 import { createReviewWidgetRepository } from "@/lib/data/demo/review-widgets";
 import { createYelpRepositories } from "@/lib/data/demo/yelp";
 import {
@@ -759,6 +763,8 @@ export function createDemoDataSource(): LiaDataSource {
     ...createYelpRepositories(),
     reviewWidgets: createReviewWidgetRepository(),
     pressWidgets: createPressWidgetRepository(),
+    billing: createDemoBillingRepository(),
+    stripeWebhookEvents: createDemoStripeWebhookEventRepository(),
 
     organizations: {
       async listForUser(userId) {

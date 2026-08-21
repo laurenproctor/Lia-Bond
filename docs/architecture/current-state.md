@@ -119,6 +119,9 @@ nothing with it but the root layout's font.
 | `/onboarding/ready` | Workspace Ready. **Not step 6** — no progress strip. | repositories |
 | `/brand-voice` | Voice configuration | repositories |
 | `/settings` | Organization administration | repositories + typed fixture |
+| `/settings/billing` | Plan, trial status, purchased location capacity, and the route every billing banner links to. Reachable in **every** entitlement state including read-only — an organization that cannot reach its billing cannot fix what is blocking it | repositories + Stripe API |
+| `/api/webhooks/stripe` | Stripe events (POST only, signature-verified, sessionless — the second write path where RLS is not the backstop, after cron) | repositories + Stripe API |
+| `/api/cron/billing-reconcile` | Compares Lia's billing projection against Stripe and repairs or reports drift (GET and POST, `CRON_SECRET`-guarded). Deliberately **not** on a Vercel schedule — the Hobby plan already carries two crons | repositories + Stripe API |
 | `/help` | In-app help requests | repositories + Resend |
 | `/product`, `/platforms`, `/pricing`, `/contact` | Marketing pages. Public, statically rendered. | `src/lib/site/content` |
 | `/for/[industry]` | Four vertical pages from one template, prerendered from `INDUSTRIES` | `src/lib/site/content` |
@@ -610,6 +613,37 @@ merely refused. Full detail in `docs/press-widget.md`.
 
 ## Technical constraints
 
+- Billing is a **projection**, never a source of truth. Every Stripe-derived
+  column is copied from an object re-retrieved from Stripe after a signed
+  webhook; no browser request writes one, and the Checkout success redirect
+  grants nothing. `organization_billing` and `stripe_webhook_events` are
+  readable by members and writable through **no session at all** — a member who
+  could set `subscription_status` or `trial_eligible` could grant themselves
+  the product.
+- No card, bank, or payment-method data enters this schema. Not a number, not a
+  fingerprint, not a brand, not an expiry, not a payment-method id. The hosted
+  portal is the only surface where a card is touched and it is Stripe's.
+- No Stripe or driver message reaches a user, a log, or a stored row.
+  `stripe_webhook_events.error_category` is a Lia-authored word from a closed
+  list — the rule the GNews and Anthropic paths already keep, applied where
+  breaking it would be a compliance incident.
+- An organization has **at most one self-service trial, ever**, and that is a
+  check constraint rather than application logic: a row carrying
+  `trial_started_at` cannot be `trial_eligible`. Cancelling, replaying a
+  webhook, recreating a Checkout Session, and restoring a backup all leave it
+  set. Only `grant_billing_trial()` reopens it, and it audits who did.
+- Every `SECURITY DEFINER` revoke list includes `public`. Postgres grants
+  EXECUTE to PUBLIC on every new function and Supabase's bootstrap adds a
+  second grant to `anon`/`authenticated`; revoking only the latter leaves the
+  function callable over PostgREST with no session (D216).
+- No billing state suspends a membership, deletes an organization, or removes a
+  location, review, response, report, rule, or configuration. The worst
+  `resolveEntitlement` can return is read-only, and read-only preserves
+  everything.
+- Billing enforcement is applied **last** in `resolveEntitlement`, so
+  `BILLING_ENFORCEMENT_MODE=off` restores full access to every organization
+  without touching a single Stripe subscription.
+
 - `CLAUDE.md` fixes the route list, the visual direction, and sentence casing.
 - Server components by default; client components only where interactivity needs them.
 - No page component over roughly 300 lines.
@@ -682,6 +716,31 @@ merely refused. Full detail in `docs/press-widget.md`.
   `OrganizationScope` from each row's own `organization_id`, never from
   anything ambient, since `getOrganizationContext()` has no request session to
   resolve.
+
+## Decisions made building billing
+
+| # | Decision | Reason |
+| --- | --- | --- |
+| D213 | The published graduated rate card is the commercial model, not the volume model the brief sketched | `src/lib/site/content/pricing.ts` was already live, tested, and the subject of the branch's most recent commit. Shipping volume pricing would have made the pricing page and `/terms` false the day billing went live |
+| D214 | The rate schedule moved to `src/lib/pricing/schedule.ts`, read by both the marketing page and the Stripe catalog | A price quoted on a page and a price charged to a card that come from two declarations will eventually be two different numbers, and nobody notices until a customer reconciles an invoice |
+| D215 | Stripe's tiers are generated from `PRICING_BANDS` and tested against the page's own arithmetic at every group size 1–100 | Two implementations agreeing beats one agreeing with itself. Six tiers hand-typed twice is twelve chances to transpose a digit, and a wrong tier does not error |
+| D216 | Every `SECURITY DEFINER` revoke names `public`, not just `anon, authenticated` | The first draft revoked only the pair, leaving the implicit PUBLIC grant. `apply_stripe_billing_projection` was callable over PostgREST by anyone holding the anon key, who could have granted their own organization a subscription. Same gap as 20260807000600; the SQL harness caught it |
+| D217 | The trial is one-way by check constraint, not by application logic | Application checks protect the paths that run them. A constraint protects all of them, including a replayed webhook and a restored backup |
+| D218 | The projection, the audit entry, and the event's terminal status are one `SECURITY DEFINER` transaction | The Supabase client cannot express a transaction (D17). An event acknowledged before its effects are durable is one Stripe will never resend and Lia will never have acted on |
+| D219 | Every subscription-bearing webhook re-retrieves the subscription from Stripe | The event says *what changed*; Stripe says *what is true*. This is what makes out-of-order delivery harmless, and it means no ordering assumption exists anywhere |
+| D220 | Metadata is correlation, never authorization | The tenant is resolved through `stripe_customer_id`. A `lia_organization_id` mismatch is refused and alerted rather than believed |
+| D221 | Billable = `status <> 'inactive'` | `setup` is where every location created through the product starts and stays. Counting only `active` would bill almost every real customer for nothing |
+| D222 | Capacity is enforced by a trigger holding a row lock, not by a check in the action | Three paths consume a seat, and none can be made concurrency-safe from application code: two requests reading "4 of 5 used" both proceed. It fails open where nothing has been purchased, so existing organizations are untouched |
+| D223 | `changeCapacity` writes nothing; the projection lands from the webhook | A Stripe success followed by a Lia failure is then a stale projection rather than a divergence — there is no second write to fail |
+| D224 | Whether an invoice ends a trial is decided from Lia's projection, not the invoice | A trial-ending charge and an ordinary renewal both carry `subscription_cycle`. The payload cannot tell them apart; a trial that started and has not converted can |
+| D225 | `REQUIRES_PAID_ACCESS` is a second exhaustive table, not a flag at sixty call sites | A decision spread across sixty call sites is sixty chances to get it wrong and nowhere to read the answer. `Record<Permission, boolean>` means a new permission does not compile until somebody decides |
+| D226 | Retraction, disconnection, member removal, onboarding, and billing survive a lapsed subscription | An emergency stop, a consent withdrawal, a security act, a deadlock, and the thing that fixes the problem. None is a product feature being given away |
+| D227 | `past_due` and `incomplete` keep full access with a warning, and Lia names no cut-off date | Stripe's Smart Retries decide when recovery is over and then move the subscription itself. A second, Lia-authored clock would contradict the first |
+| D228 | Checkout is an activation gate after onboarding, not a sixth step | The quantity is unknowable before step 3, a trial must not burn during OAuth round trips, and a sixth step would touch both route guards, the Postgres enum, and the prerequisites table |
+| D229 | Stripe sends the trial-ending email; Lia sends none | Two systems emailing about one trial is how a customer gets contradictory dates, and Lia's outbound mail is paused pending a verified sending domain |
+| D230 | Billing dates carry the year; `formatDate` does not | "Sep 4" is right for a review from last week and wrong for the day a card is charged — an annual renewal is eleven months out |
+| D231 | Reconciliation may repair projection fields, never trial state and never Stripe | Stripe has no opinion about whether an organization used its one trial, and a scheduled job with write access to a payment processor is one bug from cancelling a paying customer at 3am |
+| D232 | The audit vocabulary migration was generated, not hand-written | `scripts/generate-audit-vocabulary-sql.ts` exists because this drift has already happened three times, and its header says not to hand-merge |
 
 ## Decisions made in workflow 01
 

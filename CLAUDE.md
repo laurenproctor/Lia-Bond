@@ -53,6 +53,7 @@ Build Lia as a polished, production-oriented SaaS application for restaurant gro
 - `/integrations`
 - `/brand-voice`
 - `/settings`
+- `/settings/billing`
 
 ### First-run setup
 
@@ -68,6 +69,12 @@ step 6 and shows no progress strip.
 - `/onboarding/ready`
 
 Detail: `docs/onboarding.md`.
+
+### Billing
+
+Checkout is **not** an onboarding step. It is a separate activation gate at
+`/settings/billing`, reached after the Workspace Ready screen, and the
+five-step flow above is unchanged by it. Detail: `docs/billing.md`.
 
 ## Required shared components
 

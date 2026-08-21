@@ -41,6 +41,7 @@ export const PERMISSIONS = [
   "monitoring.manage_queries",
   "monitoring.poll_now",
   "website_widget.manage",
+  "billing.manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -298,6 +299,38 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   //
   // Analysts and viewers are absent for the ordinary reason: they read.
   "website_widget.manage": ["owner", "admin", "communications_lead"],
+  // Starting Checkout, opening Stripe's hosted portal, and changing purchased
+  // location capacity.
+  //
+  // Owners **and** admins, not owners alone, and this is the row in the table
+  // most likely to be questioned — so the argument, rather than the intuition.
+  //
+  // The intuition says money is the owner's alone. The operational reality is
+  // that when a card is declined the product slides to read-only for everyone,
+  // and the person who can fix it is whoever is at a desk. Making this
+  // owner-only means a single offboarded, unavailable, or asleep owner is a
+  // company that cannot pay its bill — the same judgement `response.retract`
+  // records, where minutes mattered more than authority.
+  //
+  // It is also consistent rather than novel: nothing in this table is
+  // owner-only today. `organization.update`, `organization.manage_members`,
+  // and `onboarding.manage` are each at least as consequential — the last one
+  // decides what the whole organization sees on sign-in — and all three are
+  // owner-and-admin. An owner-only row here would be the first, and it should
+  // not be introduced by accident.
+  //
+  // What bounds the risk is not the role list. It is that this permission
+  // cannot spend money on its own: Checkout collects a card on Stripe's page,
+  // capacity changes are previewed with the exact figure before confirmation,
+  // and every one of them is audited. Communications leads and approvers are
+  // absent because none of that is their job; analysts and viewers because
+  // they read.
+  //
+  // Not restated in row-level security, and that is deliberate rather than an
+  // omission: `organization_billing` grants no session any write at all
+  // (20260821000500), so there is no policy for this list to narrow. The
+  // database is stricter than this row, not looser.
+  "billing.manage": ["owner", "admin"],
 };
 
 export function can(role: MembershipRole, permission: Permission): boolean {
@@ -358,4 +391,83 @@ export function explainDenial(
     return `Your role (${role.replace(/_/g, " ")}) cannot perform this action.`;
   }
   return "You can only act on records for the locations you manage.";
+}
+/* -------------------------------------------------------------------------- */
+/* Billing entitlement                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Which permissions require an organization to be paying.
+ *
+ * A second table rather than a flag threaded through `authorize()`, and for
+ * the reason the first table exists: there are sixty-odd call sites, and a
+ * decision spread across sixty call sites is sixty chances to get it wrong and
+ * nowhere to read the answer. Here it is one column you can scan.
+ *
+ * `Record<Permission, boolean>` is exhaustive, so a new permission does not
+ * compile until somebody has decided. That is deliberate — the failure worth
+ * engineering against is a new mutation shipping without anyone thinking about
+ * whether an unpaid organization should reach it, and a default would hide
+ * exactly that.
+ *
+ * **`false` does not mean "unimportant".** Every one of the five below is
+ * something a person must be able to do while their card is declined, and
+ * three of them are things they must be able to do *especially* then.
+ */
+export const REQUIRES_PAID_ACCESS: Record<Permission, boolean> = {
+  "mention.update_status": true,
+  "mention.analyze": true,
+  "response.assign": true,
+  "response.decide": true,
+  "response.edit": true,
+  "response.generate": true,
+  "response.confirm_publication": true,
+  "mention.capture_manual": true,
+  "response.publish": true,
+  // **False.** Retraction is the emergency stop: it takes a published reply
+  // off a platform where the public can read it. A billing problem must never
+  // be the reason a defamatory or mistaken reply stays up, and the table
+  // already records that minutes matter more than authority here. The same
+  // judgement, applied to money instead of to roles.
+  "response.retract": false,
+  "escalation.assign": true,
+  "escalation.update_status": true,
+  "automation_rule.toggle": true,
+  "automation_rule.manage": true,
+  "brand_voice.update": true,
+  "location.update_manager": true,
+  "location.create": true,
+  "location.update": true,
+  // **False.** Removing somebody's access is a security act, not a product
+  // feature. An employee who leaves on the same day a card is declined must
+  // still lose their access that day, and an organization locked out of its
+  // own roster because of an invoice is a worse outcome than an unpaid one.
+  "organization.manage_members": false,
+  "organization.update": true,
+  // **False.** First-run setup happens before Checkout — the activation gate
+  // sits after the Workspace Ready screen, so an organization that could not
+  // finish onboarding without paying could never reach the screen that asks
+  // it to pay. Gating this would be a deadlock, not a policy.
+  "onboarding.manage": false,
+  "integration.connect": true,
+  "integration.reauthorize": true,
+  "integration.manage_profiles": true,
+  "integration.test_connection": true,
+  "integration.sync_reviews": true,
+  // **False.** An OAuth grant hands Lia standing authority over a customer's
+  // Google listings. Withdrawing that is consent being revoked, and consent
+  // that can only be revoked by paying first is not consent.
+  "integration.disconnect": false,
+  "monitoring.manage_queries": true,
+  "monitoring.poll_now": true,
+  "website_widget.manage": true,
+  // **False**, self-evidently: an organization that cannot reach its own
+  // billing cannot fix the thing that is blocking it. `resolveEntitlement`
+  // states the same guarantee structurally with `billingRoutesAvailable`.
+  "billing.manage": false,
+};
+
+/** Whether this action is one an unpaid organization may still perform. */
+export function requiresPaidAccess(permission: Permission): boolean {
+  return REQUIRES_PAID_ACCESS[permission];
 }

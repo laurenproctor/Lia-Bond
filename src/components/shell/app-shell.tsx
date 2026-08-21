@@ -5,6 +5,12 @@ import { cn } from "@/lib/cn";
 export interface AppShellProps {
   children: ReactNode;
   sidebar: Omit<Parameters<typeof Sidebar>[0], "children">;
+  /**
+   * A strip above the page content. Billing uses it, and nothing else does
+   * yet — a slot rather than a `BillingBanner` import so the shell keeps
+   * knowing nothing about billing.
+   */
+  banner?: ReactNode;
 }
 
 /**
@@ -13,7 +19,7 @@ export interface AppShellProps {
  * The sidebar is fixed, the content column scrolls, and pages that need a
  * split view opt into a full-height layout with `PageBody variant="fill"`.
  */
-export function AppShell({ children, sidebar }: AppShellProps) {
+export function AppShell({ children, sidebar, banner }: AppShellProps) {
   return (
     <div className="flex min-h-dvh flex-col md:h-dvh md:flex-row md:overflow-hidden">
       <Sidebar {...sidebar} />
@@ -21,6 +27,11 @@ export function AppShell({ children, sidebar }: AppShellProps) {
         id="main"
         className="lia-scroll flex min-w-0 flex-1 flex-col md:overflow-y-auto"
       >
+        {/* Above the scroll container's content but inside it, so a long page
+            scrolls the banner away rather than pinning it. A billing notice
+            that follows somebody down every screen is the kind of thing people
+            learn to stop seeing. */}
+        {banner}
         {children}
       </main>
     </div>

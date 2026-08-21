@@ -94,6 +94,39 @@ const rulesExecutionModeSchema = z.enum(["off", "dry_run", "apply"]);
 export type RulesExecutionMode = z.infer<typeof rulesExecutionModeSchema>;
 
 /**
+ * Which Stripe implementation is in play.
+ *
+ * `mock` is a deterministic in-memory gateway: it issues fake session URLs,
+ * fake customer and subscription ids, and drives the same projection path a
+ * real webhook does. It exists so the whole billing lifecycle is reachable in
+ * CI and on a laptop with no Stripe account, which is what keeps
+ * `STRIPE_SECRET_KEY` out of the test environment.
+ *
+ * Refused outright when `NODE_ENV=production`, and the reason is sharper than
+ * the Google mock's: a deployment that quietly issued fake subscriptions would
+ * hand out the product for nothing and record that it had been paid for.
+ */
+const billingModeSchema = z.enum(["live", "mock"]);
+export type BillingMode = z.infer<typeof billingModeSchema>;
+
+/**
+ * How much of billing enforcement is switched on.
+ *
+ * Absence means `off`, following `RULES_EXECUTION_MODE` — a feature that
+ * decides whether a customer can work must not switch itself on because a
+ * variable went missing. `allowlist` enforces for named organizations only,
+ * which is the rollout step where a real payment is tested against one
+ * internal tenant before anyone else is affected.
+ *
+ * This is also the kill switch. Setting it back to `off` restores full access
+ * to every organization immediately, without cancelling, modifying, or
+ * refunding a single Stripe subscription — see `resolveEntitlement`, where it
+ * is applied last precisely so it can be reversed without side effects.
+ */
+const billingEnforcementModeSchema = z.enum(["off", "allowlist", "on"]);
+export type BillingEnforcementMode = z.infer<typeof billingEnforcementModeSchema>;
+
+/**
  * Which Reddit implementation is in play.
  *
  * Same two words as everywhere else, refused in production for the same
@@ -282,6 +315,28 @@ const envSchema = z
       .optional(),
     REDDIT_AI_INFERENCE: redditAiInferenceSchema.optional(),
 
+    /* Billing. Server-only, both secrets, and never NEXT_PUBLIC_.
+       Stripe-hosted Checkout and the hosted portal are server-created
+       redirects, so there is no publishable key here and no Stripe.js in the
+       bundle — the browser never holds a Stripe credential of any kind. */
+    STRIPE_SECRET_KEY: z
+      .string()
+      .regex(
+        /^sk_(test|live)_[A-Za-z0-9]+$/,
+        "Use a Stripe secret key (sk_test_… or sk_live_…), not a publishable or restricted key",
+      )
+      .optional(),
+    /** From the webhook endpoint's signing secret, per endpoint and per mode. */
+    STRIPE_WEBHOOK_SECRET: z
+      .string()
+      .regex(/^whsec_[A-Za-z0-9+/=_-]+$/, "Use the endpoint's signing secret (whsec_…)")
+      .optional(),
+    LIA_BILLING_MODE: billingModeSchema.optional(),
+    /** No default: see `resolveBillingEnforcementMode`. Absence means `off`. */
+    BILLING_ENFORCEMENT_MODE: billingEnforcementModeSchema.optional(),
+    /** Comma-separated org ids enforcement applies to while allowlisting. */
+    BILLING_ORG_ALLOWLIST: z.string().optional(),
+
     /** 32 bytes, base64 / base64url / hex. Encrypts stored OAuth credentials. */
     TOKEN_ENCRYPTION_KEY: z.string().min(32).optional(),
     /** Names the active key so ciphertext stays readable across a rotation. */
@@ -333,6 +388,48 @@ const envSchema = z
     {
       message: "LIA_REDDIT_MODE=mock is refused in production",
       path: ["LIA_REDDIT_MODE"],
+    },
+  )
+  .refine(
+    (value) => !(value.LIA_BILLING_MODE === "mock" && value.NODE_ENV === "production"),
+    {
+      message: "LIA_BILLING_MODE=mock is refused in production",
+      path: ["LIA_BILLING_MODE"],
+    },
+  )
+  // A sandbox key in production is the mistake that looks like it is working.
+  // Checkout succeeds, the portal opens, webhooks arrive, the projection
+  // updates — and no money has moved, for however long it takes somebody to
+  // notice. Refusing at startup is the only point where it is cheap.
+  .refine(
+    (value) =>
+      !(value.NODE_ENV === "production" && value.STRIPE_SECRET_KEY?.startsWith("sk_test_")),
+    {
+      message: "A sandbox Stripe key (sk_test_…) is refused in production",
+      path: ["STRIPE_SECRET_KEY"],
+    },
+  )
+  // The reverse, and it is worse: a live key on a developer's laptop or in a
+  // preview deployment charges real cards from a branch.
+  .refine(
+    (value) =>
+      !(value.NODE_ENV === "development" && value.STRIPE_SECRET_KEY?.startsWith("sk_live_")),
+    {
+      message: "A live Stripe key (sk_live_…) is refused in development",
+      path: ["STRIPE_SECRET_KEY"],
+    },
+  )
+  // Enforcement by allowlist with nobody on it enforces for nobody, which is
+  // indistinguishable from `off` except that it reads as switched on. That
+  // gap is where somebody concludes billing is live when it is not.
+  .refine(
+    (value) =>
+      value.BILLING_ENFORCEMENT_MODE !== "allowlist" ||
+      (value.BILLING_ORG_ALLOWLIST?.trim().length ?? 0) > 0,
+    {
+      message:
+        "BILLING_ENFORCEMENT_MODE=allowlist needs BILLING_ORG_ALLOWLIST to name at least one organization",
+      path: ["BILLING_ORG_ALLOWLIST"],
     },
   );
 
@@ -386,6 +483,11 @@ function readEnv(): Env {
     RULES_MAX_RULES_PER_MENTION:
       process.env.RULES_MAX_RULES_PER_MENTION || undefined,
     RULES_EXECUTION_BUDGET_MS: process.env.RULES_EXECUTION_BUDGET_MS || undefined,
+    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || undefined,
+    STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || undefined,
+    LIA_BILLING_MODE: process.env.LIA_BILLING_MODE || undefined,
+    BILLING_ENFORCEMENT_MODE: process.env.BILLING_ENFORCEMENT_MODE || undefined,
+    BILLING_ORG_ALLOWLIST: process.env.BILLING_ORG_ALLOWLIST || undefined,
   });
 
   if (!parsed.success) {
@@ -1044,4 +1146,111 @@ export function rulesExecutionLimits(): RulesExecutionLimits {
       DEFAULT_RULES_EXECUTION_LIMITS.maxRulesPerMention,
     budgetMs: env.RULES_EXECUTION_BUDGET_MS ?? DEFAULT_RULES_EXECUTION_LIMITS.budgetMs,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Billing                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Whether this deployment can talk to Stripe at all.
+ *
+ * Both halves are needed and neither is useful alone: a secret key with no
+ * webhook secret can create a Checkout Session whose result Lia will never
+ * learn, and a webhook secret with no key can verify an event it cannot act
+ * on. Treating them as one switch is what stops a half-configured deployment
+ * charging somebody and then failing to grant them anything.
+ */
+export function isStripeConfigured(): boolean {
+  return Boolean(env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET);
+}
+
+/**
+ * Which billing implementation is in play.
+ *
+ * `unconfigured` is a real answer, not an error: a deployment with no Stripe
+ * account is the ordinary state of a fresh clone, and the billing screens say
+ * so rather than crashing. Same shape as `resolveGoogleIntegrationMode`.
+ */
+export function resolveBillingMode(): BillingMode | "unconfigured" {
+  if (env.LIA_BILLING_MODE) return env.LIA_BILLING_MODE;
+  return isStripeConfigured() ? "live" : "unconfigured";
+}
+
+/** True when Stripe calls are being answered by the deterministic fake. */
+export function isBillingMocked(): boolean {
+  return resolveBillingMode() === "mock";
+}
+
+/**
+ * How much of billing enforcement is switched on.
+ *
+ * Absence means `off`. Billing decides whether a paying customer can work, so
+ * the absence of configuration must mean the absence of the behaviour — the
+ * same reasoning `resolveRulesExecutionMode` records, and the same reason
+ * there is no `unconfigured` state to reason about here.
+ */
+export function resolveBillingEnforcementMode(): BillingEnforcementMode {
+  return env.BILLING_ENFORCEMENT_MODE ?? "off";
+}
+
+/**
+ * Organization ids enforcement applies to while the mode is `allowlist`.
+ *
+ * Comma-separated, trimmed, empty entries dropped — the same parsing as
+ * `rulesExecutionAllowlist` and `redditOrganizationAllowlist`. An empty list
+ * cannot occur alongside `allowlist`: the environment refuses that pairing at
+ * startup, because a mode that reads as switched on while enforcing for nobody
+ * is how a rollout gets declared finished before it began.
+ */
+export function billingOrganizationAllowlist(): string[] {
+  if (!env.BILLING_ORG_ALLOWLIST) return [];
+  return env.BILLING_ORG_ALLOWLIST.split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+}
+
+/**
+ * The Stripe secret key, or a configuration error naming what is missing.
+ *
+ * Presence is checked here rather than at import, for the reason the Google
+ * helpers record: requiring it at module scope would break `next build`, which
+ * prerenders with `NODE_ENV=production` and no secrets, and would stop the app
+ * running at all for anyone who has not set up Stripe.
+ */
+export function requireStripeSecretKey(): string {
+  if (!env.STRIPE_SECRET_KEY) {
+    throw new ConfigurationError(
+      "Stripe is not configured on this server.",
+      ["STRIPE_SECRET_KEY"],
+    );
+  }
+  return env.STRIPE_SECRET_KEY;
+}
+
+/** The webhook signing secret, or a configuration error naming it. */
+export function requireStripeWebhookSecret(): string {
+  if (!env.STRIPE_WEBHOOK_SECRET) {
+    throw new ConfigurationError(
+      "Stripe webhook verification is not configured on this server.",
+      ["STRIPE_WEBHOOK_SECRET"],
+    );
+  }
+  return env.STRIPE_WEBHOOK_SECRET;
+}
+
+/**
+ * Whether the configured key is a live-mode one.
+ *
+ * The webhook compares this against each event's `livemode` flag. A sandbox
+ * key must never process a live event and a live key must never process a
+ * sandbox one: the first would grant access for a payment that did not happen
+ * in the account that matters, and the second would apply test data to real
+ * customers. Both are refused and alerted rather than applied.
+ *
+ * A mocked deployment is never live, whatever key happens to be lying around.
+ */
+export function isStripeLiveMode(): boolean {
+  if (isBillingMocked()) return false;
+  return env.STRIPE_SECRET_KEY?.startsWith("sk_live_") ?? false;
 }

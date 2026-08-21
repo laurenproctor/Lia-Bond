@@ -87,6 +87,10 @@ import {
 } from "@/lib/data/supabase/mappers";
 import { createMonitoringRepositories } from "@/lib/data/supabase/monitoring";
 import { createPressWidgetRepository } from "@/lib/data/supabase/press-widgets";
+import {
+  createBillingRepository,
+  createStripeWebhookEventRepository,
+} from "@/lib/data/supabase/billing";
 import { createReviewWidgetRepository } from "@/lib/data/supabase/review-widgets";
 import { createYelpRepositories } from "@/lib/data/supabase/yelp";
 import { activationProblems } from "@/lib/rules/readiness";
@@ -1901,6 +1905,8 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
     ...createYelpRepositories(client),
     reviewWidgets: createReviewWidgetRepository(client),
     pressWidgets: createPressWidgetRepository(client),
+    billing: createBillingRepository(client),
+    stripeWebhookEvents: createStripeWebhookEventRepository(client),
 
     mentions: {
       async list(scope, filter = {}) {
