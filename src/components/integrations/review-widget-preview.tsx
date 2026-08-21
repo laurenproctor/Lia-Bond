@@ -36,7 +36,7 @@ export interface ReviewWidgetPreviewProps {
 export function ReviewWidgetPreview({ src, theme }: ReviewWidgetPreviewProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [width, setWidth] = useState<WidthKey>("desktop");
-  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef);
+  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef, { kind: "review" });
 
   return (
     <div className="space-y-3">

@@ -561,14 +561,14 @@ describe("the audit trail", () => {
 
 describe("who may configure a widget", () => {
   it("is the roles that already decide what the product says", () => {
-    expect(can("owner", "review_widget.manage")).toBe(true);
-    expect(can("admin", "review_widget.manage")).toBe(true);
-    expect(can("communications_lead", "review_widget.manage")).toBe(true);
+    expect(can("owner", "website_widget.manage")).toBe(true);
+    expect(can("admin", "website_widget.manage")).toBe(true);
+    expect(can("communications_lead", "website_widget.manage")).toBe(true);
   });
 
   it("excludes every read-only role", () => {
-    expect(can("analyst", "review_widget.manage")).toBe(false);
-    expect(can("viewer", "review_widget.manage")).toBe(false);
+    expect(can("analyst", "website_widget.manage")).toBe(false);
+    expect(can("viewer", "website_widget.manage")).toBe(false);
   });
 
   it("excludes approvers and location managers", () => {
@@ -576,15 +576,15 @@ describe("who may configure a widget", () => {
     // absent because the RLS policies restate this list with
     // `has_organization_role`, which cannot express per-location scoping —
     // and this is a surface the public can see.
-    expect(can("approver", "review_widget.manage")).toBe(false);
-    expect(can("location_manager", "review_widget.manage")).toBe(false);
+    expect(can("approver", "website_widget.manage")).toBe(false);
+    expect(can("location_manager", "website_widget.manage")).toBe(false);
   });
 
   it("matches the roles named in the RLS policies", () => {
     // Restated here rather than trusted, because the two lists are written in
     // two languages and drift silently.
     const allowed = (["owner", "admin", "communications_lead"] as const).every((role) =>
-      can(role, "review_widget.manage"),
+      can(role, "website_widget.manage"),
     );
     expect(allowed).toBe(true);
   });

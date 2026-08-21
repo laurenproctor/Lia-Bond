@@ -1,16 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useState, type RefObject } from "react";
+import { WIDGET_KINDS, type WidgetKind } from "@/lib/widgets/kinds";
 
 /**
  * The height of a framed widget document, as the document reports it.
  *
  * An iframe cannot size itself to its content, so every widget document posts
  * its measured height to the parent (see `heightScript` in
- * `@/lib/widgets/document`). This is the listening half, extracted because two
- * screens now frame that document — the configuration preview and the empty
- * state's teaser — and a second copy of a `postMessage` handler is a second
- * place for the origin check to be got wrong.
+ * `@/lib/widgets/document` and its press twin). This is the listening half,
+ * extracted because several screens now frame one of those documents — both
+ * configuration previews, the review teaser, and the two samples on the
+ * Website widgets landing page — and a second copy of a `postMessage` handler
+ * is a second place for the origin check to be got wrong.
+ *
+ * `kind` selects which widget's message source to accept. The landing page
+ * frames one of each at once, so a hook that accepted either would let a
+ * press document resize the review sample.
  *
  * Every guard in the listener is load-bearing:
  *
@@ -32,18 +38,30 @@ import { useCallback, useEffect, useState, type RefObject } from "react";
  * callers frame a same-origin document, the parent can simply measure it on
  * `load` instead of waiting to be told.
  */
+export interface WidgetFrameHeightOptions {
+  /** Which widget's height messages to accept. */
+  kind: WidgetKind;
+  /** What to show before the document reports its own height. */
+  initialHeight?: number;
+}
+
 export function useWidgetFrameHeight(
   frameRef: RefObject<HTMLIFrameElement | null>,
-  initialHeight = 220,
+  options: WidgetFrameHeightOptions,
 ): { height: number; onFrameLoad: () => void } {
-  const [height, setHeight] = useState(initialHeight);
+  const { kind } = options;
+  const [height, setHeight] = useState(
+    options.initialHeight ?? WIDGET_KINDS[kind].initialFrameHeight,
+  );
 
   useEffect(() => {
+    const expected = WIDGET_KINDS[kind].messageSource;
+
     function onMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin) return;
 
       const data = event.data as { source?: string; type?: string; height?: number };
-      if (data?.source !== "lia-review-widget" || data.type !== "height") return;
+      if (data?.source !== expected || data.type !== "height") return;
       if (event.source !== frameRef.current?.contentWindow) return;
 
       const next = usableHeight(Number(data.height));
@@ -52,7 +70,7 @@ export function useWidgetFrameHeight(
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [frameRef]);
+  }, [frameRef, kind]);
 
   const onFrameLoad = useCallback(() => {
     // Null rather than an exception when the document is not same-origin, so a

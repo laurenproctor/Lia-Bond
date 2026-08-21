@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { MapPin } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeft, MapPin } from "lucide-react";
 import { PageBody } from "@/components/shell/app-shell";
 import { ConnectGoogleForm } from "@/components/integrations/connect-google-form";
 import {
@@ -24,7 +25,7 @@ import { listWidgetReviewChoices } from "@/lib/widgets/service";
 import type { MembershipRole } from "@/domain";
 import type { LiaDataSource, OrganizationScope } from "@/lib/data/types";
 
-export const metadata: Metadata = { title: "Website widgets" };
+export const metadata: Metadata = { title: "Review widget" };
 
 /**
  * Where a customer puts a Google review on their own website.
@@ -58,7 +59,7 @@ export default async function ReviewWidgetPage({
     dataSource.reviewWidgets.list(scope),
   ]);
 
-  const canManage = can(role, "review_widget.manage");
+  const canManage = can(role, "website_widget.manage");
 
   if (locations.length === 0) {
     const googleConnected = await isGoogleConnected(dataSource, scope);
@@ -297,12 +298,34 @@ function WidgetRulesCard() {
   );
 }
 
+/**
+ * The page header, plus the way back to the choice between the two widgets.
+ *
+ * The title is `Review widget`, not `Website widgets`, since the press widget
+ * shipped. Two screens called the same thing is how somebody ends up
+ * configuring the one they did not mean to, and the breadcrumb above it is
+ * what says which of the two areas they are in.
+ *
+ * The route itself is unchanged. `/integrations/review-widget` has been in the
+ * sidebar and in customers' browser history since this feature shipped, and
+ * moving it beneath the new landing route would have broken every one of those
+ * links to save a path segment.
+ */
 function Header({ picker }: { picker?: React.ReactNode }) {
   return (
-    <PageHeader
-      title="Website widgets"
-      description="Show one recent Google review on your own website. Lia keeps it current, and stops showing it the moment it stops qualifying."
-      actions={picker}
-    />
+    <div className="space-y-3">
+      <Link
+        href="/integrations/website-widgets"
+        className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-gray-500 transition-colors hover:text-gray-950"
+      >
+        <ArrowLeft className="size-3.5" aria-hidden />
+        Website widgets
+      </Link>
+      <PageHeader
+        title="Review widget"
+        description="Show one recent Google review on your own website. Lia keeps it current, and stops showing it the moment it stops qualifying."
+        actions={picker}
+      />
+    </div>
   );
 }

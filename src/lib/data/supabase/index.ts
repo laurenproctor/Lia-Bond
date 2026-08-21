@@ -86,6 +86,7 @@ import {
   toUser,
 } from "@/lib/data/supabase/mappers";
 import { createMonitoringRepositories } from "@/lib/data/supabase/monitoring";
+import { createPressWidgetRepository } from "@/lib/data/supabase/press-widgets";
 import { createReviewWidgetRepository } from "@/lib/data/supabase/review-widgets";
 import { createYelpRepositories } from "@/lib/data/supabase/yelp";
 import { activationProblems } from "@/lib/rules/readiness";
@@ -1899,6 +1900,7 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
     // Yelp Assisted's own file, for the same reason.
     ...createYelpRepositories(client),
     reviewWidgets: createReviewWidgetRepository(client),
+    pressWidgets: createPressWidgetRepository(client),
 
     mentions: {
       async list(scope, filter = {}) {
@@ -1906,6 +1908,9 @@ export function createSupabaseDataSource(client: SupabaseClient): LiaDataSource 
 
         if (filter.locationId) query = query.eq("location_id", filter.locationId);
         if (filter.sourceTypes?.length) query = query.in("source_type", filter.sourceTypes);
+        if (filter.monitoringQueryId) {
+          query = query.eq("monitoring_query_id", filter.monitoringQueryId);
+        }
         if (filter.statuses?.length) query = query.in("status", filter.statuses);
         if (filter.sentiments?.length) query = query.in("sentiment", filter.sentiments);
         if (filter.riskLevels?.length) query = query.in("risk_level", filter.riskLevels);

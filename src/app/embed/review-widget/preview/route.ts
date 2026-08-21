@@ -3,6 +3,7 @@ import { can } from "@/lib/auth/permissions";
 import { getDataSource } from "@/lib/data";
 import { DataError } from "@/lib/data/errors";
 import { getOrganizationContext } from "@/lib/tenancy/organization-context";
+import { widgetDocumentCsp, widgetDocumentHeaders } from "@/lib/widgets/csp";
 import { renderReviewWidgetDocument } from "@/lib/widgets/document";
 import { parsePreviewRequest, resolvePreviewRow } from "@/lib/widgets/preview";
 import { resolveRenderedWidget } from "@/lib/widgets/render";
@@ -23,7 +24,7 @@ import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
  * - **Authorised, not merely authenticated.** `getOrganizationContext()`
  *   re-reads the membership row and the configuration lives in the query
  *   string, so without a permission check any signed-in person could preview
- *   any location id they could guess. The check is `review_widget.manage`,
+ *   any location id they could guess. The check is `website_widget.manage`,
  *   the same permission the configuration screen requires — this route renders
  *   review text for a location, and read access to that has to be earned the
  *   same way.
@@ -43,7 +44,7 @@ import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
  * location id, no mention, no profile. So it answers before the organization
  * context is resolved, deliberately: the empty state is shown to every member
  * of an organization with no locations yet, including the ones who will never
- * hold `review_widget.manage`, and gating a fixed string of fiction behind a
+ * hold `website_widget.manage`, and gating a fixed string of fiction behind a
  * permission check on data it never touches would blank the frame for them
  * for no gain. Everything else about the response is unchanged — same
  * headers, same `frame-ancestors 'self'`, same `no-store`.
@@ -76,7 +77,7 @@ export async function GET(request: Request): Promise<Response> {
 
     const context = await getOrganizationContext();
 
-    if (!can(context.role, "review_widget.manage")) {
+    if (!can(context.role, "website_widget.manage")) {
       return problem("You do not have permission to preview this widget.", 403);
     }
 
@@ -120,25 +121,17 @@ export async function GET(request: Request): Promise<Response> {
 function document(html: string, status: number): Response {
   return new Response(html, {
     status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "content-security-policy": [
-        "default-src 'none'",
-        "style-src 'unsafe-inline'",
-        "script-src 'unsafe-inline'",
-        "img-src data:",
-        "form-action 'none'",
-        "base-uri 'none'",
+    headers: widgetDocumentHeaders({
+      csp: widgetDocumentCsp({
         // Lia's own screens only. The public document opens this up to the
         // customer's approved domains; a preview has no business being framed
         // anywhere but here.
-        "frame-ancestors 'self'",
-      ].join("; "),
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
-      "x-content-type-options": "nosniff",
-      "x-robots-tag": "noindex, nofollow",
-    },
+        frameAncestors: "frame-ancestors 'self'",
+        imgSrc: "data:",
+      }),
+      // Reflects unsaved form state and is scoped to one person's permissions.
+      cacheControl: "no-store",
+    }),
   });
 }
 

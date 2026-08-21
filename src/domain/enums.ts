@@ -494,6 +494,12 @@ export const AUDIT_ENTITY_TYPES = [
   // this stop appearing on our homepage" must not have to read every event
   // about the restaurant to find out.
   "review_widget",
+  // The embedded press widget, and its own subject rather than
+  // `review_widget`. They are two products with two tables, two public id
+  // prefixes, and two different answers to "what appears on our site" — an
+  // auditor filtering on one must not have to read the other's events to find
+  // out which of the two changed.
+  "press_widget",
 ] as const;
 export const auditEntityTypeSchema = vocabulary(AUDIT_ENTITY_TYPES).schema;
 export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>;
@@ -700,6 +706,25 @@ export const AUDIT_EVENT_TYPES = [
   // undone from Lia, and the only one whose blast radius is somebody else's
   // published HTML.
   "review_widget.embed_id_rotated",
+  // The embedded press widget. The same five names as the review widget, and
+  // deliberately the same shape rather than a shared `website_widget.*` set:
+  // the two are separate tables with separate entity ids, and a trail that
+  // could not say which product changed would be answering the wrong question
+  // for whoever is asking.
+  //
+  // Metadata carries widget configuration only — theme, layout, story count,
+  // the selected monitoring query's id, and approved domains. Never a
+  // headline, never an excerpt, never a publisher, and never the keywords
+  // behind the query: the widget publishes the first three and the fourth is
+  // the customer's own competitive information, and neither belongs in a
+  // generic metadata blob that a hundred other events also write to.
+  "press_widget.created",
+  "press_widget.updated",
+  "press_widget.disabled",
+  "press_widget.enabled",
+  // The irreversible one, exactly as for reviews: every snippet already pasted
+  // into a website stops resolving, and Lia cannot know which pages carry it.
+  "press_widget.embed_id_rotated",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
@@ -748,21 +773,48 @@ export const gateRejectionReasonSchema = vocabulary(GATE_REJECTION_REASONS).sche
 export type GateRejectionReason = z.infer<typeof gateRejectionReasonSchema>;
 
 /* -------------------------------------------------------------------------- */
-/* Website review widget                                                       */
+/* Website widgets: the vocabularies both of them share                        */
 /* -------------------------------------------------------------------------- */
 
 /**
- * How the embedded widget looks.
+ * How an embedded widget looks.
  *
  * Two values, and no `auto`. A widget lives inside somebody else's page, where
  * `prefers-color-scheme` describes the *visitor's* operating system and says
  * nothing about the site around it — a light restaurant homepage would render
  * a black card for every visitor who runs their laptop in dark mode. The
  * customer picks, because the customer is the only party who can see the page.
+ *
+ * Source-neutral, and genuinely so: a theme is a fact about the customer's
+ * page, not about whether the thing on it is a review or a news story. The two
+ * widgets keep separate configuration, separate eligibility, and separate
+ * renderers; this is one of the three vocabularies where a shared definition
+ * is the honest one rather than a premature abstraction.
  */
-export const REVIEW_WIDGET_THEMES = ["light", "dark"] as const;
-export const reviewWidgetThemeSchema = vocabulary(REVIEW_WIDGET_THEMES).schema;
-export type ReviewWidgetTheme = z.infer<typeof reviewWidgetThemeSchema>;
+export const WEBSITE_WIDGET_THEMES = ["light", "dark"] as const;
+export const websiteWidgetThemeSchema = vocabulary(WEBSITE_WIDGET_THEMES).schema;
+export type WebsiteWidgetTheme = z.infer<typeof websiteWidgetThemeSchema>;
+
+/**
+ * Whether an embed serves anything at all.
+ *
+ * `disabled` is reversible and keeps the public id, which is what a customer
+ * taking a page down for a week wants. Revocation — making an existing snippet
+ * permanently dead — is rotation of the public id, not a status, because the
+ * two questions ("is it on" and "which id is live") have independent answers.
+ */
+export const WEBSITE_WIDGET_STATUSES = ["active", "disabled"] as const;
+export const websiteWidgetStatusSchema = vocabulary(WEBSITE_WIDGET_STATUSES).schema;
+export type WebsiteWidgetStatus = z.infer<typeof websiteWidgetStatusSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Website review widget                                                       */
+/* -------------------------------------------------------------------------- */
+
+/** The shared theme vocabulary, under the name the review widget uses for it. */
+export const REVIEW_WIDGET_THEMES = WEBSITE_WIDGET_THEMES;
+export const reviewWidgetThemeSchema = websiteWidgetThemeSchema;
+export type ReviewWidgetTheme = WebsiteWidgetTheme;
 
 /**
  * Which arrangement the widget draws.
@@ -785,14 +837,33 @@ export type ReviewWidgetSelectionMode = z.infer<
   typeof reviewWidgetSelectionModeSchema
 >;
 
+/** The shared status vocabulary, under the name the review widget uses for it. */
+export const REVIEW_WIDGET_STATUSES = WEBSITE_WIDGET_STATUSES;
+export const reviewWidgetStatusSchema = websiteWidgetStatusSchema;
+export type ReviewWidgetStatus = WebsiteWidgetStatus;
+
+/* -------------------------------------------------------------------------- */
+/* Website press widget                                                        */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Whether the embed serves a review at all.
+ * Which arrangement the press widget draws.
  *
- * `disabled` is reversible and keeps the public id, which is what a customer
- * taking a page down for a week wants. Revocation — making an existing snippet
- * permanently dead — is rotation of the public id, not a status, because the
- * two questions ("is it on" and "which id is live") have independent answers.
+ * One value, and named for what it is rather than `default`, so the second
+ * entry does not have to explain what the first one silently assumed. A grid,
+ * a carousel, and a single featured story are all plausible second values; the
+ * check constraint on `press_widgets.layout` is the seam any of them arrives
+ * through.
  */
-export const REVIEW_WIDGET_STATUSES = ["active", "disabled"] as const;
-export const reviewWidgetStatusSchema = vocabulary(REVIEW_WIDGET_STATUSES).schema;
-export type ReviewWidgetStatus = z.infer<typeof reviewWidgetStatusSchema>;
+export const PRESS_WIDGET_LAYOUTS = ["recent_press_list"] as const;
+export const pressWidgetLayoutSchema = vocabulary(PRESS_WIDGET_LAYOUTS).schema;
+export type PressWidgetLayout = z.infer<typeof pressWidgetLayoutSchema>;
+
+/** The shared theme and status vocabularies, under the press widget's names. */
+export const PRESS_WIDGET_THEMES = WEBSITE_WIDGET_THEMES;
+export const pressWidgetThemeSchema = websiteWidgetThemeSchema;
+export type PressWidgetTheme = WebsiteWidgetTheme;
+
+export const PRESS_WIDGET_STATUSES = WEBSITE_WIDGET_STATUSES;
+export const pressWidgetStatusSchema = websiteWidgetStatusSchema;
+export type PressWidgetStatus = WebsiteWidgetStatus;

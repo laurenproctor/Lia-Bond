@@ -3,6 +3,8 @@ import type {
   ReviewWidgetTheme,
   ReviewWidgetUnavailableReason,
 } from "@/domain";
+import { escapeHtml } from "@/lib/widgets/html";
+import { WIDGET_KINDS } from "@/lib/widgets/kinds";
 import { widgetReviewDate } from "@/lib/widgets/relative-date";
 
 /**
@@ -34,26 +36,14 @@ import { widgetReviewDate } from "@/lib/widgets/relative-date";
 /* -------------------------------------------------------------------------- */
 
 /**
- * The only way review text reaches the document.
+ * Re-exported rather than defined here.
  *
- * A reviewer's words are attacker-controlled text arriving from a third-party
- * API and being rendered into a page on a customer's own domain. That is the
- * textbook shape of a stored XSS, and the iframe's opaque origin limits the
- * blast radius without removing it — the frame can still be repainted into a
- * convincing phishing surface under the restaurant's branding.
- *
- * Both quote forms are escaped, not just `<` and `&`, because the same helper
- * is used for attribute values (`href`, `title`) as for text nodes. One helper
- * with the strict rule beats two with a note about which to use where.
+ * `escapeHtml` moved to `@/lib/widgets/html` when the press widget arrived and
+ * needed the identical guarantee for a headline. It stays exported from this
+ * module because "the review document's escaper" is how every caller and every
+ * test already refers to it, and because there must visibly be exactly one.
  */
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+export { escapeHtml } from "@/lib/widgets/html";
 
 /* -------------------------------------------------------------------------- */
 /* Palette                                                                     */
@@ -343,7 +333,9 @@ function heightScript(publicId: string): string {
     var height = Math.ceil(el.getBoundingClientRect().height);
     if (height === last || height === 0) return;
     last = height;
-    parent.postMessage({ source: "lia-review-widget", type: "height", id: id, height: height }, "*");
+    parent.postMessage({ source: ${JSON.stringify(
+      WIDGET_KINDS.review.messageSource,
+    )}, type: "height", id: id, height: height }, "*");
   }
   if (typeof ResizeObserver === "function") {
     new ResizeObserver(report).observe(document.documentElement);

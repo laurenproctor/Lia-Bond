@@ -6,11 +6,16 @@ import { isProductPath } from "@/proxy";
  * The sidebar's active state.
  *
  * Worth its own suite from the moment the nav gained a *nested* entry.
- * "Website widgets" lives at `/integrations/review-widget`, beneath
- * "Integrations", and the plain prefix test the module used before that lit up
- * both — which is not a cosmetic problem. The sidebar is the only thing telling
- * somebody which part of the product they are in, and two highlighted items is
- * it saying two contradictory things.
+ * "Website widgets" lives beneath "Integrations", and the plain prefix test
+ * the module used before that lit up both — which is not a cosmetic problem.
+ * The sidebar is the only thing telling somebody which part of the product
+ * they are in, and two highlighted items is it saying two contradictory
+ * things.
+ *
+ * Since the press widget it also claims two routes that are *siblings* of its
+ * own — the two configurators — through `alsoMatches`. That is a second way
+ * for the "exactly one item" invariant to break, so it gets its own cases
+ * below.
  *
  * `isNavItemActive` is pure, so unlike most sidebar behaviour this is genuinely
  * testable rather than something only a browser could catch.
@@ -27,7 +32,18 @@ function activeLabels(pathname: string): string[] {
 describe("the nav table", () => {
   it("lists the website widgets screen", () => {
     const item = ITEMS.find((entry) => entry.label === "Website widgets");
-    expect(item?.href).toBe("/integrations/review-widget");
+    expect(item?.href).toBe("/integrations/website-widgets");
+  });
+
+  it("claims both configurators without owning their URLs", () => {
+    // `/integrations/review-widget` predates the landing route and is in
+    // customers' browser history. It stays where it is; the nav item reaches
+    // it with `alsoMatches` rather than by moving it beneath itself.
+    const item = ITEMS.find((entry) => entry.label === "Website widgets");
+    expect(item?.alsoMatches).toEqual([
+      "/integrations/review-widget",
+      "/integrations/press-widget",
+    ]);
   });
 
   it("has no duplicate hrefs", () => {
@@ -70,11 +86,18 @@ describe("exactly one item is ever active", () => {
 describe("the nested entry", () => {
   it("wins over its parent on its own route", () => {
     // The regression this suite exists for.
-    expect(activeLabels("/integrations/review-widget")).toEqual(["Website widgets"]);
+    expect(activeLabels("/integrations/website-widgets")).toEqual(["Website widgets"]);
   });
 
-  it("keeps winning on a route beneath itself", () => {
-    // The screen selects a location with a search param today, which
+  it.each([
+    "/integrations/review-widget",
+    "/integrations/press-widget",
+  ])("wins on %s, which it claims without owning", (pathname) => {
+    expect(activeLabels(pathname)).toEqual(["Website widgets"]);
+  });
+
+  it("keeps winning on a route beneath a claimed sibling", () => {
+    // The review screen selects a location with a search param today, which
     // `usePathname()` strips before this ever sees it — so the case that
     // matters is a future child segment, which must stay with the widget
     // rather than reverting to the parent.

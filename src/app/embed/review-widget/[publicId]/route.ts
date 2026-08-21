@@ -1,4 +1,5 @@
 import { getDataSource } from "@/lib/data";
+import { widgetDocumentCsp, widgetDocumentHeaders } from "@/lib/widgets/csp";
 import { frameAncestorsDirective } from "@/lib/widgets/domains";
 import { renderReviewWidgetDocument } from "@/lib/widgets/document";
 import { isWidgetPublicIdShaped } from "@/lib/widgets/public-id";
@@ -53,7 +54,7 @@ export async function GET(
   // lookup is — but it turns a mistyped snippet into an immediate answer and
   // keeps an arbitrary URL segment out of the database on the one route that
   // strangers reach.
-  if (!isWidgetPublicIdShaped(publicId)) {
+  if (!isWidgetPublicIdShaped(publicId, "review")) {
     return documentResponse(
       renderReviewWidgetDocument({
         publicId: "",
@@ -99,45 +100,21 @@ function documentResponse(
 ): Response {
   return new Response(html, {
     status: options.status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      // The document's own policy, not the customer's. Three directives, each
-      // closing something this page has no use for:
+    headers: widgetDocumentHeaders({
+      // The document's own policy, not the customer's. Built by the shared
+      // helper so this widget and the press widget cannot drift apart on the
+      // one header that decides what either of them may fetch —
+      // `src/lib/widgets/csp.ts` records what each directive is closing.
       //
-      // - `frame-ancestors` is the domain restriction, and the reason this
-      //   header exists at all.
-      // - `default-src 'none'` with `style-src`/`script-src` set to
-      //   `'unsafe-inline'` describes what the document actually is: inline
-      //   CSS, one inline script, and no external resource of any kind. There
-      //   is no origin it may fetch from, so a reviewer's text that somehow
-      //   escaped escaping still could not reach the network.
-      // - `sandbox` is deliberately NOT set here. The loader sets it on the
-      //   iframe element, where the *embedder* controls it; setting it in a
-      //   response header too would make the frame's origin opaque and break
-      //   the height channel's origin check.
-      "content-security-policy": [
-        "default-src 'none'",
-        "style-src 'unsafe-inline'",
-        "script-src 'unsafe-inline'",
-        "img-src data:",
-        "form-action 'none'",
-        "base-uri 'none'",
-        frameAncestors,
-      ].join("; "),
-      // X-Frame-Options is deliberately absent: it cannot express a list of
-      // origins, and its ALLOW-FROM form was removed from every current
-      // browser. Sending DENY or SAMEORIGIN alongside the policy above would
-      // break the entire feature in the browsers that honour it.
-      "referrer-policy": "no-referrer",
-      "x-content-type-options": "nosniff",
-      "cache-control":
+      // `img-src data:` and nothing else: this document draws its marks as
+      // inline SVG and makes no request of any kind after itself, which is
+      // also why the reviewer's avatar is initials rather than their
+      // `googleusercontent.com` photograph.
+      csp: widgetDocumentCsp({ frameAncestors, imgSrc: "data:" }),
+      cacheControl:
         options.cacheSeconds === 0
           ? "no-store"
           : `public, max-age=0, s-maxage=${options.cacheSeconds}, stale-while-revalidate=300`,
-      // Never indexed. The review is already public on Google; a second
-      // indexable copy on Lia's domain would compete with the customer's own
-      // page for the words in it.
-      "x-robots-tag": "noindex, nofollow",
-    },
+    }),
   });
 }
