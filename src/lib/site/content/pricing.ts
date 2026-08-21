@@ -324,6 +324,30 @@ export function formatBandCostRange(
   return `${min} – ${formatDollars(range.max * months)}`;
 }
 
+/**
+ * `$108 – $500 per month total` — the whole bill for a group in this band.
+ *
+ * The card leads with the per-location rate, which is the figure a reader
+ * compares between tiers; this is the one they take to their finance team. It
+ * is deliberately the smaller line, and it is the only place the graduated
+ * total appears on the card, so the two figures cannot be mistaken for each
+ * other.
+ *
+ * `null` where the band is quoted, and on the monthly face of a band that
+ * holds a single group size — one location at $59 totals $59, and a second
+ * line saying so is the headline again in a smaller font.
+ */
+export function formatBandTotalNote(
+  band: PricingBand,
+  period: BillingPeriod,
+): string | null {
+  const range = bandCostRange(band);
+  if (range === null) return null;
+  if (period === "monthly" && range.min === range.max) return null;
+
+  return `${formatBandCostRange(band, period)} per ${PERIOD_UNIT[period]} total`;
+}
+
 /** How many locations a band covers, for the line under the range. */
 export function formatBandSize(band: PricingBand): string {
   if (band.to === null) return `more than ${LISTED_LOCATION_LIMIT} locations`;
