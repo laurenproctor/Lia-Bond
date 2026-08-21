@@ -461,6 +461,18 @@ resolved for the same reason the review teaser does: the page is shown to every
 member of every organization, including the ones who will never hold
 `website_widget.manage`.
 
+**The review card carries the layout carousel**, so the page shows all three
+arrangements — text, photos, video — rather than only the one a customer can
+publish. It reuses `ReviewWidgetLayoutCarousel` verbatim, which means the two
+media slides automatically carry the note that they cannot be embedded yet: the
+carousel derives that from `SAVABLE_REVIEW_WIDGET_LAYOUTS`, so the day media
+gets a real source and that list widens, the note disappears on its own instead
+of surviving as a lie about a feature that shipped. The carousel opens on the
+text card, which is the arrangement somebody can actually buy.
+
+The press card has no carousel. `recent_press_list` is its only layout, and a
+one-tab carousel would imply a choice nobody has.
+
 The deliberate cost: **this page cannot say "you already have a review
 widget"**. That belongs on the screens that know — the configurators and the
 integrations entry card — and buying the sentence here would cost the page its

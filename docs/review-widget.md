@@ -451,7 +451,8 @@ published it.
 
 ### Three layouts, one at a time
 
-Both preview surfaces are carousels over the layout vocabulary
+All three surfaces that show the widget are carousels over the layout
+vocabulary
 (`src/components/integrations/review-widget-layout-carousel.tsx`). A carousel
 rather than three cards side by side because the widget is wide: three at once
 are three thumbnails, and a thumbnail of a layout is the thing a preview exists

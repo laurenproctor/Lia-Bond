@@ -7,7 +7,11 @@ import { renderPressWidgetDocument } from "@/lib/widgets/press/document";
 import { resolveRenderedPressWidget } from "@/lib/widgets/press/render";
 import { samplePressWidgetRow } from "@/lib/widgets/press/sample";
 import { resolveRenderedWidget } from "@/lib/widgets/render";
-import { SAVABLE_REVIEW_WIDGET_LAYOUTS } from "@/domain";
+import {
+  REVIEW_WIDGET_LAYOUTS,
+  SAVABLE_REVIEW_WIDGET_LAYOUTS,
+  type ReviewWidgetLayout,
+} from "@/domain";
 import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
 
 /**
@@ -65,16 +69,41 @@ describe("the review sample the landing page frames", () => {
     expect(html).toContain('href="https://www.google.com/maps"');
   });
 
-  it("is the text card — the only layout the product can actually embed", () => {
-    // `SAVABLE_REVIEW_WIDGET_LAYOUTS` is narrower than `REVIEW_WIDGET_LAYOUTS`:
-    // the photo and video arrangements render but cannot be saved, because
-    // Google returns no per-review media for them to carry. Putting one on the
-    // landing page would advertise a card no customer can publish, so the
-    // sample URL passes no `layout` and the route's own default is the text
-    // card. Pinned here because that default is one line in a route handler.
+  it("offers all three arrangements, drawn by the shipping renderer", () => {
+    // The card hosts `ReviewWidgetLayoutCarousel`, so the page can show what a
+    // review widget can look like — not only the one arrangement a customer
+    // can publish today.
+    for (const layout of REVIEW_WIDGET_LAYOUTS) {
+      const slide = renderReviewWidgetDocument({
+        publicId: "sample",
+        rendered: resolveRenderedWidget(sampleReviewWidgetRow("light", layout, NOW)),
+        now: NOW,
+      });
+      expect(slide, layout).toContain("<blockquote>");
+    }
+  });
+
+  it("draws media on the two arrangements that have it, and none on the text card", () => {
+    const media = (layout: ReviewWidgetLayout) =>
+      renderReviewWidgetDocument({
+        publicId: "sample",
+        rendered: resolveRenderedWidget(sampleReviewWidgetRow("light", layout, NOW)),
+        now: NOW,
+      }).includes('class="media"');
+
+    expect(media("single_review_text")).toBe(false);
+    expect(media("single_review_photo")).toBe(true);
+    expect(media("single_review_video")).toBe(true);
+  });
+
+  it("still opens on the text card, which is the one a customer can embed", () => {
+    // The carousel starts at index 0 and `REVIEW_WIDGET_LAYOUTS` leads with
+    // the savable one, so the first thing a visitor sees is the product they
+    // can actually buy. Pinned because it is an ordering dependency between
+    // two files and nothing else would notice it changing.
+    expect(REVIEW_WIDGET_LAYOUTS[0]).toBe("single_review_text");
     expect(SAVABLE_REVIEW_WIDGET_LAYOUTS).toEqual(["single_review_text"]);
     expect(html).not.toContain('class="media"');
-    expect(html).not.toContain("<video");
   });
 
   it("renders in the dark theme too, since the card offers the choice", () => {
@@ -177,8 +206,24 @@ describe("the landing page", () => {
     expect(source).not.toMatch(/\.png|\.jpg|\.webp/);
   });
 
-  it("asks for no review layout, so it cannot show an unembeddable one", () => {
-    expect(source).not.toContain("layout=");
+  it("offers the layout carousel on the review card only", () => {
+    // The press widget has exactly one layout — `recent_press_list` — so a
+    // one-tab carousel there would imply a choice nobody has.
+    expect(source).toContain("layouts={{");
+    expect(source.match(/layouts=\{\{/g)).toHaveLength(1);
+  });
+
+  it("never shows a media arrangement without saying it cannot be embedded", () => {
+    // The single most important honesty property on this page: two of the
+    // three arrangements cannot go on a customer's website today, and this is
+    // the screen where somebody decides whether to buy the feature. The
+    // carousel only renders the note when a slide is outside
+    // `SAVABLE_REVIEW_WIDGET_LAYOUTS`, so passing one is what makes the
+    // guarantee structural rather than a rule somebody has to remember.
+    expect(source).toContain("unavailableNote:");
+    const note = source.match(/unavailableNote:\s*"([^"]+)"/)?.[1] ?? "";
+    expect(note.length).toBeGreaterThan(10);
+    expect(note.toLowerCase()).toContain("embed");
   });
 
   it("sends each call to action to its own configurator", () => {

@@ -56,6 +56,20 @@ export default function WebsiteWidgetsPage() {
           ctaLabel="Set up review widget"
           ctaHref="/integrations/review-widget"
           initialHeight={260}
+          // All three arrangements, because "which of these two products do I
+          // want" is partly "what can the review one look like". The note is
+          // the carousel's, shown only on the slides
+          // `SAVABLE_REVIEW_WIDGET_LAYOUTS` excludes — so when media gets a
+          // real source and that list widens, it disappears on its own rather
+          // than surviving as a lie about a feature that shipped.
+          //
+          // Worded for this moment specifically: somebody here is choosing a
+          // product, not looking for a control they already paid for, so it
+          // says what they can have today rather than apologising for a
+          // missing button.
+          layouts={{
+            unavailableNote: "Preview only — text is what you can embed today.",
+          }}
         />
 
         <WebsiteWidgetSampleCard

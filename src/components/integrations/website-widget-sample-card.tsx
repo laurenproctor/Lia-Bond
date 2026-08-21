@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { ArrowRight, Moon, Sun } from "lucide-react";
 import Link from "next/link";
+import { ReviewWidgetLayoutCarousel } from "@/components/integrations/review-widget-layout-carousel";
 import { useWidgetFrameHeight } from "@/components/integrations/use-widget-frame-height";
 import { cn } from "@/lib/cn";
 import type { WebsiteWidgetTheme } from "@/domain";
@@ -29,6 +30,16 @@ import type { WidgetKind } from "@/lib/widgets/kinds";
  * to. It is here because "will this look right on my site" is the second
  * question after "which one is it", and both samples answer it in one click.
  *
+ * **`layouts` adds the arrangement carousel**, which only the review widget
+ * has: three ways of drawing one review, versus one way of drawing a press
+ * list. It reuses `ReviewWidgetLayoutCarousel` verbatim rather than
+ * re-implementing tabs, so this page cannot end up offering a layout the
+ * configuration screen does not — and, more importantly, cannot end up
+ * offering one without the "not embeddable yet" note the carousel derives from
+ * `SAVABLE_REVIEW_WIDGET_LAYOUTS`. Two of the three arrangements cannot be put
+ * on a customer's website today, and a page whose whole job is helping
+ * somebody choose must say so on the slide rather than in a footnote.
+ *
  * The two cards are separate instances of this component rather than two
  * bespoke ones, because they differ only in their copy, their route, and which
  * widget's height messages they listen for — and a page whose two halves were
@@ -47,6 +58,15 @@ export interface WebsiteWidgetSampleCardProps {
   sampleNote: string;
   /** Roughly what the sample measures, so the card does not jump on load. */
   initialHeight: number;
+  /**
+   * Offer the review widget's three arrangements, with the carousel's own
+   * unavailability note.
+   *
+   * Absent on the press card, which has exactly one layout —
+   * `recent_press_list` — and would show a one-tab carousel that implied a
+   * choice nobody has.
+   */
+  layouts?: { unavailableNote: string };
 }
 
 export function WebsiteWidgetSampleCard({
@@ -58,15 +78,11 @@ export function WebsiteWidgetSampleCard({
   ctaHref,
   sampleNote,
   initialHeight,
+  layouts,
 }: WebsiteWidgetSampleCardProps) {
   const [theme, setTheme] = useState<WebsiteWidgetTheme>("light");
-  const frameRef = useRef<HTMLIFrameElement>(null);
-  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef, {
-    kind,
-    initialHeight,
-  });
 
-  const src = `${sampleSrc}${sampleSrc.includes("?") ? "&" : "?"}theme=${theme}`;
+  const base = `${sampleSrc}${sampleSrc.includes("?") ? "&" : "?"}theme=${theme}`;
 
   return (
     <section
@@ -113,33 +129,39 @@ export function WebsiteWidgetSampleCard({
       </div>
 
       {/*
-        The backdrop stands in for the customer's page, as it does in both live
-        previews: a dark card floating on a white product surface reads as a
-        mistake rather than as the option it is.
+        `flex-1` so the two cards stay the same height: a three-story press
+        strip is roughly half again as tall as a review card, and without this
+        the shorter one carries a band of dead space above its call to action.
+        The backdrop moved into `SampleFrame` when the carousel arrived — each
+        slide draws its own, because each slide is its own document.
       */}
-      {/*
-        `flex-1` with the frame centred, rather than a backdrop that hugs its
-        content. The two cards are the same height by design, and the two
-        samples are not — a three-story press strip is roughly half again as
-        tall as a review card. Without this the shorter card carries a band of
-        dead space above its call to action, which reads as a layout bug rather
-        than as the deliberate equal-height row it is.
-      */}
-      <div
-        className={cn(
-          "mt-4 flex flex-1 items-center rounded-xl border p-4 transition-colors",
-          theme === "dark" ? "border-navy-900 bg-navy-950" : "border-gray-200 bg-gray-50",
+      <div className="mt-4 flex flex-1 flex-col justify-center">
+        {layouts ? (
+          <ReviewWidgetLayoutCarousel unavailableNote={layouts.unavailableNote}>
+            {(slide) => (
+              <SampleFrame
+                // Keyed by layout as well as theme so switching slides mounts
+                // a fresh document rather than reusing one measured for a card
+                // of a different height.
+                key={`${slide.layout}-${theme}`}
+                src={`${base}&layout=${slide.layout}`}
+                title={`${title} example, ${slide.label.toLowerCase()}, ${theme} theme`}
+                kind={kind}
+                theme={theme}
+                initialHeight={initialHeight}
+              />
+            )}
+          </ReviewWidgetLayoutCarousel>
+        ) : (
+          <SampleFrame
+            key={base}
+            src={base}
+            title={`${title} example, ${theme} theme`}
+            kind={kind}
+            theme={theme}
+            initialHeight={initialHeight}
+          />
         )}
-      >
-        <iframe
-          ref={frameRef}
-          key={src}
-          src={src}
-          title={`${title} example, ${theme} theme`}
-          onLoad={onFrameLoad}
-          className="block w-full self-center border-0"
-          style={{ height }}
-        />
       </div>
 
       {/*
@@ -163,5 +185,54 @@ export function WebsiteWidgetSampleCard({
         </Link>
       </div>
     </section>
+  );
+}
+
+/**
+ * One framed sample, and the page it is pretending to sit on.
+ *
+ * Its own component because each slide needs its own ref and its own height
+ * subscription: the carousel mounts one slide at a time, and a hook owned by
+ * the card would keep the height of whichever document measured last. The same
+ * reason `PreviewFrame` exists in `review-widget-preview.tsx`.
+ *
+ * The backdrop is part of the sample, not decoration. A dark card floating on
+ * a white product surface reads as a mistake rather than as the option it is.
+ */
+function SampleFrame({
+  src,
+  title,
+  kind,
+  theme,
+  initialHeight,
+}: {
+  src: string;
+  title: string;
+  kind: WidgetKind;
+  theme: WebsiteWidgetTheme;
+  initialHeight: number;
+}) {
+  const frameRef: RefObject<HTMLIFrameElement | null> = useRef<HTMLIFrameElement>(null);
+  const { height, onFrameLoad } = useWidgetFrameHeight(frameRef, {
+    kind,
+    initialHeight,
+  });
+
+  return (
+    <div
+      className={cn(
+        "rounded-xl border p-4 transition-colors",
+        theme === "dark" ? "border-navy-900 bg-navy-950" : "border-gray-200 bg-gray-50",
+      )}
+    >
+      <iframe
+        ref={frameRef}
+        src={src}
+        title={title}
+        onLoad={onFrameLoad}
+        className="block w-full border-0"
+        style={{ height }}
+      />
+    </div>
   );
 }
