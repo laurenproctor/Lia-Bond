@@ -7,6 +7,7 @@ import { renderReviewWidgetDocument } from "@/lib/widgets/document";
 import { parsePreviewRequest, resolvePreviewRow } from "@/lib/widgets/preview";
 import { resolveRenderedWidget } from "@/lib/widgets/render";
 import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
+import { reviewWidgetLayoutSchema, type ReviewWidgetLayout } from "@/domain";
 
 /**
  * The in-app preview frame.
@@ -40,8 +41,10 @@ import { sampleReviewWidgetRow } from "@/lib/widgets/sample";
  * **`?sample=1` is the one branch that is none of the above.** It renders an
  * invented review (`@/lib/widgets/sample`) for the teaser on the
  * configuration screen's empty state, and it reads no tenant data at all — no
- * location id, no mention, no profile. So it answers before the organization
- * context is resolved, deliberately: the empty state is shown to every member
+ * location id, no mention, no profile. It also takes `?layout=`, and is the
+ * only path that accepts the photo and video values: they have no data on a
+ * real location, because Google supplies none. So it answers before the
+ * organization context is resolved, deliberately: the empty state is shown to every member
  * of an organization with no locations yet, including the ones who will never
  * hold `review_widget.manage`, and gating a fixed string of fiction behind a
  * permission check on data it never touches would blank the frame for them
@@ -63,10 +66,15 @@ export async function GET(request: Request): Promise<Response> {
           // so a frame in a server log says which of the two it was.
           publicId: "sample",
           rendered: resolveRenderedWidget(
-            // Compared rather than parsed: the sample takes exactly one input
-            // and the honest answer to any other value is the light card, not
-            // a validation error inside a teaser.
-            sampleReviewWidgetRow(params.get("theme") === "dark" ? "dark" : "light", now),
+            // Read leniently rather than parsed strictly: the sample takes two
+            // presentational inputs and the honest answer to a value neither
+            // recognises is the default card, not a validation error inside a
+            // teaser. Nothing here reaches a database or a tenant.
+            sampleReviewWidgetRow(
+              params.get("theme") === "dark" ? "dark" : "light",
+              sampleLayout(params.get("layout")),
+              now,
+            ),
           ),
           now,
         }),
@@ -117,6 +125,18 @@ export async function GET(request: Request): Promise<Response> {
   }
 }
 
+/**
+ * Which of the three layouts the sample draws.
+ *
+ * The full render vocabulary, not the savable one: the whole point of the
+ * sample branch is to draw the two layouts a customer cannot yet save, and
+ * narrowing here would make the carousel show the same text card three times.
+ */
+function sampleLayout(value: string | null): ReviewWidgetLayout {
+  const parsed = reviewWidgetLayoutSchema.safeParse(value);
+  return parsed.success ? parsed.data : "single_review_text";
+}
+
 function document(html: string, status: number): Response {
   return new Response(html, {
     status,
@@ -126,7 +146,15 @@ function document(html: string, status: number): Response {
         "default-src 'none'",
         "style-src 'unsafe-inline'",
         "script-src 'unsafe-inline'",
-        "img-src data:",
+        // Lia's own origin and inline data, and nothing else. `data:` is how
+        // the sample cards carry their pictures; `'self'` is where a
+        // customer's uploaded media would live. A third-party host is
+        // deliberately unreachable — the widget adding a request to
+        // googleusercontent.com or a CDN is the thing a consent banner has an
+        // opinion about, and the reason the reviewer's avatar is initials.
+        "img-src 'self' data:",
+        // Same reasoning, for the video layout's clip.
+        "media-src 'self' data:",
         "form-action 'none'",
         "base-uri 'none'",
         // Lia's own screens only. The public document opens this up to the

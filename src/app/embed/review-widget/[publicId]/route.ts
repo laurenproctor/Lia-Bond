@@ -119,7 +119,15 @@ function documentResponse(
         "default-src 'none'",
         "style-src 'unsafe-inline'",
         "script-src 'unsafe-inline'",
-        "img-src data:",
+        // Lia's own origin and inline data, and nothing else. `data:` is how
+        // the sample cards carry their pictures; `'self'` is where a
+        // customer's uploaded media would live. A third-party host is
+        // deliberately unreachable — the widget adding a request to
+        // googleusercontent.com or a CDN is the thing a consent banner has an
+        // opinion about, and the reason the reviewer's avatar is initials.
+        "img-src 'self' data:",
+        // Same reasoning, for the video layout's clip.
+        "media-src 'self' data:",
         "form-action 'none'",
         "base-uri 'none'",
         frameAncestors,

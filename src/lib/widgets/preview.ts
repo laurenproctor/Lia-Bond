@@ -134,6 +134,12 @@ export async function resolvePreviewRow(
     reviewAuthorName: chosen?.authorName ?? null,
     reviewPublishedAt: chosen?.publishedAt ?? null,
     profileUrl: profile?.profileUrl ?? null,
+    // A live preview shows a real location's real review, and Lia holds no
+    // media for one. The photo and video layouts are previewed from
+    // `@/lib/widgets/sample` instead, on the sample branch of the preview
+    // route — pairing invented photographs with a customer's genuine review
+    // is the one arrangement that could be mistaken for a promise.
+    media: null,
   };
 }
 
