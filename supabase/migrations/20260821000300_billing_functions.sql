@@ -581,7 +581,10 @@ begin
   )
   values (
     p_organization_id, p_actor_user_id,
-    case when p_actor_user_id is null then 'system' else 'user' end,
+    -- Cast explicitly: a CASE resolves to `text`, and the column is the
+    -- `actor_type` enum. Postgres coerces a bare literal but not an
+    -- expression, so without this the operator paths fail at runtime.
+    (case when p_actor_user_id is null then 'system' else 'user' end)::actor_type,
     'billing.trial_granted', 'organization_billing', p_organization_id,
     jsonb_build_object('trialEligible', false),
     jsonb_build_object('trialEligible', true),
@@ -636,7 +639,10 @@ begin
   )
   values (
     p_organization_id, p_actor_user_id,
-    case when p_actor_user_id is null then 'system' else 'user' end,
+    -- Cast explicitly: a CASE resolves to `text`, and the column is the
+    -- `actor_type` enum. Postgres coerces a bare literal but not an
+    -- expression, so without this the operator paths fail at runtime.
+    (case when p_actor_user_id is null then 'system' else 'user' end)::actor_type,
     'billing.access_disposition_set', 'organization_billing', p_organization_id,
     jsonb_build_object('accessDisposition', before_disposition),
     jsonb_build_object('accessDisposition', after_row.access_disposition),
@@ -658,8 +664,22 @@ comment on function public.set_billing_access_disposition is
 --
 -- `security definer` means these run as the owner, so the revoke is what stops
 -- an authenticated caller invoking them directly through PostgREST and writing
--- rows the RLS in 20260821000200 refuses. The same posture
--- 20260807000600 took for the OAuth helpers.
+-- rows the RLS in 20260821000200 refuses. Without it, any holder of the anon
+-- key could call apply_stripe_billing_projection and grant their own
+-- organization a subscription.
+--
+-- **`public` is in every revoke list below, and it is the one that actually
+-- matters.** Postgres attaches an implicit EXECUTE grant to PUBLIC on every
+-- new function, and Supabase's project bootstrap adds a second, explicit
+-- grant to anon and authenticated through `alter default privileges`.
+-- Revoking only the latter pair leaves the PUBLIC grant in place and the
+-- function still callable — `has_function_privilege('authenticated', ...)`
+-- keeps returning true, because it resolves through PUBLIC.
+--
+-- 20260807000600 is the same gap found in the OAuth helpers, and
+-- supabase/tests/billing-verification.sql section 6 is what caught it here:
+-- the first draft of this file revoked from `authenticated, anon` only, and
+-- the harness failed on exactly that.
 -- ---------------------------------------------------------------------------
 
 -- `count_billable_locations` is revoked too, even though it only counts rows.
@@ -668,11 +688,11 @@ comment on function public.set_billing_access_disposition is
 -- leak, but a leak of exactly the kind RLS exists to prevent. The trigger calls
 -- it as the owner; the application counts through an ordinary RLS-protected
 -- select instead.
-revoke execute on function public.count_billable_locations(uuid) from authenticated, anon;
-revoke execute on function public.claim_stripe_webhook_event(text, text, text, boolean, timestamptz) from authenticated, anon;
-revoke execute on function public.finish_stripe_webhook_event(text, text, text) from authenticated, anon;
-revoke execute on function public.bind_billing_customer(uuid, text) from authenticated, anon;
-revoke execute on function public.apply_stripe_billing_projection(uuid, text, text, text, text, text, text, integer, timestamptz, timestamptz, boolean, timestamptz, timestamptz, text, text, actor_type) from authenticated, anon;
-revoke execute on function public.record_billing_payment(uuid, boolean, timestamptz, boolean, text) from authenticated, anon;
-revoke execute on function public.grant_billing_trial(uuid, text, uuid, text) from authenticated, anon;
-revoke execute on function public.set_billing_access_disposition(uuid, text, timestamptz, text, uuid) from authenticated, anon;
+revoke execute on function public.count_billable_locations(uuid) from public, authenticated, anon;
+revoke execute on function public.claim_stripe_webhook_event(text, text, text, boolean, timestamptz) from public, authenticated, anon;
+revoke execute on function public.finish_stripe_webhook_event(text, text, text) from public, authenticated, anon;
+revoke execute on function public.bind_billing_customer(uuid, text) from public, authenticated, anon;
+revoke execute on function public.apply_stripe_billing_projection(uuid, text, text, text, text, text, text, integer, timestamptz, timestamptz, boolean, timestamptz, timestamptz, text, text, actor_type) from public, authenticated, anon;
+revoke execute on function public.record_billing_payment(uuid, boolean, timestamptz, boolean, text) from public, authenticated, anon;
+revoke execute on function public.grant_billing_trial(uuid, text, uuid, text) from public, authenticated, anon;
+revoke execute on function public.set_billing_access_disposition(uuid, text, timestamptz, text, uuid) from public, authenticated, anon;
