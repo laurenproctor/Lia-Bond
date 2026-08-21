@@ -72,6 +72,32 @@ function put(row: OrganizationBilling): OrganizationBilling {
   return next;
 }
 
+/**
+ * Close out the event that caused this write, in the same breath as the write.
+ *
+ * The Supabase adapter gets this from `apply_stripe_billing_projection`, which
+ * marks the event processed inside the same transaction as the projection —
+ * the whole reason those functions exist (D17). Nothing here is transactional,
+ * but the *sequence* has to match, because a demo run that left an event in
+ * `processing` after a successful projection would report `in_progress` on the
+ * next delivery and make a duplicate look like a race. That is precisely what
+ * `tests/billing-webhook.test.ts` caught when this was missing.
+ */
+function closeEvent(stripeEventId: string | null): void {
+  if (!stripeEventId) return;
+  const events = runtime().webhookEvents;
+  const existing = events.get(stripeEventId);
+  if (!existing) return;
+
+  events.set(stripeEventId, {
+    ...existing,
+    status: "processed",
+    errorCategory: null,
+    processedAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+}
+
 const LIVE_STATUSES = new Set([
   "trialing",
   "active",
@@ -127,7 +153,7 @@ export function createDemoBillingRepository(): BillingRepository {
         trialStartedAt !== null &&
         existing.trialConvertedAt === null;
 
-      return put({
+      const projected = put({
         ...existing,
         stripeCustomerId: input.customerId ?? existing.stripeCustomerId,
         stripeSubscriptionId: input.subscriptionId,
@@ -152,13 +178,16 @@ export function createDemoBillingRepository(): BillingRepository {
           ? (existing.trialCanceledAt ?? nowIso())
           : existing.trialCanceledAt,
       });
+
+      closeEvent(input.stripeEventId);
+      return projected;
     },
 
     async recordPayment(input: RecordBillingPaymentInput) {
       const existing = runtime().billing.get(input.organizationId);
       if (!existing) throw notFound("Billing record");
 
-      return put({
+      const recorded = put({
         ...existing,
         lastPaidAt: input.paid ? input.occurredAt : existing.lastPaidAt,
         lastPaymentFailureAt: input.paid
@@ -173,6 +202,9 @@ export function createDemoBillingRepository(): BillingRepository {
             ? (existing.trialConvertedAt ?? input.occurredAt)
             : existing.trialConvertedAt,
       });
+
+      closeEvent(input.stripeEventId);
+      return recorded;
     },
 
     async countBillableLocations(scope: OrganizationScope) {
