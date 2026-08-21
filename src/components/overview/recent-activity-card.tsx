@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   ChevronRight,
   Code2,
+  CreditCard,
   MessagesSquare,
   Newspaper,
   PencilLine,
@@ -39,6 +40,7 @@ const ENTITY_ICONS: Record<AuditEntityType, LucideIcon> = {
   reddit_community_posture: ShieldAlert,
   response_publication_attempt: Send,
   review_widget: Code2,
+  organization_billing: CreditCard,
 };
 
 const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
@@ -67,6 +69,12 @@ const ENTITY_TONES: Record<AuditEntityType, TimelineTone> = {
   // attention. The one act that does — regenerating the embed code — is
   // guarded by a confirmation where it happens, not by a colour here.
   review_widget: "neutral",
+  // Neutral by default, and deliberately so even for a failed payment. This
+  // card is a history of what happened, not the place a billing problem gets
+  // raised — that is the shell banner and the billing page, both of which say
+  // it in words. Colouring a past `billing.payment_failed` red here would keep
+  // shouting about a card that was fixed weeks ago.
+  organization_billing: "neutral",
 };
 
 export interface RecentActivityCardProps {

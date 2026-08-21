@@ -41,6 +41,7 @@ export const PERMISSIONS = [
   "monitoring.manage_queries",
   "monitoring.poll_now",
   "review_widget.manage",
+  "billing.manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -281,6 +282,38 @@ const PERMISSION_MATRIX: Record<Permission, readonly MembershipRole[]> = {
   //
   // Analysts and viewers are absent for the ordinary reason: they read.
   "review_widget.manage": ["owner", "admin", "communications_lead"],
+  // Starting Checkout, opening Stripe's hosted portal, and changing purchased
+  // location capacity.
+  //
+  // Owners **and** admins, not owners alone, and this is the row in the table
+  // most likely to be questioned — so the argument, rather than the intuition.
+  //
+  // The intuition says money is the owner's alone. The operational reality is
+  // that when a card is declined the product slides to read-only for everyone,
+  // and the person who can fix it is whoever is at a desk. Making this
+  // owner-only means a single offboarded, unavailable, or asleep owner is a
+  // company that cannot pay its bill — the same judgement `response.retract`
+  // records, where minutes mattered more than authority.
+  //
+  // It is also consistent rather than novel: nothing in this table is
+  // owner-only today. `organization.update`, `organization.manage_members`,
+  // and `onboarding.manage` are each at least as consequential — the last one
+  // decides what the whole organization sees on sign-in — and all three are
+  // owner-and-admin. An owner-only row here would be the first, and it should
+  // not be introduced by accident.
+  //
+  // What bounds the risk is not the role list. It is that this permission
+  // cannot spend money on its own: Checkout collects a card on Stripe's page,
+  // capacity changes are previewed with the exact figure before confirmation,
+  // and every one of them is audited. Communications leads and approvers are
+  // absent because none of that is their job; analysts and viewers because
+  // they read.
+  //
+  // Not restated in row-level security, and that is deliberate rather than an
+  // omission: `organization_billing` grants no session any write at all
+  // (20260821000200), so there is no policy for this list to narrow. The
+  // database is stricter than this row, not looser.
+  "billing.manage": ["owner", "admin"],
 };
 
 export function can(role: MembershipRole, permission: Permission): boolean {

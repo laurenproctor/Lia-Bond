@@ -349,6 +349,22 @@ export const AUDIT_EVENT_LABELS: Record<AuditEventType, string> = {
   "review_widget.disabled": "Website widget switched off",
   "review_widget.enabled": "Website widget switched on",
   "review_widget.embed_id_rotated": "Website widget embed code regenerated",
+  "billing.checkout_started": "Checkout started",
+  "billing.trial_started": "Trial started",
+  "billing.trial_canceled": "Trial cancelled",
+  "billing.trial_converted": "Trial converted to a paid subscription",
+  "billing.trial_expired": "Trial expired",
+  "billing.trial_granted": "Trial granted",
+  "billing.subscription_activated": "Subscription activated",
+  "billing.subscription_updated": "Subscription updated",
+  "billing.subscription_ended": "Subscription ended",
+  "billing.cancellation_scheduled": "Cancellation scheduled",
+  "billing.capacity_changed": "Location capacity changed",
+  "billing.payment_failed": "Payment failed",
+  "billing.payment_recovered": "Payment recovered",
+  "billing.portal_opened": "Billing portal opened",
+  "billing.access_disposition_set": "Billing access changed",
+  "billing.projection_drift_detected": "Billing record corrected against Stripe",
 };
 
 /** Sync-run outcomes, as a person would describe them. */

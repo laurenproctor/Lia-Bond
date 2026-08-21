@@ -494,6 +494,13 @@ export const AUDIT_ENTITY_TYPES = [
   // this stop appearing on our homepage" must not have to read every event
   // about the restaurant to find out.
   "review_widget",
+  // Billing. Its own subject rather than `organization`, and the distinction
+  // is the one an auditor actually needs: "what happened to this company"
+  // and "what happened to what this company pays" are different questions,
+  // and the second one is the one somebody asks with a lawyer present. The
+  // entity id is the organization id — the table is keyed on it — but the
+  // subject is the billing relationship, not the tenant.
+  "organization_billing",
 ] as const;
 export const auditEntityTypeSchema = vocabulary(AUDIT_ENTITY_TYPES).schema;
 export type AuditEntityType = z.infer<typeof auditEntityTypeSchema>;
@@ -700,6 +707,59 @@ export const AUDIT_EVENT_TYPES = [
   // undone from Lia, and the only one whose blast radius is somebody else's
   // published HTML.
   "review_widget.embed_id_rotated",
+  // Billing.
+  //
+  // Every one of these is written from a verified Stripe webhook or an
+  // authorized operator action, never from a browser round trip, and the
+  // actor type says which: `integration` for Stripe, `system` for the
+  // reconciliation job, `user` only where a person pressed something in Lia.
+  //
+  // **No event here may carry a card number, a bank detail, a payment-method
+  // payload, a Stripe secret, or a provider error message.** Metadata carries
+  // Lia-authored words from closed vocabularies, Stripe object ids, amounts in
+  // cents, and counts. That is the same rule the Anthropic and GNews paths
+  // already keep, applied to the one integration where breaking it would be a
+  // compliance incident rather than an embarrassment.
+  "billing.checkout_started",
+  // The trial lifecycle, spelled out rather than collapsed into one
+  // `billing.trial_changed`. Each of these is a different commercial fact and
+  // somebody will one day count them separately: how many trials started, how
+  // many were abandoned before the charge, how many converted.
+  "billing.trial_started",
+  "billing.trial_canceled",
+  "billing.trial_converted",
+  "billing.trial_expired",
+  // An authorized operator granting or extending a trial by hand. Deliberately
+  // not the same name as `billing.trial_started`: one is a customer taking an
+  // offer the product made, the other is a person deciding to make one, and
+  // the difference is the whole point of auditing it. Metadata names the
+  // operator and the grant source.
+  "billing.trial_granted",
+  "billing.subscription_activated",
+  "billing.subscription_updated",
+  "billing.subscription_ended",
+  // Scheduled, not yet ended. Kept apart from `subscription_ended` because a
+  // customer who cancelled in March for a subscription that runs to December
+  // is a retention question in March, and a support question in December.
+  "billing.cancellation_scheduled",
+  // Purchased location capacity moved. Metadata carries the before and after
+  // quantity and which side asked for it.
+  "billing.capacity_changed",
+  "billing.payment_failed",
+  "billing.payment_recovered",
+  // A person opened Stripe's hosted portal. Recorded because everything that
+  // happens inside it is invisible to Lia until a webhook arrives, so this is
+  // the only entry that ties a later subscription change back to whoever went
+  // looking for it.
+  "billing.portal_opened",
+  // Complimentary, grandfathered, internal, or sales-managed access being set
+  // or cleared. The brief's requirement that free access be explicit,
+  // auditable, and explainable is this row.
+  "billing.access_disposition_set",
+  // The reconciliation job found Lia's projection disagreeing with Stripe.
+  // Written even when the job repairs it, because a projection that drifted
+  // once will drift again and the pattern is the diagnosis.
+  "billing.projection_drift_detected",
 ] as const;
 export const auditEventTypeSchema = vocabulary(AUDIT_EVENT_TYPES).schema;
 export type AuditEventType = z.infer<typeof auditEventTypeSchema>;
@@ -833,3 +893,208 @@ export type ReviewWidgetSelectionMode = z.infer<
 export const REVIEW_WIDGET_STATUSES = ["active", "disabled"] as const;
 export const reviewWidgetStatusSchema = vocabulary(REVIEW_WIDGET_STATUSES).schema;
 export type ReviewWidgetStatus = z.infer<typeof reviewWidgetStatusSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Billing                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Stripe's subscription statuses, mirrored exactly.
+ *
+ * Lia does not invent, rename, or collapse any of them. That is deliberate and
+ * it is the whole posture of this feature: Stripe owns what a subscription
+ * *is*, Lia owns what an organization may *do*, and the translation between
+ * the two happens in one pure function (`resolveEntitlement`) rather than
+ * being smuggled into the vocabulary.
+ *
+ * Collapsing `past_due` and `unpaid` would be the tempting one — both mean a
+ * payment did not land — and it would be wrong. `past_due` means Stripe is
+ * still retrying and the customer keeps working; `unpaid` means it has given
+ * up and access stops. Same cause, opposite answers.
+ *
+ * Check-constrained text in the database rather than a Postgres enum, for the
+ * reason the Reddit and Yelp schemas recorded: an enum value cannot be
+ * dropped, and this list belongs to somebody else's API.
+ */
+export const SUBSCRIPTION_STATUSES = [
+  "trialing",
+  "active",
+  "past_due",
+  "incomplete",
+  "incomplete_expired",
+  "unpaid",
+  "canceled",
+  "paused",
+] as const;
+export const subscriptionStatusSchema = vocabulary(SUBSCRIPTION_STATUSES).schema;
+export type SubscriptionStatus = z.infer<typeof subscriptionStatusSchema>;
+
+/**
+ * How often the subscription bills.
+ *
+ * Stripe's own words (`month`, `year`), not Lia's (`monthly`, `annual`). The
+ * marketing site uses the second pair and always has — `BillingPeriod` in
+ * `@/lib/pricing/schedule`. Keeping them as two vocabularies with an explicit
+ * mapping is the smaller evil: this one is written by a webhook projecting a
+ * Stripe object, and silently rewriting a provider's value on the way into the
+ * database is how a column stops meaning what its source means.
+ */
+export const BILLING_INTERVALS = ["month", "year"] as const;
+export const billingIntervalSchema = vocabulary(BILLING_INTERVALS).schema;
+export type BillingInterval = z.infer<typeof billingIntervalSchema>;
+
+/**
+ * Who decided this organization gets a trial.
+ *
+ * Recorded on the row rather than left to the audit trail alone, because
+ * "can this organization have another trial" is a question the Checkout action
+ * asks on every call, and a query that has to read the trail to answer it
+ * would be one join away from being skipped.
+ */
+export const TRIAL_GRANT_SOURCES = ["self_service", "operator", "sales"] as const;
+export const trialGrantSourceSchema = vocabulary(TRIAL_GRANT_SOURCES).schema;
+export type TrialGrantSource = z.infer<typeof trialGrantSourceSchema>;
+
+/**
+ * Why an organization has access it is not paying for.
+ *
+ * `standard` is the ordinary case and means nothing special is going on:
+ * entitlement comes from the subscription, or from nowhere. The other four
+ * exist so that free access is never a silent absence of a row — the brief's
+ * requirement that complimentary access be explicit, auditable, explainable,
+ * and optionally time-limited is enforced by this column plus
+ * `access_disposition_expires_at`.
+ *
+ * `internal` is Lia's own organizations and the demo dataset. `grandfathered`
+ * is for organizations that predate billing and carries an expiry.
+ * `sales_managed` means an invoice exists outside Stripe Checkout.
+ */
+export const ACCESS_DISPOSITIONS = [
+  "standard",
+  "internal",
+  "complimentary",
+  "grandfathered",
+  "sales_managed",
+] as const;
+export const accessDispositionSchema = vocabulary(ACCESS_DISPOSITIONS).schema;
+export type AccessDisposition = z.infer<typeof accessDispositionSchema>;
+
+/**
+ * What an organization may do right now.
+ *
+ * Three values, and the middle one is the one that matters. A failed payment
+ * must not read the same as an expired trial: one is a customer who wants to
+ * keep paying and hit a declined card, the other is somebody who decided not
+ * to buy. Collapsing them into a boolean would make the product treat the
+ * first like the second, which is how you lose a customer over an expired
+ * card.
+ */
+export const ENTITLEMENT_ACCESS = ["full", "full_with_warning", "read_only"] as const;
+export const entitlementAccessSchema = vocabulary(ENTITLEMENT_ACCESS).schema;
+export type EntitlementAccess = z.infer<typeof entitlementAccessSchema>;
+
+/**
+ * Why the entitlement is what it is.
+ *
+ * Closed, because every one of these is rendered as a sentence to a customer
+ * and an unlisted reason would be a screen with nothing on it. The banner, the
+ * billing page, and the refusal message on a blocked action all switch on this
+ * and nothing else.
+ */
+export const ENTITLEMENT_REASONS = [
+  /** No subscription, and enforcement is not switched on for this organization. */
+  "unbilled_not_enforced",
+  /** No subscription, and enforcement is on. */
+  "no_subscription",
+  "trialing",
+  "active",
+  "payment_past_due",
+  "billing_setup_incomplete",
+  "billing_setup_expired",
+  "payment_unpaid",
+  "trial_canceled",
+  "trial_expired",
+  "subscription_canceled",
+  /** Cancelled, but the period already paid for has not ended yet. */
+  "canceled_paid_through",
+  "subscription_paused",
+  /** Access granted by disposition rather than by payment. */
+  "complimentary",
+] as const;
+export const entitlementReasonSchema = vocabulary(ENTITLEMENT_REASONS).schema;
+export type EntitlementReason = z.infer<typeof entitlementReasonSchema>;
+
+/**
+ * Where one Stripe event is in Lia's processing.
+ *
+ * `ignored` is not a failure: a verified event of a type Lia does not handle
+ * is a successful outcome, and recording it as such is what keeps the failure
+ * count meaningful. Without it, every unhandled type would either look like an
+ * error or leave no trace at all, and the first is noise while the second
+ * makes "did we ever receive that" unanswerable.
+ */
+export const WEBHOOK_PROCESSING_STATUSES = [
+  "received",
+  "processing",
+  "processed",
+  "failed",
+  "ignored",
+] as const;
+export const webhookProcessingStatusSchema = vocabulary(
+  WEBHOOK_PROCESSING_STATUSES,
+).schema;
+export type WebhookProcessingStatus = z.infer<
+  typeof webhookProcessingStatusSchema
+>;
+
+/**
+ * Why processing an event failed — Lia's word for it, never Stripe's.
+ *
+ * The stored value is one of these and nothing else. A driver message can
+ * quote a connection string and a Stripe error can quote a request URL, so
+ * neither is ever written to this table, logged, or returned. The same rule
+ * `news_poll_runs.errorMessage` already keeps.
+ *
+ * Each one implies a different response, which is why there are eight rather
+ * than one: `signature` is an attack or a misconfigured secret,
+ * `mode_mismatch` is a sandbox key pointed at live data, `unmatched_customer`
+ * is a Stripe object Lia has never heard of, `organization_mismatch` is
+ * metadata disagreeing with the customer mapping and is the one that means
+ * somebody may be trying something, and `duplicate_subscription` is the
+ * invariant that an organization has exactly one.
+ */
+export const WEBHOOK_ERROR_CATEGORIES = [
+  "signature",
+  "mode_mismatch",
+  "unmatched_customer",
+  "unmatched_subscription",
+  "organization_mismatch",
+  "duplicate_subscription",
+  "stripe_api_error",
+  "database_error",
+  "unhandled",
+] as const;
+export const webhookErrorCategorySchema = vocabulary(
+  WEBHOOK_ERROR_CATEGORIES,
+).schema;
+export type WebhookErrorCategory = z.infer<typeof webhookErrorCategorySchema>;
+
+/**
+ * Subscription statuses that mean an organization already has one.
+ *
+ * The guard the Checkout action reads before creating a session: an
+ * organization in any of these states must not be able to start a second
+ * subscription. `canceled`, `incomplete_expired`, and `unpaid` are absent
+ * because all three are terminal — buying again is exactly what those
+ * customers should be able to do.
+ */
+export const LIVE_SUBSCRIPTION_STATUSES: readonly SubscriptionStatus[] = [
+  "trialing",
+  "active",
+  "past_due",
+  "incomplete",
+  "paused",
+];
+
+/** How many days a self-service trial runs. Stated once, read everywhere. */
+export const TRIAL_PERIOD_DAYS = 14;
