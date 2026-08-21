@@ -449,6 +449,34 @@ select pg_temp.check(
   'the billable count function is not callable with an arbitrary organization id'
 );
 
+-- Enumerated rather than sampled, and that is the point. The three checks
+-- above name three functions, which is why the fourth -- the capacity trigger
+-- function -- kept its PUBLIC grant through the first hosted push without
+-- anything here noticing. This asks the question of every definer function in
+-- the billing set at once, so a tenth one added later cannot slip past by not
+-- being on a list.
+select pg_temp.check(
+  not exists (
+    select 1
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.prosecdef
+      and p.proname in (
+        'apply_stripe_billing_projection', 'record_billing_payment',
+        'claim_stripe_webhook_event', 'finish_stripe_webhook_event',
+        'bind_billing_customer', 'grant_billing_trial',
+        'set_billing_access_disposition', 'count_billable_locations',
+        'enforce_location_capacity'
+      )
+      and (
+        has_function_privilege('authenticated', p.oid, 'EXECUTE')
+        or has_function_privilege('anon', p.oid, 'EXECUTE')
+      )
+  ),
+  'no billing definer function is executable by any session role'
+);
+
 select pg_temp.check(
   (select relrowsecurity from pg_class where oid = 'public.organization_billing'::regclass)
   and (select relrowsecurity from pg_class where oid = 'public.stripe_webhook_events'::regclass),
