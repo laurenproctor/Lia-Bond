@@ -1,4 +1,11 @@
 import type {
+  AccessDisposition,
+  BillingInterval,
+  OrganizationBilling,
+  StripeWebhookEvent,
+  SubscriptionStatus,
+  TrialGrantSource,
+  WebhookErrorCategory,
   AnalysisRun,
   Approval,
   AuditEvent,
@@ -1487,6 +1494,124 @@ export interface ReviewWidgetRepository {
   render(publicId: string): Promise<ReviewWidgetRenderRow | null>;
 }
 
+/** What `apply_stripe_billing_projection` needs. Mirrors CanonicalSubscription. */
+export interface ApplyBillingProjectionInput {
+  organizationId: string;
+  customerId: string | null;
+  subscriptionId: string | null;
+  itemId: string | null;
+  priceId: string | null;
+  interval: BillingInterval | null;
+  status: SubscriptionStatus | null;
+  quantity: number | null;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  trialStart: string | null;
+  trialEnd: string | null;
+  trialGrantSource: TrialGrantSource | null;
+  /** The Stripe event this came from, marked processed in the same transaction. */
+  stripeEventId: string | null;
+}
+
+export interface RecordBillingPaymentInput {
+  organizationId: string;
+  paid: boolean;
+  occurredAt: string;
+  /** Whether this is the subscription's first charge, decided by the service. */
+  isFirstCharge: boolean;
+  stripeEventId: string | null;
+}
+
+export interface ClaimWebhookEventInput {
+  stripeEventId: string;
+  eventType: string;
+  stripeObjectId: string | null;
+  livemode: boolean;
+  stripeCreatedAt: string;
+}
+
+/**
+ * What claiming an event decided.
+ *
+ * Three outcomes rather than a boolean, because each needs a different HTTP
+ * response: process it, acknowledge a duplicate with 200 so Stripe stops
+ * retrying, or refuse with 409 so Stripe retries after whoever holds it is
+ * done.
+ */
+export type WebhookClaim = "claimed" | "already_processed" | "in_progress";
+
+/**
+ * One organization's billing projection.
+ *
+ * Reads are organization-scoped like every other repository. Writes are not,
+ * and cannot be: they arrive from a webhook that has no session, so they take
+ * an explicit organization id resolved from the Stripe customer rather than an
+ * `OrganizationScope` there is nobody to build (D88). Every write method here
+ * is reachable only from the service-role data source.
+ */
+export interface BillingRepository {
+  /** Null when the organization has never reached billing. Absence fails open. */
+  get(scope: OrganizationScope): Promise<OrganizationBilling | null>;
+
+  /**
+   * The tenant a Stripe customer belongs to.
+   *
+   * The webhook's only tenant lookup. Deliberately keyed on the customer id
+   * rather than on event metadata: metadata is correlation, and a lookup
+   * through it would make a forged or mistaken metadata field authoritative.
+   */
+  findByCustomerId(customerId: string): Promise<OrganizationBilling | null>;
+
+  /** Attaches a Stripe customer, once. A second, different one is a conflict. */
+  bindCustomer(
+    organizationId: string,
+    customerId: string,
+  ): Promise<OrganizationBilling>;
+
+  applyProjection(input: ApplyBillingProjectionInput): Promise<OrganizationBilling>;
+
+  recordPayment(input: RecordBillingPaymentInput): Promise<OrganizationBilling>;
+
+  /** Locations consuming purchased capacity: everything except `inactive`. */
+  countBillableLocations(scope: OrganizationScope): Promise<number>;
+
+  /** The only path that restores trial eligibility. Always audited. */
+  grantTrial(input: {
+    organizationId: string;
+    grantSource: TrialGrantSource;
+    actorUserId: string | null;
+    note: string | null;
+  }): Promise<OrganizationBilling>;
+
+  /** Complimentary, grandfathered, internal, or sales-managed access. */
+  setAccessDisposition(input: {
+    organizationId: string;
+    disposition: AccessDisposition;
+    expiresAt: string | null;
+    note: string | null;
+    actorUserId: string | null;
+  }): Promise<OrganizationBilling>;
+}
+
+/**
+ * The Stripe event log.
+ *
+ * Not organization-scoped, and cannot be: an event arrives before the
+ * organization is known, which is the whole job of resolving one. Same shape
+ * as `OAuthStateRepository`, for the same reason.
+ */
+export interface StripeWebhookEventRepository {
+  claim(input: ClaimWebhookEventInput): Promise<WebhookClaim>;
+  finish(
+    stripeEventId: string,
+    status: "processed" | "ignored" | "failed",
+    errorCategory?: WebhookErrorCategory | null,
+  ): Promise<void>;
+  /** Operational read, for the reconciliation report. */
+  get(stripeEventId: string): Promise<StripeWebhookEvent | null>;
+}
+
 export interface AuditEventRepository {
   list(scope: OrganizationScope, filter?: AuditEventFilter): Promise<AuditEvent[]>;
   record(scope: OrganizationScope, input: RecordAuditEventInput): Promise<AuditEvent>;
@@ -1647,6 +1772,10 @@ export interface LiaDataSource {
   yelpActivityOccurrences: YelpActivityOccurrenceRepository;
   /** What Lia publishes on the customer's own website. One per location. */
   reviewWidgets: ReviewWidgetRepository;
+  /** One organization's Stripe relationship. A projection, never a source of truth. */
+  billing: BillingRepository;
+  /** Stripe's event log, and the claim that makes processing idempotent. */
+  stripeWebhookEvents: StripeWebhookEventRepository;
   auditEvents: AuditEventRepository;
 }
 

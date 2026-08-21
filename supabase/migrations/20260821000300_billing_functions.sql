@@ -662,6 +662,13 @@ comment on function public.set_billing_access_disposition is
 -- 20260807000600 took for the OAuth helpers.
 -- ---------------------------------------------------------------------------
 
+-- `count_billable_locations` is revoked too, even though it only counts rows.
+-- It is `security definer`, so leaving it callable would let any authenticated
+-- session count the locations of any organization by passing an id — a small
+-- leak, but a leak of exactly the kind RLS exists to prevent. The trigger calls
+-- it as the owner; the application counts through an ordinary RLS-protected
+-- select instead.
+revoke execute on function public.count_billable_locations(uuid) from authenticated, anon;
 revoke execute on function public.claim_stripe_webhook_event(text, text, text, boolean, timestamptz) from authenticated, anon;
 revoke execute on function public.finish_stripe_webhook_event(text, text, text) from authenticated, anon;
 revoke execute on function public.bind_billing_customer(uuid, text) from authenticated, anon;

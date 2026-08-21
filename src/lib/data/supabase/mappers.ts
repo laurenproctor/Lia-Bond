@@ -1,4 +1,6 @@
 import {
+  organizationBillingSchema,
+  type OrganizationBilling,
   analysisRunSchema,
   approvalSchema,
   auditEventSchema,
@@ -967,5 +969,47 @@ export function toReviewWidget(row: Row): ReviewWidget {
       updatedAt: iso(row.updated_at),
     },
     "review widget",
+  );
+}
+
+/**
+ * One organization's billing projection.
+ *
+ * Every Stripe-derived field is nullable and they move as a set — the
+ * `organization_billing_subscription_pairing` constraint refuses a row where
+ * some are set and others are not, so a caller that reads one may rely on the
+ * rest.
+ */
+export function toOrganizationBilling(row: Row): OrganizationBilling {
+  return parseOrThrow(
+    organizationBillingSchema,
+    {
+      organizationId: row.organization_id,
+      stripeCustomerId: row.stripe_customer_id ?? null,
+      stripeSubscriptionId: row.stripe_subscription_id ?? null,
+      stripeSubscriptionItemId: row.stripe_subscription_item_id ?? null,
+      stripePriceId: row.stripe_price_id ?? null,
+      billingInterval: row.billing_interval ?? null,
+      subscriptionStatus: row.subscription_status ?? null,
+      purchasedLocationQuantity: num(row.purchased_location_quantity),
+      currentPeriodStart: isoOrNull(row.current_period_start),
+      currentPeriodEnd: isoOrNull(row.current_period_end),
+      cancelAtPeriodEnd: row.cancel_at_period_end ?? false,
+      trialEligible: row.trial_eligible ?? true,
+      trialStartedAt: isoOrNull(row.trial_started_at),
+      trialEnd: isoOrNull(row.trial_end),
+      trialConvertedAt: isoOrNull(row.trial_converted_at),
+      trialCanceledAt: isoOrNull(row.trial_canceled_at),
+      trialGrantSource: row.trial_grant_source ?? null,
+      firstPaymentFailedAt: isoOrNull(row.first_payment_failed_at),
+      lastPaymentFailureAt: isoOrNull(row.last_payment_failure_at),
+      lastPaidAt: isoOrNull(row.last_paid_at),
+      accessDisposition: row.access_disposition ?? "standard",
+      accessDispositionExpiresAt: isoOrNull(row.access_disposition_expires_at),
+      accessDispositionNote: row.access_disposition_note ?? null,
+      createdAt: iso(row.created_at),
+      updatedAt: iso(row.updated_at),
+    },
+    "organization billing",
   );
 }
