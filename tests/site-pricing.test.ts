@@ -22,6 +22,7 @@ import {
   formatBandRateNote,
   formatBandSaving,
   formatBandSize,
+  formatBandTotalNote,
   formatDollars,
   formatLocationChoice,
   formatMonthlyRate,
@@ -425,6 +426,34 @@ describe("formatBandCostRange", () => {
   it("quotes rather than invents a range above the listed limit", () => {
     expect(formatBandCostRange(TOP_BAND, "monthly")).toBe("Custom");
     expect(formatBandCostRange(TOP_BAND, "annual")).toBe("Custom");
+  });
+});
+
+describe("formatBandTotalNote", () => {
+  it("names the group's whole bill under the per-location headline", () => {
+    // The card leads with $49 per location; this is what a group in that band
+    // actually pays, graduated across the band below it.
+    expect(formatBandTotalNote(bandAt(1), "monthly")).toBe(
+      "$108 – $500 per month total",
+    );
+  });
+
+  it("switches the total to the yearly charge on the annual face", () => {
+    expect(formatBandTotalNote(bandAt(1), "annual")).toBe(
+      "$1,080 – $5,000 per year total",
+    );
+  });
+
+  it("drops the line where it would only repeat the headline", () => {
+    // One location at $59 totals $59 — the same figure, a size smaller.
+    expect(formatBandTotalNote(bandAt(0), "monthly")).toBeNull();
+    // The annual face still earns it: $49.17 a month is charged as $590.
+    expect(formatBandTotalNote(bandAt(0), "annual")).toBe("$590 per year total");
+  });
+
+  it("has nothing to total for the quoted band", () => {
+    expect(formatBandTotalNote(TOP_BAND, "monthly")).toBeNull();
+    expect(formatBandTotalNote(TOP_BAND, "annual")).toBeNull();
   });
 });
 

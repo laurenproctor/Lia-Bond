@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { can } from "@/lib/auth/permissions";
+import {
+  REVIEW_WIDGET_LAYOUTS,
+  SAVABLE_REVIEW_WIDGET_LAYOUTS,
+  saveReviewWidgetInputSchema,
+} from "@/domain";
 import type { LiaDataSource } from "@/lib/data/types";
 import { resolveRenderedWidget } from "@/lib/widgets/render";
 import {
@@ -50,6 +55,51 @@ function baseInput(locationId: string) {
     allowedDomains: [],
   };
 }
+
+/* -------------------------------------------------------------------------- */
+/* Which layouts may be stored                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The renderer draws three layouts; the database accepts one.
+ *
+ * That gap is load-bearing rather than a lag in the code — Google's review API
+ * returns no photographs and no video, so a widget pointed at a real location
+ * has nothing to put in a media layout. These pin the narrow end, because the
+ * failure it prevents is silent: without it a save carrying
+ * `single_review_photo` reaches Postgres, trips a check constraint, and
+ * surfaces to a customer as an unexplained error under a save button.
+ */
+describe("the savable layout vocabulary", () => {
+  it("accepts the text layout", () => {
+    const parsed = saveReviewWidgetInputSchema.safeParse(
+      baseInput("00000000-0000-4000-8000-000000000001"),
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  it("refuses the layouts the column would refuse", () => {
+    for (const layout of ["single_review_photo", "single_review_video"]) {
+      const parsed = saveReviewWidgetInputSchema.safeParse({
+        ...baseInput("00000000-0000-4000-8000-000000000001"),
+        layout,
+      });
+
+      expect(parsed.success).toBe(false);
+    }
+  });
+
+  it("mirrors the check constraint exactly", () => {
+    // If these ever disagree, one side rejects what the other accepts and the
+    // difference shows up as a database error rather than a field error.
+    expect([...SAVABLE_REVIEW_WIDGET_LAYOUTS]).toEqual(["single_review_text"]);
+    expect([...REVIEW_WIDGET_LAYOUTS]).toEqual([
+      "single_review_text",
+      "single_review_photo",
+      "single_review_video",
+    ]);
+  });
+});
 
 /* -------------------------------------------------------------------------- */
 /* Creating and updating                                                       */
@@ -376,6 +426,11 @@ describe("what a website visitor gets", () => {
       "allowedDomains",
       "attributionSuppressed",
       "layout",
+      // Present and always null from both adapters: Google's review payload
+      // carries no media, so a stored widget has none to expose. It is on the
+      // list so that the day something does populate it, this assertion is
+      // where somebody has to say so out loud.
+      "media",
       "profileUrl",
       "reviewAuthorName",
       "reviewPublishedAt",

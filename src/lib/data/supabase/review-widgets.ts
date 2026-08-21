@@ -231,6 +231,10 @@ export function createReviewWidgetRepository(
             ? null
             : new Date(String(row.review_published_at)).toISOString(),
         profileUrl: textOrNull(row.profile_url),
+        // No column, and nothing to read it from: Google's review payload
+        // carries no photographs and no video. A media-led layout resolved
+        // this way degrades to the text card in `resolveRenderedWidget`.
+        media: null,
       } satisfies ReviewWidgetRenderRow;
     },
   };

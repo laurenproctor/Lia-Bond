@@ -199,13 +199,35 @@ describe("the content policy", () => {
     expect(imgSrc).not.toContain("*");
   });
 
-  it("keeps the review document's narrower allowance untouched", () => {
-    const csp = widgetDocumentCsp({
+  it("gives the review document a media-src the press document does not have", () => {
+    // Only the review widget has a video layout. Omitting `media-src` on the
+    // press document is not tidiness — `default-src 'none'` then covers it, so
+    // a `<video>` that somehow reached that document could not load a thing.
+    const review = widgetDocumentCsp({
       frameAncestors: "frame-ancestors 'self'",
-      imgSrc: "data:",
+      imgSrc: "'self' data:",
+      mediaSrc: "'self' data:",
     });
-    expect(csp).toContain("img-src data:");
-    expect(csp).not.toContain("'self' data:");
+    const press = widgetDocumentCsp({
+      frameAncestors: "frame-ancestors 'self'",
+      imgSrc: "'self' data:",
+    });
+    expect(review).toContain("media-src 'self' data:");
+    expect(press).not.toContain("media-src");
+  });
+
+  it("never widens either directive to an arbitrary host", () => {
+    for (const csp of [
+      widgetDocumentCsp({ frameAncestors: "frame-ancestors 'self'", imgSrc: "'self' data:", mediaSrc: "'self' data:" }),
+      widgetDocumentCsp({ frameAncestors: "frame-ancestors 'self'", imgSrc: "'self' data:" }),
+    ]) {
+      for (const directive of csp.split("; ")) {
+        if (!directive.startsWith("img-src") && !directive.startsWith("media-src")) continue;
+        expect(directive).not.toContain("https:");
+        expect(directive).not.toContain("http:");
+        expect(directive).not.toMatch(/\*/);
+      }
+    }
   });
 
   it("forbids every other kind of subresource on both widgets", () => {

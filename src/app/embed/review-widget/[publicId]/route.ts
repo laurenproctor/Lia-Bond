@@ -106,11 +106,18 @@ function documentResponse(
       // one header that decides what either of them may fetch —
       // `src/lib/widgets/csp.ts` records what each directive is closing.
       //
-      // `img-src data:` and nothing else: this document draws its marks as
-      // inline SVG and makes no request of any kind after itself, which is
-      // also why the reviewer's avatar is initials rather than their
-      // `googleusercontent.com` photograph.
-      csp: widgetDocumentCsp({ frameAncestors, imgSrc: "data:" }),
+      // `img-src`/`media-src` are Lia's own origin and inline data, and
+      // nothing else. `data:` is how the sample cards carry their pictures;
+      // `'self'` is where a customer's uploaded media would live. A
+      // third-party host is deliberately unreachable — the widget adding a
+      // request to googleusercontent.com or a CDN is the thing a consent
+      // banner has an opinion about, and the reason the reviewer's avatar is
+      // initials.
+      csp: widgetDocumentCsp({
+        frameAncestors,
+        imgSrc: "'self' data:",
+        mediaSrc: "'self' data:",
+      }),
       cacheControl:
         options.cacheSeconds === 0
           ? "no-store"

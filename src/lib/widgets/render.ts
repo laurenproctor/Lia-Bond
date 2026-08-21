@@ -1,4 +1,9 @@
-import type { RenderedReviewWidget, ReviewWidgetRenderRow } from "@/domain";
+import type {
+  RenderedReviewWidget,
+  ReviewWidgetLayout,
+  ReviewWidgetMedia,
+  ReviewWidgetRenderRow,
+} from "@/domain";
 import { normalizeGoogleUrl } from "@/integrations/google-business-profile/urls";
 import { resolveWidgetAttribution } from "@/lib/widgets/attribution";
 import { reviewerInitials } from "@/lib/widgets/eligibility";
@@ -27,6 +32,9 @@ import { reviewerInitials } from "@/lib/widgets/eligibility";
  * 3. **Whether the attribution line renders.** One call to the plan policy,
  *    never a boolean threaded through the render path.
  *
+ * 4. **Which layout the card actually gets.** A photo or video layout that
+ *    resolved no media is drawn as text, here, once — see `effectiveLayout`.
+ *
  * The function is total: every input produces something drawable. A public
  * embed that could throw is a public embed that shows a stack trace on a
  * restaurant's homepage.
@@ -54,7 +62,7 @@ export function resolveRenderedWidget(
 
   const shell = {
     theme: row.theme,
-    layout: row.layout,
+    layout: effectiveLayout(row.layout, row.media),
     showAttribution: attribution.visible,
     allowedDomains: row.allowedDomains,
   } as const;
@@ -106,6 +114,37 @@ export function resolveRenderedWidget(
       authorInitials: reviewerInitials(authorName),
       publishedAt,
       readOnGoogleUrl: row.profileUrl ? normalizeGoogleUrl(row.profileUrl) : null,
+      // Read from `shell.layout`, not from `row.layout`: the two disagree
+      // exactly when the media is missing, and this is the side of the
+      // disagreement the document is about to draw.
+      media: shell.layout === "single_review_text" ? null : row.media,
     },
   };
+}
+
+/**
+ * The layout the card gets, which is not always the layout it asked for.
+ *
+ * A widget configured for photographs that resolved none has two honest
+ * answers: draw an empty picture frame, or draw the review it does have. It
+ * draws the review. The words are the point — the photograph was the
+ * arrangement — and a grey rectangle on a restaurant's homepage looks like a
+ * broken image rather than like a design decision.
+ *
+ * Deliberately **not** an unavailable state. The distinction the product cares
+ * about is whether a *review* can be shown; missing media is a smaller problem
+ * with a card-shaped answer, and reporting it as "no review to show" would
+ * hide a review that is right there.
+ *
+ * The kind is checked too, not just presence, so a video layout handed
+ * photographs falls back rather than silently drawing the wrong arrangement.
+ */
+function effectiveLayout(
+  layout: ReviewWidgetLayout,
+  media: ReviewWidgetMedia | null,
+): ReviewWidgetLayout {
+  if (layout === "single_review_text") return "single_review_text";
+
+  const wanted = layout === "single_review_photo" ? "photo" : "video";
+  return media?.kind === wanted ? layout : "single_review_text";
 }

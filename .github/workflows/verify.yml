@@ -1,6 +1,7 @@
-# Merge gate: `verify` runs lint/typecheck/test/build; `database` runs the migration,
-# execution-verification, and generation-verification harnesses against a freshly
-# started local Supabase instance.
+# Merge gate: `verify` runs lint/typecheck/test/build; `database` runs every SQL
+# harness — migration, execution, generation, yelp, reddit, tenancy, the
+# expansion-only rehearsal, and both website widgets — against a freshly started
+# local Supabase instance.
 # Runbook (owner action, tracked separately): once this workflow is green on `master`,
 # mark the `database` job a required status check in branch protection so a TypeScript
 # matrix change can never merge with stale SQL behavior.
@@ -76,6 +77,24 @@ jobs:
         run: |
           export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')"
           npm run db:verify-tenancy
+      # The two website widgets, together. Both harnesses reset first, so
+      # neither inherits the other's fixtures, and `db:verify-website-widgets`
+      # runs them in one psql session after rls-verification.sql — which is
+      # where the policy, grant, and anon-surface checks for both tables live.
+      #
+      # This step closes a gap rather than only adding one: the review widget
+      # shipped with `db:verify-review-widget` as a local-only command, so the
+      # SQL mirror of its eligibility predicate has never been exercised in CI.
+      # Both functions are hand-written mirrors of TypeScript predicates and
+      # **nothing in the vitest suite can execute either** — the unit tests can
+      # only prove the migrations *name* each rule in a comment. Without this
+      # step, a rule that drifts between the two implementations merges green,
+      # and the first anybody hears of it is a guest reading a dismissed review
+      # or a retracted headline on a restaurant's homepage.
+      - name: Run the website widget harnesses against freshly migrated Postgres
+        run: |
+          export SUPABASE_DB_URL="$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '"')"
+          npm run db:verify-website-widgets
       # And again with the R3 contraction reversed. The rollout is
       # expand-contract, so production spends real time in a state `supabase db
       # reset` cannot reproduce — it applies every migration in the directory,

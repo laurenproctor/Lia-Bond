@@ -24,7 +24,12 @@ import {
  * than restating a number that could drift from the prices beside it.
  */
 export function PricingPlans() {
-  const [period, setPeriod] = useState<BillingPeriod>("monthly");
+  // Opens on annual: it is the plan we would rather sell, and it is also the
+  // cheaper of the two, so leading with it is not a figure the reader has to
+  // be talked into. The caption under the switch says on arrival that these
+  // are yearly prices per month, so the lower number never reads as the
+  // monthly charge.
+  const [period, setPeriod] = useState<BillingPeriod>("annual");
   const annual = period === "annual";
   const labelId = useId();
 

@@ -14,10 +14,14 @@
  *   script, and no external resource beyond the `img-src` allowance below.
  *   There is no origin either document may fetch from, so provider text that
  *   somehow escaped escaping still could not reach the network.
- * - `img-src` is the only difference between the two widgets, and it is
- *   deliberately never widened to `https:`. A publisher logo on a customer's
- *   page must be a file Lia serves, not a request to a publisher's own server
- *   — see `docs/press-widget.md` on the logo trust boundary.
+ * - `img-src` and `media-src` are where the two widgets differ, and neither is
+ *   ever widened to `https:`. Both are `'self' data:` on the review widget —
+ *   `data:` is how its sample cards carry their pictures, `'self'` is where a
+ *   customer's uploaded media would live — and the press widget takes the same
+ *   `img-src` for its bundled publisher logos and no `media-src` at all,
+ *   because it has no clip to play. A publisher logo on a customer's page must
+ *   be a file Lia serves, not a request to a publisher's own server; see
+ *   `docs/press-widget.md` on the logo trust boundary.
  * - `frame-ancestors` is the customer's approved-domain list, and the reason
  *   this header exists at all. The visitor's browser refuses to paint the
  *   frame anywhere else, which is a real control on a URL anybody can fetch
@@ -39,19 +43,33 @@ export interface WidgetCspInput {
   /**
    * The `img-src` source list.
    *
-   * `"data:"` for the review widget, which draws its marks as inline SVG and
-   * fetches nothing. `"'self' data:"` for the press widget, which loads
-   * bundled publisher logos from Lia's own origin. Never an arbitrary host.
+   * `"'self' data:"` on both widgets today, for different reasons: the review
+   * widget's sample layouts carry pictures as `data:` URIs, and the press
+   * widget loads bundled publisher logos from Lia's own origin. Never an
+   * arbitrary host.
    */
   imgSrc: string;
+  /**
+   * The `media-src` source list, or omitted.
+   *
+   * Only the review widget has a video layout. Omitting it on the press widget
+   * is not tidiness — `default-src 'none'` then covers it, so a `<video>` that
+   * somehow reached that document could not load a thing.
+   */
+  mediaSrc?: string;
 }
 
-export function widgetDocumentCsp({ frameAncestors, imgSrc }: WidgetCspInput): string {
+export function widgetDocumentCsp({
+  frameAncestors,
+  imgSrc,
+  mediaSrc,
+}: WidgetCspInput): string {
   return [
     "default-src 'none'",
     "style-src 'unsafe-inline'",
     "script-src 'unsafe-inline'",
     `img-src ${imgSrc}`,
+    ...(mediaSrc ? [`media-src ${mediaSrc}`] : []),
     "form-action 'none'",
     "base-uri 'none'",
     frameAncestors,

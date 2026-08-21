@@ -33,7 +33,7 @@ similarity ends.
 | Filtered by | minimum star rating | a monitoring query, or nothing |
 | Source | `google_review` mentions | `news_article` mentions |
 | Public id | `rw_…` | `pw_…` |
-| Loads images | no | yes — publisher logos |
+| Loads images | only its own sample media, as `data:` URIs | yes — bundled publisher logos |
 
 Overloading `review_widgets` with `monitoring_query_id`, `item_limit`, and a
 nullable `location_id` would have produced one table where half the columns are
@@ -190,8 +190,12 @@ Four properties hold at once, and each is load-bearing:
    `src/lib/widgets/press/publisher-logos.ts` maps a domain to a bundled file,
    and re-validates the path shape on the way out.
 3. **The content policy is the enforcement.** `img-src 'self' data:` on both
-   the public document and the preview. It is never widened to `https:`. Even a
-   bug in (1) or (2) cannot produce a request to another origin.
+   the public document and the preview, and **never widened to `https:`**. Even
+   a bug in (1) or (2) cannot produce a request to another origin. The review
+   widget carries the same `img-src` — its sample layouts draw pictures as
+   `data:` URIs — plus a `media-src` for the video layout's clip, which the
+   press widget deliberately does not have: `default-src 'none'` covers it, so
+   a `<video>` that somehow reached a press document could not load a thing.
 4. **A missing logo never costs a story its place.** The publisher's name in
    text is a complete rendering of "who published this". Dropping an otherwise
    eligible article for want of a picture would be the tail wagging the dog.

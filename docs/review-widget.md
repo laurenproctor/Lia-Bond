@@ -46,19 +46,18 @@ paranoid relative to the rest of the product:
 reviewer's display name, a relative date, a "Read on Google" link where one can
 be trusted, and a "Powered by Lia" line.
 
-**Does not show, in this version:** photographs, video, a carousel, a grid, an
-aggregate rating, or more than one review at a time. Those are named in the
-product brief as future work and the configuration is shaped so they can arrive
-without a migration — `review_widgets.layout` is a check-constrained text
-column at one value, `single_review_text`, which is the seam. Nothing else in
-the schema assumes there is only one layout.
+**Shows, in Lia's own preview surfaces only:** two further arrangements of the
+same card — `single_review_photo`, which puts up to three pictures between the
+quotation and the reviewer's name, and `single_review_video`, which puts a clip
+there. Everything else about them is identical to the text card: same wordmark,
+same stars, same footer, same attribution. A media layout is a review widget
+with a picture in it, not a second product.
 
-**No photographs also means no reviewer avatar image.** The disc carries
-initials derived from the display name. Google does return
-`reviewer.profilePhotoUrl`, and Lia stores it — but rendering it would put a
-`googleusercontent.com` request on the customer's page, which is a third-party
-request their consent banner has an opinion about and a broken image on any
-page with a strict content policy.
+**Does not show, on anybody's website:** either of those. See §1a — it is a
+data problem, not a build one.
+
+**Does not show at all:** a grid, an aggregate rating, or more than one review
+at a time.
 
 ### "Read on Google" points at the location, not the review
 
@@ -73,6 +72,49 @@ at the moment it becomes an anchor.
 When Lia holds no trusted URL, the control **disappears** rather than
 degrading. A dead "Read on Google" link on a restaurant's homepage is worse
 than no link.
+
+## 1a. Why the media layouts are built but not embeddable
+
+**Google's review API returns no photographs and no video.** The payload Lia
+parses is the reviewer, the star rating, the comment, the two timestamps and
+the owner's reply — `googleReviewSchema` in
+`src/integrations/google-business-profile/schemas.ts` — and that is the whole
+resource. There is no per-review media of any kind, in the same way there is no
+per-review permalink.
+
+So a photo layout pointed at a real location has nothing to put in it. The two
+layouts are rendered from `src/lib/widgets/sample.ts` in the preview surfaces
+and are refused by the save path, and the refusal is structural rather than a
+rule somebody has to remember:
+
+| Vocabulary | Values | Enforced by |
+| --- | --- | --- |
+| `REVIEW_WIDGET_LAYOUTS` | all three | what `renderReviewWidgetDocument` will draw |
+| `SAVABLE_REVIEW_WIDGET_LAYOUTS` | `single_review_text` | `saveReviewWidgetInput`, mirroring the column's check constraint |
+
+The narrow list is what turns "Postgres rejects this save" into a field error
+under the control that sent it. `tests/review-widget-service.test.ts` pins both
+lists against each other, so they cannot drift apart silently.
+
+**What has to be true before they ship.** Media needs a source Lia controls —
+the customer uploading their own photographs and clips is the obvious
+candidate, and nobody has decided it. When that exists, three things widen
+together: `SAVABLE_REVIEW_WIDGET_LAYOUTS`, the check constraint on
+`review_widgets.layout`, and a `layout` control on the configuration screen.
+The renderer, the CSP and the carousel already handle it.
+
+**A media layout that resolves no media draws the text card.** `effectiveLayout`
+in `src/lib/widgets/render.ts` degrades the arrangement rather than reporting an
+unavailable state, because the review is there and it is the words that matter.
+An empty picture frame on a restaurant's homepage reads as a broken image, and
+"no review to show" would hide a review that exists.
+
+**No photographs also means no reviewer avatar image.** The disc carries
+initials derived from the display name. Google does return
+`reviewer.profilePhotoUrl`, and Lia stores it — but rendering it would put a
+`googleusercontent.com` request on the customer's page, which is a third-party
+request their consent banner has an opinion about and a broken image on any
+page with a strict content policy.
 
 ## 2. Which reviews are eligible
 
@@ -370,6 +412,24 @@ the iframe's origin limits the blast radius without removing it. Everything
 goes through one `escapeHtml`, both quote forms included because the same
 helper writes attribute values.
 
+**A media URL gets a second, different check.** `escapeHtml` keeps a value
+inside its attribute; it has no opinion about where the attribute points. So
+every `src` in the media band also passes `safeMediaUrl`, which allows exactly
+three shapes — `data:image/…` and `data:video/…`, a root-relative path, and an
+absolute `https:` URL — and drops everything else, `http:`, `javascript:`,
+`blob:` and protocol-relative `//host` included. A refused URL costs the card a
+picture, never the review.
+
+That is defence in depth rather than the enforcement. The directive is:
+
+```
+img-src 'self' data:; media-src 'self' data:
+```
+
+on both embed responses — which is also what keeps the widget from ever making
+a third-party request, and so why the reviewer's avatar is initials rather than
+their `googleusercontent.com` photograph.
+
 ## 9. The in-app preview, and what it costs
 
 The preview must show a theme somebody just clicked against a review they just
@@ -388,6 +448,28 @@ only ever be *which* review appears.
 The alternative was framing the live public URL, which would be exact and would
 also mean a customer could not see a theme change until after they had
 published it.
+
+### Three layouts, one at a time
+
+Both preview surfaces are carousels over the layout vocabulary
+(`src/components/integrations/review-widget-layout-carousel.tsx`). A carousel
+rather than three cards side by side because the widget is wide: three at once
+are three thumbnails, and a thumbnail of a layout is the thing a preview exists
+to avoid being. One slide is mounted at a time — each slide is one or two
+iframes, and three documents measuring and posting heights to the same parent
+is a race for no benefit.
+
+**On the configuration screen, only the first slide is the customer's widget.**
+The photo and video slides drop the real review and draw the sample instead.
+Half-keeping it — their genuine words under invented photographs — is the one
+arrangement somebody could reasonably read as a promise about their own feed.
+The theme carries across, because it is their decision and it is not review
+data.
+
+The controls derive "not available to embed yet" from
+`SAVABLE_REVIEW_WIDGET_LAYOUTS` rather than hard-coding it, so the day that
+list widens every notice disappears on its own instead of surviving as a lie
+about a feature that shipped.
 
 ### The empty state shows the widget, not a description of it
 
@@ -408,6 +490,15 @@ Three things this costs, and why each is paid:
   permission check on data it never touches would blank the frame for them for
   nothing. Headers are unchanged: `frame-ancestors 'self'`, `no-store`,
   `noindex`.
+- **Fabricated media exists too, and it is drawings rather than photographs.**
+  A stock photograph of a dining room in a panel headed "your widget" is a
+  picture somebody could believe came from their own listing, and no caption
+  reliably undoes that; a flat illustration cannot be mistaken for a place.
+  They are inline SVG data URIs, so the sample documents keep the property the
+  real one has — no network request after the document itself. The video sample
+  carries **no clip at all**, only its opening frame: inventing twenty seconds
+  of somebody's birthday to make a preview feel finished is the same mistake as
+  inventing the review.
 - **A fabricated review exists in the codebase.** It is generic by
   construction — no cuisine, no city, no business name — it is never served
   under a public id, and the card underneath it says in plain text that it is
@@ -507,7 +598,11 @@ tell the customers first.
 
 ## 13. What is not built
 
-- Photo and video layouts. `layout` is the seam; nothing else assumes one.
+- **Embeddable** photo and video layouts. Both are built and both render; what
+  is missing is media for them to carry, which Google does not supply. See §1a
+  for the three things that widen together when it does.
+- Media upload of any kind. No storage bucket, no size or type policy, no
+  moderation path for a photograph a customer puts on their own homepage.
 - More than one widget per location (`review_widgets_one_per_location`). When
   a customer genuinely needs a light one and a dark one, drop the constraint
   and add a `name` column — strictly smaller than un-picking the ambiguity a
@@ -530,7 +625,7 @@ future change is most likely to get wrong in one direction or the other.
 | --- | --- |
 | `src/lib/widgets/kinds.ts` | the five strings that differ per widget — prefix, attribute, script path, frame path, message source |
 | `src/lib/widgets/html.ts` | `escapeHtml` and `safeHttpUrl`. One escaper in this feature, and one URL check |
-| `src/lib/widgets/csp.ts` | the content policy and the response headers. `img-src` is the only parameter |
+| `src/lib/widgets/csp.ts` | the content policy and the response headers. `img-src` and `media-src` are the only parameters — this widget takes both, the press widget takes only `img-src` |
 | `src/lib/widgets/domains.ts` | approved-domain normalisation and the `frame-ancestors` directive |
 | `src/lib/widgets/public-id.ts` | id generation and shape-checking, keyed by widget |
 | `src/lib/widgets/snippet.ts` | the two lines a customer pastes |
