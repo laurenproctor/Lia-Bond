@@ -185,6 +185,18 @@ export function createBillingRepository(
       return count ?? 0;
     },
 
+    async listForReconciliation(limit: number) {
+      const { data, error } = await client
+        .from("organization_billing")
+        .select("*")
+        .not("stripe_customer_id", "is", null)
+        .order("updated_at", { ascending: true })
+        .limit(limit);
+
+      if (error) fail(error, "list billing records");
+      return (data ?? []).map((row) => toOrganizationBilling(row as Row));
+    },
+
     async grantTrial(input) {
       const { data, error } = await client.rpc("grant_billing_trial", {
         p_organization_id: input.organizationId,

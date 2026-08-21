@@ -213,6 +213,13 @@ export function createDemoBillingRepository(): BillingRepository {
       ).length;
     },
 
+    async listForReconciliation(limit: number) {
+      return [...runtime().billing.values()]
+        .filter((row) => row.stripeCustomerId !== null)
+        .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+        .slice(0, limit);
+    },
+
     async grantTrial(input) {
       const existing = current(input.organizationId);
       if (input.grantSource === "self_service") {

@@ -1576,6 +1576,17 @@ export interface BillingRepository {
   /** Locations consuming purchased capacity: everything except `inactive`. */
   countBillableLocations(scope: OrganizationScope): Promise<number>;
 
+  /**
+   * Every organization with a Stripe customer, for reconciliation.
+   *
+   * Not organization-scoped, and the only method here that crosses tenants by
+   * design — the job's whole purpose is to sweep all of them. Reachable from
+   * the service-role data source only, and its one caller constructs a scope
+   * per row from that row's own organization id rather than trusting an
+   * ambient one (D88).
+   */
+  listForReconciliation(limit: number): Promise<OrganizationBilling[]>;
+
   /** The only path that restores trial eligibility. Always audited. */
   grantTrial(input: {
     organizationId: string;
