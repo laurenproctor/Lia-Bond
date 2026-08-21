@@ -30,6 +30,9 @@ import {
 
 export {
   ANNUAL_DISCOUNT_LABEL,
+  DEFAULT_ESTIMATE_LOCATIONS,
+  LOCATION_CHOICES,
+  formatLocationChoice,
   ANNUAL_DISCOUNT_PERCENT,
   ANNUAL_MONTHS_BILLED,
   ANNUAL_MONTHS_FREE,
@@ -111,47 +114,6 @@ export function formatBandSaving(band: PricingBand): string | null {
   return band.monthly === null
     ? null
     : formatDollars(annualSaving(band.monthly));
-}
-
-/**
- * The location counts the estimator offers.
- *
- * Every count through a dozen, then the round numbers, then one past the
- * listed range so the quoted case is reachable from the same control rather
- * than being a dead end the reader has to guess at.
- */
-export const LOCATION_CHOICES = [
-  1,
-  2,
-  3,
-  4,
-  5,
-  6,
-  7,
-  8,
-  9,
-  10,
-  12,
-  15,
-  20,
-  25,
-  30,
-  40,
-  50,
-  75,
-  100,
-  LISTED_LOCATION_LIMIT + 1,
-] as const;
-
-/** The estimator opens on a group, not a single site — the discount is bigger there. */
-export const DEFAULT_ESTIMATE_LOCATIONS = 12;
-
-/** `12 locations`, and `More than 100` for the quoted option. */
-export function formatLocationChoice(locations: number): string {
-  if (locations > LISTED_LOCATION_LIMIT) {
-    return `More than ${LISTED_LOCATION_LIMIT} locations`;
-  }
-  return locations === 1 ? "1 location" : `${locations} locations`;
 }
 
 /* -------------------------------------------------------------------------- */

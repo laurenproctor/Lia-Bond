@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { AppShell } from "@/components/shell/app-shell";
+import { BillingBanner } from "@/components/billing/billing-banner";
 import { requireSession } from "@/lib/auth/session";
+import { getBillingProjection, getEntitlement } from "@/lib/billing/context";
 import { getDataSource } from "@/lib/data";
 import { isUnintentionalDemoMode } from "@/lib/env";
 import { redirectIfOnboarding } from "@/lib/onboarding/context";
@@ -29,10 +31,14 @@ import { initialsFor } from "@/lib/view-models/mention";
 export default async function AppLayout({ children }: { children: ReactNode }) {
   await redirectIfOnboarding();
 
-  const [session, context, dataSource] = await Promise.all([
+  const [session, context, dataSource, billing, entitlement] = await Promise.all([
     requireSession(),
     getOrganizationContext(),
     getDataSource(),
+    // Both are request-cached, so the page beneath and every server action on
+    // this request share these two reads rather than repeating them.
+    getBillingProjection(),
+    getEntitlement(),
   ]);
 
   const [openMentions, escalations] = await Promise.all([
@@ -44,6 +50,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <AppShell
+      banner={<BillingBanner entitlement={entitlement} billing={billing} />}
       sidebar={{
         organizations: context.available,
         activeOrganizationId: context.organization.id,

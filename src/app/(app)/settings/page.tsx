@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { PageBody } from "@/components/shell/app-shell";
 import { Card, CardHeader } from "@/components/ui/card";
 import { DetailField } from "@/components/ui/detail-panel";
@@ -53,7 +54,6 @@ export default async function SettingsPage() {
             { id: "organization", label: "Organization" },
             { id: "team", label: "Team", count: members.length },
             { id: "security", label: "Security" },
-            { id: "billing", label: "Billing" },
             { id: "notifications", label: "Notifications" },
           ]}
         />
@@ -139,9 +139,24 @@ export default async function SettingsPage() {
             description="Retention windows, export, and deletion requests."
             shape="lines"
           />
+          <Card>
+            <CardHeader
+              title="Billing"
+              description="Plan, payment method, invoices, and location capacity."
+            />
+            <p className="mt-3 text-[13px] text-gray-700">
+              <Link
+                href="/settings/billing"
+                className="font-medium text-purple-600 underline underline-offset-2"
+              >
+                Open billing
+              </Link>
+            </p>
+          </Card>
+
           <SectionPlaceholder
-            title="Security, billing, and notifications"
-            description="Single sign-on, plan and invoices, and alert routing."
+            title="Security and notifications"
+            description="Single sign-on and alert routing."
             shape="rows"
           />
         </div>
