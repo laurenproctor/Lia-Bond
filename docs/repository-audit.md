@@ -80,6 +80,11 @@ delete the branch and fix `master` directly. Leaving it is the worst option:
 it drifts further behind every day, and the inaccurate copy stays published
 meanwhile.
 
+**Resolved.** Carried across onto this branch rather than merged as it stood —
+three later commits had rewritten the copy it touches, and a clean auto-merge
+silently reverted them. See the commit for the specific reconciliations. The
+original branch is now redundant and can be deleted.
+
 ### 3. Four high-severity dependency vulnerabilities, and nothing watching — High
 
 `npm audit --omit=dev` reports 4 high-severity advisories in production
