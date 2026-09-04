@@ -35,14 +35,18 @@ export const YELP_ASSISTED_CAPABILITIES: ConnectorCapabilities = {
   // the only mechanism is polling the listing's counters.
   supportsWebhooks: false,
   // Responding to reviews is a Partner API capability. Lia does not hold it,
-  // and no amount of connecting a listing changes that.
+  // and no amount of connecting a listing changes that. Probably permanent
+  // rather than pending: Yelp's policy bars software providers from responding
+  // on a client's behalf, so this is barred by the terms and not only by the
+  // licence. docs/integrations/yelp-assisted.md §1 quotes the sentence.
   canPublishResponses: false,
   canEditResponses: false,
   canDeleteResponses: false,
   // Never negotiable. A Yelp reply is public and permanent enough to matter.
   requiresApproval: true,
-  // True, and it is the honest word for what stands between this integration
-  // and direct publishing: a licence, not a setting and not a scope.
+  // True, and the honest word for what gates full review text: a licence, not a
+  // setting and not a scope. Note it is NOT the only thing gating publishing —
+  // see `canPublishResponses` above. A licence would not lift that one.
   requiresPartnerAccess: true,
   // The one thing the Places plan genuinely does well.
   canMatchLocations: true,

@@ -35,10 +35,10 @@ Yelp splits its API into two products, and Lia holds one of them.
 | --- | --- | --- |
 | Business search and match | ✅ | ✅ |
 | Review count and rating | ✅ | ✅ |
-| Full review text | ❌ (3 truncated excerpts) | ✅ |
+| Full review text | ❌ (truncated excerpts only, at every tier) | ✅ |
 | Review webhooks | ❌ | ✅ |
 | Post a reply | ❌ | ✅ |
-| How you get it | API key, self-service | Licensed partnership |
+| How you get it | API key, self-service | Licensed, and gated twice — see below |
 
 The Places plan is a key you paste in. The Partner API is a commercial
 agreement, and Lia does not have one. So the product is built around the
@@ -61,6 +61,29 @@ typed content, because a parallel pipeline is how the guardrails stop applying
 to exactly the source that most needs them: this content is unverifiable by
 construction.
 
+### The two gates on the Partner API
+
+Neither is a price Lia can simply pay, and the second is the one that matters.
+
+**Eligibility is the customer's, not Lia's.** Respond to Reviews is offered to
+mutual enterprise customers — 10+ locations running Branded Profiles, Enhanced
+Profiles, or CPC ads with Yelp. So the gate moves with each restaurant group's
+own Yelp spend rather than with Lia's partnership status, and it cannot be
+cleared once on everybody's behalf.
+
+**Yelp's policy names software providers specifically:**
+
+> Agents, resellers, or software providers are not permitted to respond to
+> reviews on the client's behalf.
+
+Read plainly, that prohibits the thing the assisted panel is often assumed to be
+waiting for. A product that drafts a reply and has a named person at the
+restaurant post it is on the right side of that sentence; a product that posts
+for them is not, licensed or otherwise. Treat this as the current reading rather
+than a settled one — the terms are Yelp's to change — but the direction is the
+opposite of what an upgrade path usually assumes, and [The upgrade
+path](#12-the-upgrade-path) is written accordingly.
+
 ### What the excerpts endpoint would have bought, and why it is unused
 
 Fusion's `/businesses/{id}/reviews` returns up to three review excerpts. It is
@@ -70,6 +93,15 @@ support classification, cannot be deduplicated across calls, and cannot be
 answered accurately — and a method named `listReviews` returning it would put a
 promise on the provider interface that every screen above would then have to
 remember to qualify.
+
+**A paid plan does not change this, and the tiers are worth naming so nobody
+re-opens the question by quoting a price list at it.** Yelp's commercial Places
+plans run Base (no review content), Enhanced (3 excerpts), and Premium (7
+excerpts, plus a Review Highlights endpoint). Every tier truncates to roughly
+the first 160 characters, and none of them attaches a stable per-review
+identifier. The most expensive plan therefore buys seven fragments Lia still
+could not classify, deduplicate, or answer — the limitation is structural, not a
+tier. Pricing changes; the shape of the data has not.
 
 ## 2. Configuration
 
@@ -454,7 +486,9 @@ Migrations are additive with safe defaults; every existing row reads as
 ## 12. The upgrade path
 
 A licensed Partner integration adds capability; it does not replace anything
-here.
+here. Read this table as *what would change if the gate opened*, not as a
+roadmap — one row is probably unreachable for Lia by policy rather than by
+contract, and is marked.
 
 | Future capability | What changes |
 | --- | --- |
@@ -462,7 +496,7 @@ here.
 | Claimed-location discovery | A new method on `YelpPlacesProvider`. The connect flow gains a "listings you own" path beside the search. |
 | Full review ingestion | `canReadFullText` becomes true; reviews arrive through `mentions.ingest` with `capture_method = 'provider_api'`. Captured reviews stay `manual_entry` forever, which is what keeps the two distinguishable. |
 | Review webhooks | `supportsWebhooks` becomes true. Activity occurrences become redundant for listings that receive them and can be left to lapse per listing rather than removed. |
-| Direct publishing | `canPublishResponses` becomes true, so `resolvePublishingMode` returns `direct` and the assisted panel stops rendering — no code deleted. New publications write `publication_method = 'provider_api'` with a real `external_response_id`. |
+| Direct publishing — **likely never** | Yelp's policy forbids software providers responding on a client's behalf ([the two gates](#the-two-gates-on-the-partner-api)), so this is barred by the terms rather than by the licence. If it ever opened, `canPublishResponses` becomes true, `resolvePublishingMode` returns `direct`, and the assisted panel stops rendering — no code deleted. Until then the assisted handoff is the destination, not a placeholder. |
 | Provider-confirmed publication | Already expressible. `RESPONSE_PUBLICATION_METHODS` has carried `provider_api` from the start for exactly this. |
 
 Nothing above requires migrating a captured review, re-mapping a listing, or
@@ -470,9 +504,21 @@ discarding a manual publication record. The two publication methods coexist
 permanently, because the history of what a person confirmed by hand stays true
 after the API arrives.
 
+The practical consequence is that **Yelp is not where this product gets more
+comprehensive.** Full review text and publishing both sit behind gates set by
+somebody else, and one of them is pointed at software providers by name. Depth
+comes from the sources that can actually give it — Google, which has full text
+and real publishing today, and first-party review collection, which has no
+platform gatekeeper at all.
+
 ## 13. Sources
 
 - [Yelp Fusion API documentation](https://docs.developer.yelp.com/docs/fusion-intro)
 - [Business Match endpoint](https://docs.developer.yelp.com/reference/v3_business_match)
 - [Yelp Partner APIs](https://www.yelp.com/developers/v3/manage_app) — the
   Respond to Reviews capability Lia does not hold
+- [Respond to Reviews API](https://docs.developer.yelp.com/docs/respond-to-reviews-api-v2)
+- [Yelp developer policies](https://docs.developer.yelp.com/docs/policies) — the
+  sentence naming software providers
+- [Yelp Places API plans](https://business.yelp.com/data/products/places-api/) —
+  the tiers, and what review content each one does not include
